@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Bedrock 认证配置</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>AWS Bedrock 认证配置</h1>
+            <div id="status-indicator" class="status disconnected">
+                <span class="status-dot"></span>
+                <span class="status-text">未连接</span>
+            </div>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="profile">AWS Profile</button>
+            <button class="tab-btn" data-tab="manual">Access Key</button>
+            <button class="tab-btn" data-tab="sso">AWS SSO</button>
+        </div>
+
+        <!-- AWS Profile Tab -->
+        <div id="profile-tab" class="tab-content active">
+            <div class="form-group">
+                <label for="profile-select">选择 AWS Profile</label>
+                <select id="profile-select">
+                    <option value="">加载中...</option>
+                </select>
+                <p class="hint">从 ~/.aws/credentials 读取的配置文件</p>
+            </div>
+        </div>
+
+        <!-- Manual Keys Tab -->
+        <div id="manual-tab" class="tab-content">
+            <div class="form-group">
+                <label for="access-key-id">Access Key ID</label>
+                <input type="text" id="access-key-id" placeholder="AKIAIOSFODNN7EXAMPLE">
+            </div>
+            <div class="form-group">
+                <label for="secret-access-key">Secret Access Key</label>
+                <input type="password" id="secret-access-key" placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY">
+            </div>
+            <div class="form-group">
+                <label for="session-token">Session Token (可选)</label>
+                <input type="text" id="session-token" placeholder="临时凭证的 Session Token">
+                <p class="hint">仅当使用临时凭证时需要填写</p>
+            </div>
+        </div>
+
+        <!-- SSO Tab -->
+        <div id="sso-tab" class="tab-content">
+            <div class="form-group">
+                <label for="sso-start-url">SSO Start URL</label>
+                <input type="text" id="sso-start-url" placeholder="https://d-xxxxxxxxxx.awsapps.com/start">
+                <p class="hint">AWS IAM Identity Center (SSO) 的起始 URL</p>
+            </div>
+            <div class="form-group">
+                <label for="sso-region">SSO Region</label>
+                <input type="text" id="sso-region" placeholder="us-east-1">
+                <p class="hint">SSO 服务所在的 AWS Region</p>
+            </div>
+
+            <div id="sso-login-section">
+                <button id="sso-login-btn" class="btn btn-secondary">开始 SSO 登录</button>
+            </div>
+
+            <div id="sso-device-code" class="hidden">
+                <div class="device-code-box">
+                    <p>请在浏览器中打开以下链接并输入验证码：</p>
+                    <div class="user-code" id="sso-user-code">XXXX-XXXX</div>
+                    <a id="sso-verification-link" href="#" target="_blank" class="btn btn-link">打开验证页面</a>
+                    <p class="hint">等待授权中... <span id="sso-countdown"></span></p>
+                </div>
+            </div>
+
+            <div id="sso-account-section" class="hidden">
+                <div class="form-group">
+                    <label for="sso-account-select">选择账户</label>
+                    <select id="sso-account-select">
+                        <option value="">请选择账户</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="sso-role-select">选择角色</label>
+                    <select id="sso-role-select" disabled>
+                        <option value="">请先选择账户</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button id="test-btn" class="btn btn-secondary">测试连接</button>
+            <button id="save-btn" class="btn btn-primary">保存配置</button>
+        </div>
+
+        <!-- Messages -->
+        <div id="message" class="message hidden"></div>
+
+        <!-- Identity Info -->
+        <div id="identity-info" class="identity-info hidden">
+            <h3>当前身份</h3>
+            <p><strong>Account:</strong> <span id="identity-account"></span></p>
+            <p><strong>ARN:</strong> <span id="identity-arn"></span></p>
+        </div>
+    </div>
+
+    <script src="/static/js/config.js"></script>
+</body>
+</html>
