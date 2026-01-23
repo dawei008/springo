@@ -3424,9 +3424,6 @@ Be concise and helpful in your responses.` : '';
                 if (data.access_key_id) {
                     document.getElementById('settings-aws-access-key').value = data.access_key_id;
                 }
-                if (data.region) {
-                    document.getElementById('settings-aws-region').value = data.region;
-                }
 
                 // Load profiles if using aws_profile
                 if (method === 'aws_profile' && data.profiles) {
@@ -3472,12 +3469,11 @@ Be concise and helpful in your responses.` : '';
 
         async function saveAwsSettings() {
             const method = document.getElementById('settings-aws-auth-method').value;
-            const config = { method };
+            const config = { method, region: 'us-east-1' };  // Fixed region for Cross-Region Inference
 
             if (method === 'env_file') {
                 config.access_key_id = document.getElementById('settings-aws-access-key').value;
                 config.secret_access_key = document.getElementById('settings-aws-secret-key').value;
-                config.region = document.getElementById('settings-aws-region').value;
             } else if (method === 'aws_profile') {
                 config.profile_name = document.getElementById('settings-aws-profile').value;
             }
