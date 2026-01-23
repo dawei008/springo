@@ -333,6 +333,60 @@
                 </button>
             </div>
             <div class="modal-body">
+                <!-- AWS Credentials Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AWS Credentials</h3>
+                <div class="setting-group">
+                    <label>Authentication Method</label>
+                    <select id="settings-aws-auth-method" onchange="toggleAwsCredentials()">
+                        <option value="env_file">.env File (Recommended)</option>
+                        <option value="aws_profile">AWS Profile (~/.aws/credentials)</option>
+                        <option value="env_vars">Environment Variables</option>
+                    </select>
+                </div>
+                <div id="aws-env-file-group">
+                    <div class="setting-group">
+                        <label>Access Key ID</label>
+                        <input type="text" id="settings-aws-access-key" placeholder="AKIAIOSFODNN7EXAMPLE">
+                    </div>
+                    <div class="setting-group">
+                        <label>Secret Access Key</label>
+                        <input type="password" id="settings-aws-secret-key" placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY">
+                    </div>
+                    <div class="setting-group">
+                        <label>Region</label>
+                        <select id="settings-aws-region">
+                            <option value="us-east-1">US East (N. Virginia)</option>
+                            <option value="us-west-2">US West (Oregon)</option>
+                            <option value="eu-west-1">Europe (Ireland)</option>
+                            <option value="ap-northeast-1">Asia Pacific (Tokyo)</option>
+                            <option value="ap-southeast-1">Asia Pacific (Singapore)</option>
+                        </select>
+                    </div>
+                    <div class="hint">Credentials are saved to <code>~/.springo/.env</code> and loaded on startup.</div>
+                </div>
+                <div id="aws-profile-group" style="display: none;">
+                    <div class="setting-group">
+                        <label>AWS Profile</label>
+                        <select id="settings-aws-profile">
+                            <option value="default">default</option>
+                        </select>
+                    </div>
+                    <div class="hint">Using profiles from <code>~/.aws/credentials</code></div>
+                </div>
+                <div id="aws-env-vars-group" style="display: none;">
+                    <div class="aws-env-status" id="aws-env-status">
+                        <span>Checking environment variables...</span>
+                    </div>
+                    <div class="hint">Set <code>AWS_ACCESS_KEY_ID</code> and <code>AWS_SECRET_ACCESS_KEY</code> before starting the app.</div>
+                </div>
+                <div class="setting-group" style="margin-top: 12px;">
+                    <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
+                    <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                </div>
+
+                <div class="setting-divider"></div>
+                <h3 style="margin: 16px 0 12px; font-size: 14px; color: var(--text-secondary);">Model Settings</h3>
+
                 <div class="setting-group">
                     <label>Default Model</label>
                     <select id="settings-model">

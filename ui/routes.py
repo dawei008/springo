@@ -84,6 +84,16 @@ def save_config():
                 method=AuthMethod.ENV_VARS,
                 region=data.get('region', 'us-east-1')
             )
+        elif method == 'env_file':
+            config = AuthConfig(
+                method=AuthMethod.ENV_FILE,
+                region=data.get('region', 'us-east-1')
+            )
+            # 如果提供了凭证，保存到 .env 文件
+            access_key = data.get('access_key_id')
+            secret_key = data.get('secret_access_key')
+            if access_key and secret_key:
+                auth_manager.save_env_file(access_key, secret_key, data.get('region', 'us-east-1'))
         else:
             return jsonify({"error": f"未知的认证方式: {method}"}), 400
 

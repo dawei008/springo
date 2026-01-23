@@ -1217,6 +1217,86 @@ def search_config():
     )
 
 
+@app.route('/v1/config/aws', methods=['GET', 'POST'])
+def aws_config():
+    """获取或设置 AWS 凭证配置"""
+    from auth.config_manager import AuthMethod
+    from auth.aws_profiles import list_profiles
+
+    if request.method == 'GET':
+        try:
+            status = auth_manager.get_status()
+            # 添加 profiles 列表
+            status['profiles'] = list_profiles()
+            return Response(
+                json.dumps(status),
+                mimetype='application/json'
+            )
+        except Exception as e:
+            logger.error(f"AWS config error: {e}")
+            return Response(
+                json.dumps({"error": str(e)}),
+                status=500,
+                mimetype='application/json'
+            )
+    else:
+        try:
+            data = request.get_json()
+            method = data.get('method', 'env_file')
+
+            if method == 'env_file':
+                # 保存到 .env 文件
+                access_key = data.get('access_key_id', '')
+                secret_key = data.get('secret_access_key', '')
+                region = data.get('region', 'us-east-1')
+
+                if access_key and secret_key:
+                    auth_manager.save_env_file(access_key, secret_key, region)
+
+                # 更新配置方法
+                auth_manager.update_config(method='env_file', region=region)
+
+            elif method == 'aws_profile':
+                profile_name = data.get('profile_name', 'default')
+                auth_manager.update_config(
+                    method='aws_profile',
+                    profile_name=profile_name
+                )
+
+            elif method == 'env_vars':
+                auth_manager.update_config(method='env_vars')
+
+            return Response(
+                json.dumps({"success": True}),
+                mimetype='application/json'
+            )
+        except Exception as e:
+            logger.error(f"AWS config save error: {e}")
+            return Response(
+                json.dumps({"error": str(e)}),
+                status=500,
+                mimetype='application/json'
+            )
+
+
+@app.route('/v1/config/aws/test', methods=['GET'])
+def aws_test_connection():
+    """测试 AWS 连接"""
+    try:
+        result = auth_manager.validate_credentials()
+        return Response(
+            json.dumps(result),
+            mimetype='application/json'
+        )
+    except Exception as e:
+        logger.error(f"AWS test error: {e}")
+        return Response(
+            json.dumps({"valid": False, "error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
+
+
 @app.route('/v1/config/working-dir', methods=['GET', 'POST'])
 def working_dir_config():
     """获取或设置当前工作目录"""

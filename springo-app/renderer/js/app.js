@@ -3333,6 +3333,8 @@ Be concise and helpful in your responses.` : '';
             document.getElementById('settings-search-api-key').value = settings.searchApiKey || '';
             document.getElementById('settings-custom-search-url').value = settings.customSearchUrl || '';
             toggleSearchApiKey();
+            // Load AWS credentials settings
+            loadAwsSettings();
             // Load Skills and MCP servers lists
             loadSkillsList();
             loadMcpServersList();
@@ -3351,6 +3353,8 @@ Be concise and helpful in your responses.` : '';
             document.getElementById('model-select').value = settings.model;
             // Sync search config to backend
             syncSearchConfig();
+            // Save AWS credentials
+            saveAwsSettings();
         }
 
         function loadSettings() {
@@ -3402,6 +3406,126 @@ Be concise and helpful in your responses.` : '';
                 });
             } catch (e) {
                 console.log('Failed to sync search config:', e);
+            }
+        }
+
+        // ==================== AWS Credentials Management ====================
+        async function loadAwsSettings() {
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/aws`);
+                const data = await res.json();
+
+                // Set auth method
+                const method = data.method || 'env_file';
+                document.getElementById('settings-aws-auth-method').value = method;
+                toggleAwsCredentials();
+
+                // Set credentials if using env_file
+                if (data.access_key_id) {
+                    document.getElementById('settings-aws-access-key').value = data.access_key_id;
+                }
+                if (data.region) {
+                    document.getElementById('settings-aws-region').value = data.region;
+                }
+
+                // Load profiles if using aws_profile
+                if (method === 'aws_profile' && data.profiles) {
+                    const select = document.getElementById('settings-aws-profile');
+                    select.innerHTML = '';
+                    data.profiles.forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p.name;
+                        opt.textContent = p.name + (p.region ? ` [${p.region}]` : '');
+                        select.appendChild(opt);
+                    });
+                    if (data.profile_name) {
+                        select.value = data.profile_name;
+                    }
+                }
+
+                // Check env vars status if using env_vars
+                if (method === 'env_vars') {
+                    const statusEl = document.getElementById('aws-env-status');
+                    if (data.env_vars_set) {
+                        const hasKey = data.env_vars_set.AWS_ACCESS_KEY_ID;
+                        const hasSecret = data.env_vars_set.AWS_SECRET_ACCESS_KEY;
+                        if (hasKey && hasSecret) {
+                            statusEl.innerHTML = '<span style="color: #22c55e;">✓ Environment variables are set</span>';
+                        } else {
+                            const missing = [];
+                            if (!hasKey) missing.push('AWS_ACCESS_KEY_ID');
+                            if (!hasSecret) missing.push('AWS_SECRET_ACCESS_KEY');
+                            statusEl.innerHTML = `<span style="color: #ef4444;">✗ Missing: ${missing.join(', ')}</span>`;
+                        }
+                    }
+                }
+
+                // Show connection status
+                if (data.connected) {
+                    document.getElementById('aws-connection-status').innerHTML =
+                        '<span style="color: #22c55e;">✓ Connected</span>';
+                }
+            } catch (e) {
+                console.log('Failed to load AWS settings:', e);
+            }
+        }
+
+        async function saveAwsSettings() {
+            const method = document.getElementById('settings-aws-auth-method').value;
+            const config = { method };
+
+            if (method === 'env_file') {
+                config.access_key_id = document.getElementById('settings-aws-access-key').value;
+                config.secret_access_key = document.getElementById('settings-aws-secret-key').value;
+                config.region = document.getElementById('settings-aws-region').value;
+            } else if (method === 'aws_profile') {
+                config.profile_name = document.getElementById('settings-aws-profile').value;
+            }
+            // env_vars doesn't need any additional config
+
+            try {
+                await fetch(`${BASE_URL}/v1/config/aws`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+            } catch (e) {
+                console.log('Failed to save AWS settings:', e);
+            }
+        }
+
+        function toggleAwsCredentials() {
+            const method = document.getElementById('settings-aws-auth-method').value;
+            document.getElementById('aws-env-file-group').style.display = method === 'env_file' ? 'block' : 'none';
+            document.getElementById('aws-profile-group').style.display = method === 'aws_profile' ? 'block' : 'none';
+            document.getElementById('aws-env-vars-group').style.display = method === 'env_vars' ? 'block' : 'none';
+        }
+
+        async function testAwsConnection() {
+            const btn = document.getElementById('test-aws-btn');
+            const statusEl = document.getElementById('aws-connection-status');
+
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+            statusEl.innerHTML = '';
+
+            // Save settings first
+            await saveAwsSettings();
+
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/aws/test`);
+                const data = await res.json();
+
+                if (data.valid) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ Connected (${data.account})</span>`;
+                } else {
+                    statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
+                }
+            } catch (e) {
+                statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Test Connection';
             }
         }
 
