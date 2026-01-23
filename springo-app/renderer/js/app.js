@@ -1,6 +1,33 @@
         // API Base URL - for Electron app
         const BASE_URL = 'http://127.0.0.1:8080';
 
+        // HTML Sanitization helper using DOMPurify
+        function sanitizeHTML(html) {
+            if (typeof DOMPurify !== 'undefined') {
+                return DOMPurify.sanitize(html, {
+                    ALLOWED_TAGS: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'br', 'hr',
+                        'ul', 'ol', 'li', 'blockquote', 'pre', 'code', 'span', 'div',
+                        'a', 'strong', 'em', 'b', 'i', 'u', 's', 'del', 'ins', 'mark',
+                        'sub', 'sup', 'table', 'thead', 'tbody', 'tr', 'th', 'td',
+                        'img', 'svg', 'path', 'circle', 'ellipse', 'rect', 'line', 'polyline', 'polygon'],
+                    ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'id', 'style',
+                        'src', 'alt', 'width', 'height', 'title',
+                        'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+                        'd', 'cx', 'cy', 'r', 'rx', 'ry', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'points'],
+                    ALLOW_DATA_ATTR: false
+                });
+            }
+            // Fallback: basic escape if DOMPurify not loaded
+            return html.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        // Escape HTML for plain text contexts
+        function escapeHTML(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // Welcome template HTML (stored on load, used when creating new chats)
         let welcomeTemplate = '';
 
@@ -2787,7 +2814,6 @@ Be concise and helpful in your responses.` : '';
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
-                        'x-api-key': 'bedrock-proxy',
                         'anthropic-version': '2023-06-01'
                     },
                     body: JSON.stringify(requestBody),
@@ -3123,7 +3149,7 @@ Be concise and helpful in your responses.` : '';
             const chatContent = document.querySelector('.chat-content');
             const lastMessageEl = chatContent?.querySelector('.message:last-child .message-content');
             if (lastMessageEl) {
-                lastMessageEl.innerHTML = marked.parse(displayContent || '');
+                lastMessageEl.innerHTML = sanitizeHTML(marked.parse(displayContent || ''));
                 // Re-apply code highlighting
                 lastMessageEl.querySelectorAll('pre code').forEach(block => {
                     hljs.highlightElement(block);

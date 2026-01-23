@@ -61,6 +61,23 @@ app = Flask(__name__,
             template_folder=os.path.join(BASE_DIR, 'ui', 'templates'),
             static_folder=os.path.join(BASE_DIR, 'static'))
 
+# CORS configuration - restrict to local origins only
+ALLOWED_ORIGINS = ['http://127.0.0.1:8080', 'http://localhost:8080', 'file://']
+
+@app.after_request
+def add_cors_headers(response):
+    """Add CORS headers with restricted origins"""
+    origin = request.headers.get('Origin', '')
+    # Only allow local origins
+    if origin in ALLOWED_ORIGINS or origin.startswith('file://'):
+        response.headers['Access-Control-Allow-Origin'] = origin
+    else:
+        response.headers['Access-Control-Allow-Origin'] = 'http://127.0.0.1:8080'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Api-Key'
+    response.headers['Access-Control-Max-Age'] = '3600'
+    return response
+
 # 注册配置 UI Blueprint
 app.register_blueprint(config_bp)
 
@@ -1021,9 +1038,8 @@ def execute_tool_endpoint():
             data = request.get_json(force=True)
         except Exception as json_err:
             logger.error(f"JSON parse error: {json_err}, raw: {raw_data[:200]}")
-            import re
-            fixed = re.sub(r'\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})', r'\\\\', raw_data)
-            data = json.loads(fixed)
+            # Return error instead of trying to fix malformed JSON
+            return jsonify({"error": f"Invalid JSON: {str(json_err)}"}), 400
 
         tool_name = data.get('name')
         tool_input = data.get('input', {})
@@ -1413,7 +1429,12 @@ if __name__ == '__main__':
     parser.add_argument('--https', action='store_true', help='Enable HTTPS mode')
     parser.add_argument('--port', type=int, default=8080, help='Port (default: 8080)')
     parser.add_argument('--host', default='127.0.0.1', help='Host (default: 127.0.0.1)')
+    parser.add_argument('--debug', action='store_true', default=False, help='Enable debug mode (default: False)')
+    parser.add_argument('--no-debug', action='store_true', help='Explicitly disable debug mode')
     args = parser.parse_args()
+
+    # Debug mode: enabled by default in development, can be disabled with --no-debug
+    debug_mode = args.debug and not args.no_debug
 
     # 获取认证状态
     status = auth_manager.get_status()
@@ -1513,4 +1534,4 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"MCP auto-init failed: {e}")
 
-    app.run(host=args.host, port=port, debug=True, threaded=True, ssl_context=ssl_context)
+    app.run(host=args.host, port=port, debug=debug_mode, threaded=True, ssl_context=ssl_context)

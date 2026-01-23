@@ -2,10 +2,21 @@ const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron')
 const path = require('path');
 const { spawn } = require('child_process');
 
+// EPIPE error tracking
+let epipeErrorCount = 0;
+const EPIPE_LOG_INTERVAL = 100; // Log every N EPIPE errors
+
 // Global error handlers to prevent EPIPE crashes
 process.on('uncaughtException', (err) => {
     if (err.code === 'EPIPE' || err.message?.includes('EPIPE')) {
-        return; // Silently ignore EPIPE errors
+        epipeErrorCount++;
+        // Log periodically instead of silently ignoring
+        if (epipeErrorCount % EPIPE_LOG_INTERVAL === 1) {
+            try {
+                console.debug(`EPIPE error (count: ${epipeErrorCount})`);
+            } catch (e) { /* ignore */ }
+        }
+        return;
     }
     // Only log non-EPIPE errors, and catch any logging errors
     try {
@@ -34,8 +45,11 @@ process.stderr?.on?.('error', (err) => {
 // Disable Electron's default error dialog for EPIPE
 // This will be set after app is ready
 
-// Enable remote debugging for Playwright testing
-app.commandLine.appendSwitch('remote-debugging-port', '9222');
+// Enable remote debugging for Playwright testing (configurable via env)
+const DEBUG_PORT = process.env.ELECTRON_DEBUG_PORT || (process.env.NODE_ENV === 'development' ? '9222' : null);
+if (DEBUG_PORT) {
+    app.commandLine.appendSwitch('remote-debugging-port', DEBUG_PORT);
+}
 
 let mainWindow;
 let serverProcess = null;

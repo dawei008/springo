@@ -7,11 +7,13 @@ import os
 import base64
 import mimetypes
 import subprocess
+import shlex
 import threading
 import time
 import shutil
 import re
 import glob as glob_module
+import logging
 from typing import Any, Dict, List
 
 from ..config import get_working_dir
@@ -20,7 +22,10 @@ from ..utilities.path_utils import (
     is_path_allowed,
     is_path_allowed_for_write,
     is_command_safe,
+    is_safe_command_prefix,
 )
+
+logger = logging.getLogger(__name__)
 
 # Background task tracking
 _background_tasks = {}
@@ -121,8 +126,8 @@ def list_directory(path: str = None, show_hidden: bool = False) -> Dict[str, Any
                 stat = os.stat(entry_path)
                 entry["size"] = stat.st_size
                 entry["modified"] = stat.st_mtime
-            except:
-                pass
+            except OSError as e:
+                logger.debug(f"Could not stat {entry_path}: {e}")
 
             entries.append(entry)
 
@@ -279,12 +284,21 @@ def delete_file(path: str) -> Dict[str, Any]:
         return {"error": str(e)}
 
 
+def _should_use_shell(command: str) -> bool:
+    """Determine if command requires shell execution"""
+    shell_features = ['|', '&&', '||', ';', '>', '<', '*', '?', '$', '`', '"', "'", '\\']
+    return any(feat in command for feat in shell_features)
+
+
 def execute_command(command: str, working_directory: str = None, timeout: int = 60,
                    run_in_background: bool = False, description: str = None) -> Dict[str, Any]:
-    """Execute shell command"""
+    """Execute shell command with improved security"""
     global _task_counter
 
     try:
+        if not command or not command.strip():
+            return {"error": "Empty command"}
+
         if not is_command_safe(command):
             return {"error": "Command blocked for safety reasons"}
 
@@ -294,6 +308,19 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
         if not os.path.isdir(cwd):
             return {"error": f"Working directory not found: {cwd}"}
 
+        # Determine execution mode
+        use_shell = _should_use_shell(command)
+        if use_shell:
+            cmd_args = command
+        else:
+            # Use shlex for safer argument parsing when no shell features needed
+            try:
+                cmd_args = shlex.split(command)
+            except ValueError as e:
+                logger.warning(f"shlex.split failed, falling back to shell: {e}")
+                cmd_args = command
+                use_shell = True
+
         if run_in_background:
             _task_counter += 1
             task_id = f"task_{_task_counter}"
@@ -301,8 +328,8 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
             output_file = f"/tmp/claude_task_{task_id}.output"
 
             process = subprocess.Popen(
-                command,
-                shell=True,
+                cmd_args,
+                shell=use_shell,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -324,11 +351,14 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
                     for line in process.stdout:
                         output.append(line)
                     process.wait()
-                except:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Background task output capture error: {e}")
                 finally:
-                    with open(output_file, 'w') as f:
-                        f.write(''.join(output))
+                    try:
+                        with open(output_file, 'w') as f:
+                            f.write(''.join(output))
+                    except IOError as e:
+                        logger.error(f"Failed to write output file: {e}")
                     _background_tasks[task_id]["status"] = "completed"
                     _background_tasks[task_id]["return_code"] = process.returncode
 
@@ -344,8 +374,8 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
             }
         else:
             result = subprocess.run(
-                command,
-                shell=True,
+                cmd_args,
+                shell=use_shell,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -362,6 +392,7 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
     except subprocess.TimeoutExpired:
         return {"error": f"Command timed out after {timeout} seconds"}
     except Exception as e:
+        logger.error(f"Command execution error: {e}")
         return {"error": str(e)}
 
 
@@ -388,7 +419,8 @@ def get_task_status(task_id: str) -> Dict[str, Any]:
             result["output"] = output[:50000] if len(output) > 50000 else output
             if len(output) > 50000:
                 result["truncated"] = True
-        except:
+        except (IOError, OSError) as e:
+            logger.debug(f"Could not read output file: {e}")
             result["output"] = "(output file not found)"
     else:
         result["output_file"] = task["output_file"]
@@ -435,7 +467,7 @@ def glob_files(pattern: str, path: str = None, limit: int = 100) -> Dict[str, An
             try:
                 mtime = os.path.getmtime(m)
                 matches_with_time.append((m, mtime))
-            except:
+            except OSError:
                 matches_with_time.append((m, 0))
 
         matches_with_time.sort(key=lambda x: x[1], reverse=True)
@@ -447,7 +479,7 @@ def glob_files(pattern: str, path: str = None, limit: int = 100) -> Dict[str, An
             try:
                 rel = os.path.relpath(m, base_path)
                 relative_matches.append(rel)
-            except:
+            except ValueError:
                 relative_matches.append(m)
 
         return {
