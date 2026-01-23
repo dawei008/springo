@@ -251,6 +251,58 @@ select {
     color: var(--text-primary);
 }
 
+/* Info Box */
+.info-box {
+    background: rgba(15, 52, 96, 0.5);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+    font-size: 0.9rem;
+}
+
+.info-box p {
+    margin-bottom: 8px;
+}
+
+.info-box p:last-child {
+    margin-bottom: 0;
+}
+
+.info-box ul {
+    margin: 8px 0 0 20px;
+}
+
+.info-box li {
+    margin-bottom: 4px;
+}
+
+.info-box code {
+    background: var(--bg-primary);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: var(--accent-primary);
+}
+
+.info-box.warning {
+    background: rgba(255, 193, 7, 0.1);
+    border-color: var(--accent-warning);
+}
+
+.info-box.warning p {
+    color: var(--accent-warning);
+}
+
+/* Environment Variables Status */
+.env-status {
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
 /* Identity Info */
 .identity-info {
     background: var(--bg-card);

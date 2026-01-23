@@ -61,7 +61,7 @@ class MCPServerConnection:
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "claude-bedrock-proxy",
+                    "name": "springo",
                     "version": "1.0.0"
                 }
             })

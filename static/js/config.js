@@ -66,6 +66,9 @@ async function loadStatus() {
                     document.getElementById('profile-select').value = status.profile_name;
                 }, 500);
             }
+        } else if (status.method === 'env_vars') {
+            switchToTab('env');
+            updateEnvVarsStatus(status);
         } else if (status.method === 'manual_keys') {
             switchToTab('manual');
             if (status.access_key_id) {
@@ -236,6 +239,10 @@ function getCurrentConfig() {
             method: 'aws_profile',
             profile_name: document.getElementById('profile-select').value
         };
+    } else if (activeTab === 'env') {
+        return {
+            method: 'env_vars'
+        };
     } else if (activeTab === 'manual') {
         return {
             method: 'manual_keys',
@@ -254,6 +261,28 @@ function getCurrentConfig() {
     }
 
     return {};
+}
+
+function updateEnvVarsStatus(status) {
+    const statusText = document.getElementById('env-status-text');
+    if (status.env_vars_set) {
+        const keySet = status.env_vars_set.AWS_ACCESS_KEY_ID;
+        const secretSet = status.env_vars_set.AWS_SECRET_ACCESS_KEY;
+
+        if (keySet && secretSet) {
+            statusText.textContent = '环境变量已设置';
+            statusText.style.color = '#22c55e';
+        } else {
+            const missing = [];
+            if (!keySet) missing.push('AWS_ACCESS_KEY_ID');
+            if (!secretSet) missing.push('AWS_SECRET_ACCESS_KEY');
+            statusText.textContent = `缺少: ${missing.join(', ')}`;
+            statusText.style.color = '#ef4444';
+        }
+    } else {
+        statusText.textContent = '未检测到环境变量状态';
+        statusText.style.color = '#6b7280';
+    }
 }
 
 // ==================== SSO 登录 ====================

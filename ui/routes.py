@@ -79,6 +79,11 @@ def save_config():
                 sso_token_expiry=current.sso_token_expiry,
                 region=data.get('region', 'us-east-1')
             )
+        elif method == 'env_vars':
+            config = AuthConfig(
+                method=AuthMethod.ENV_VARS,
+                region=data.get('region', 'us-east-1')
+            )
         else:
             return jsonify({"error": f"未知的认证方式: {method}"}), 400
 

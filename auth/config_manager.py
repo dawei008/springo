@@ -22,6 +22,7 @@ class AuthMethod(Enum):
     AWS_PROFILE = "aws_profile"
     MANUAL_KEYS = "manual_keys"
     SSO = "sso"
+    ENV_VARS = "env_vars"  # Use AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY env vars
 
 
 @dataclass
@@ -53,9 +54,14 @@ class AuthConfig:
         return d
 
     def to_save_dict(self) -> Dict[str, Any]:
-        """转换为可保存的字典"""
+        """转换为可保存的字典 - 不保存敏感凭证"""
         d = asdict(self)
         d['method'] = self.method.value
+        # SECURITY: Never persist manual keys to disk - keep in memory only
+        if self.method == AuthMethod.MANUAL_KEYS:
+            d['access_key_id'] = None
+            d['secret_access_key'] = None
+            d['session_token'] = None
         return d
 
     @classmethod
@@ -70,7 +76,7 @@ class AuthConfigManager:
     """认证配置管理器 - 单例模式"""
 
     _instance = None
-    CONFIG_DIR = Path.home() / '.claude-bedrock-proxy'
+    CONFIG_DIR = Path.home() / '.springo'
     CONFIG_FILE = CONFIG_DIR / 'config.json'
 
     def __new__(cls):
@@ -196,8 +202,13 @@ class AuthConfigManager:
                     config=boto_config
                 )
 
+            elif self._config.method == AuthMethod.ENV_VARS:
+                # 使用环境变量 (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+                # boto3 会自动从环境变量读取
+                self._bedrock_client = boto3.client('bedrock-runtime', config=boto_config)
+
             else:
-                # 默认：使用环境变量或默认凭证链
+                # 默认：使用默认凭证链 (env vars, ~/.aws/credentials, instance role, etc.)
                 self._bedrock_client = boto3.client('bedrock-runtime', config=boto_config)
 
             logger.info(f"Bedrock client created with method: {self._config.method.value}")
@@ -247,6 +258,13 @@ class AuthConfigManager:
                     aws_session_token=creds['session_token'],
                     config=boto_config
                 )
+
+            elif self._config.method == AuthMethod.ENV_VARS:
+                # 验证环境变量是否设置
+                if not os.environ.get('AWS_ACCESS_KEY_ID') or not os.environ.get('AWS_SECRET_ACCESS_KEY'):
+                    return {"valid": False, "error": "环境变量 AWS_ACCESS_KEY_ID 或 AWS_SECRET_ACCESS_KEY 未设置"}
+                sts = boto3.client('sts', config=boto_config)
+
             else:
                 sts = boto3.client('sts', config=boto_config)
 
@@ -292,6 +310,13 @@ class AuthConfigManager:
             if self._config.sso_token_expiry:
                 status["token_expires_at"] = self._config.sso_token_expiry
                 status["token_valid"] = time.time() < self._config.sso_token_expiry
+
+        elif self._config.method == AuthMethod.ENV_VARS:
+            # 检查环境变量是否设置
+            has_key = bool(os.environ.get('AWS_ACCESS_KEY_ID'))
+            has_secret = bool(os.environ.get('AWS_SECRET_ACCESS_KEY'))
+            status["env_vars_set"] = {"AWS_ACCESS_KEY_ID": has_key, "AWS_SECRET_ACCESS_KEY": has_secret}
+            status["configured"] = has_key and has_secret
 
         # 验证连接
         if status["configured"]:

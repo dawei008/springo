@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 class SSOHandler:
     """处理 AWS SSO 认证流程"""
 
-    CLIENT_NAME = "claude-bedrock-proxy"
+    CLIENT_NAME = "springo"
 
     def __init__(self, sso_region: str = "us-east-1"):
         """
