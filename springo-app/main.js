@@ -2,6 +2,38 @@ const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron')
 const path = require('path');
 const { spawn } = require('child_process');
 
+// Global error handlers to prevent EPIPE crashes
+process.on('uncaughtException', (err) => {
+    if (err.code === 'EPIPE' || err.message?.includes('EPIPE')) {
+        return; // Silently ignore EPIPE errors
+    }
+    // Only log non-EPIPE errors, and catch any logging errors
+    try {
+        console.error('Uncaught Exception:', err);
+    } catch (e) {
+        // Ignore logging errors
+    }
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    try {
+        console.warn('Unhandled Rejection:', reason);
+    } catch (e) {
+        // Ignore logging errors
+    }
+});
+
+// Ignore EPIPE on stdout/stderr
+process.stdout?.on?.('error', (err) => {
+    if (err.code !== 'EPIPE') throw err;
+});
+process.stderr?.on?.('error', (err) => {
+    if (err.code !== 'EPIPE') throw err;
+});
+
+// Disable Electron's default error dialog for EPIPE
+// This will be set after app is ready
+
 // Enable remote debugging for Playwright testing
 app.commandLine.appendSwitch('remote-debugging-port', '9222');
 
@@ -214,6 +246,10 @@ ipcMain.handle('get-server-url', () => SERVER_URL);
 
 // Folder selection dialog
 ipcMain.handle('select-folder', async () => {
+    // Focus the window to ensure dialog appears in front
+    if (mainWindow) {
+        mainWindow.focus();
+    }
     const result = await dialog.showOpenDialog(mainWindow, {
         properties: ['openDirectory', 'multiSelections'],
         title: 'Select Working Folder'
@@ -234,7 +270,27 @@ ipcMain.handle('open-path', async (event, filePath) => {
     return shell.openPath(filePath);
 });
 
+// Open URL in default browser (new tab in Chrome)
+ipcMain.handle('open-external', async (event, url) => {
+    try {
+        await shell.openExternal(url);
+        return { success: true };
+    } catch (err) {
+        console.error('Failed to open external URL:', err);
+        return { success: false, error: err.message };
+    }
+});
+
 app.whenReady().then(async () => {
+    // Suppress EPIPE error dialogs
+    const originalShowErrorBox = dialog.showErrorBox;
+    dialog.showErrorBox = (title, content) => {
+        if (content?.includes?.('EPIPE')) {
+            return; // Suppress EPIPE error dialogs
+        }
+        originalShowErrorBox.call(dialog, title, content);
+    };
+
     try {
         await startServer();
     } catch (err) {

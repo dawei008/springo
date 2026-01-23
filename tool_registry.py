@@ -28,36 +28,57 @@ class DeferredTool:
         query_lower = query.lower()
         score = 0.0
 
+        # Normalize name for matching (handle __, -, _)
+        name_lower = self.name.lower()
+        name_normalized = name_lower.replace('__', ' ').replace('-', ' ').replace('_', ' ')
+
         # Exact name match
-        if query_lower == self.name.lower():
+        if query_lower == name_lower:
             return 1.0
 
-        # Name contains query
-        if query_lower in self.name.lower():
-            score = max(score, 0.8)
+        # Name contains entire query
+        if query_lower in name_lower or query_lower in name_normalized:
+            score = max(score, 0.9)
 
-        # Query contains name
-        if self.name.lower() in query_lower:
+        # Query contains entire name
+        if name_lower in query_lower:
             score = max(score, 0.7)
 
-        # Description match
-        if query_lower in self.description.lower():
-            score = max(score, 0.5)
-
-        # Keyword match
-        for keyword in self.keywords:
-            if query_lower in keyword.lower() or keyword.lower() in query_lower:
-                score = max(score, 0.6)
-
-        # Word overlap
+        # Split query into words for multi-word matching
         query_words = set(query_lower.split())
-        name_words = set(self.name.lower().replace('-', ' ').replace('_', ' ').split())
-        desc_words = set(self.description.lower().split())
+        name_words = set(name_normalized.split())
+        desc_lower = self.description.lower()
 
-        name_overlap = len(query_words & name_words) / max(len(query_words), 1)
-        desc_overlap = len(query_words & desc_words) / max(len(query_words), 1)
+        # Count how many query words appear in name
+        name_matches = sum(1 for w in query_words if w in name_normalized or any(w in nw for nw in name_words))
+        if name_matches > 0:
+            # More matches = higher score, with bonus for matching all words
+            name_score = (name_matches / len(query_words)) * 0.85
+            if name_matches == len(query_words):
+                name_score = 0.9  # All query words found in name
+            score = max(score, name_score)
 
-        score = max(score, name_overlap * 0.7, desc_overlap * 0.4)
+        # Count how many query words appear in description
+        desc_matches = sum(1 for w in query_words if w in desc_lower)
+        if desc_matches > 0:
+            desc_score = (desc_matches / len(query_words)) * 0.6
+            if desc_matches == len(query_words):
+                desc_score = 0.7  # All query words found in description
+            score = max(score, desc_score)
+
+        # Keyword match (for registered keywords)
+        # Only match keywords with length >= 3 to avoid false positives like "or" in "memory"
+        for keyword in self.keywords:
+            if len(keyword) < 3:  # Skip very short keywords
+                continue
+            keyword_lower = keyword.lower()
+            # Require whole word match or significant overlap
+            if keyword_lower in query_words or any(keyword_lower == qw for qw in query_words):
+                score = max(score, 0.65)
+            # Check individual query words against keywords (whole word match only)
+            for qw in query_words:
+                if len(qw) >= 3 and (qw == keyword_lower or keyword_lower.startswith(qw) or qw.startswith(keyword_lower)):
+                    score = max(score, 0.5)
 
         return score
 

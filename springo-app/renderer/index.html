@@ -2351,6 +2351,112 @@
             margin-top: 4px;
         }
 
+        /* Tool execution status dot */
+        .tool-execution-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .tool-execution-dot.running {
+            background: var(--warning);
+            animation: pulse 1.5s infinite;
+        }
+
+        .tool-execution-dot.success {
+            background: var(--success);
+        }
+
+        .tool-execution-dot.error {
+            background: var(--error);
+        }
+
+        /* Tool execution preview (Claude Code style) */
+        .tool-execution-preview {
+            padding: 8px 12px 12px 12px;
+            font-size: 12px;
+            border-top: 1px solid var(--border);
+            background: var(--bg-primary);
+        }
+
+        .tool-preview-line {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 6px;
+            color: var(--text-secondary);
+        }
+
+        .preview-label {
+            color: var(--text-tertiary);
+            font-weight: 500;
+            flex-shrink: 0;
+        }
+
+        .preview-content {
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .tool-preview-result {
+            margin-top: 6px;
+        }
+
+        .preview-snippet {
+            background: var(--code-bg);
+            color: #E5E5E5;
+            padding: 8px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            max-height: 80px;
+            overflow: hidden;
+        }
+
+        .tool-execution-item.expanded .preview-snippet {
+            max-height: none;
+            overflow: auto;
+        }
+
+        .preview-more {
+            display: block;
+            font-size: 11px;
+            color: var(--accent);
+            margin-top: 4px;
+            cursor: pointer;
+        }
+
+        .preview-more:hover {
+            text-decoration: underline;
+        }
+
+        /* Running indicator animation */
+        .tool-preview-running {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-tertiary);
+            font-size: 12px;
+        }
+
+        .running-indicator {
+            width: 12px;
+            height: 12px;
+            border: 2px solid var(--border);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         .right-sidebar-empty {
             text-align: center;
             padding: 40px 20px;
@@ -3725,6 +3831,44 @@
         let toolExecutionsPerConv = {}; // Track tool executions per conversation
         let rightSidebarOpen = false;
 
+        // OPTIMIZATION: Server-side auto tool execution (eliminates frontend round-trips)
+        // When enabled, tools are executed on the server, saving ~1-3 seconds per tool
+        const AUTO_TOOL_EXECUTION = true;
+
+        // OPTIMIZATION 3: Debounced streaming UI updates
+        const streamingUIDebounce = {
+            timers: {},  // convId -> timer
+            pending: {}, // convId -> { text, tools }
+            DELAY_MS: 50 // Update UI at most every 50ms
+        };
+
+        function debouncedUpdateAssistantMessage(convId, text, tools, isFinal) {
+            // Always update immediately if final
+            if (isFinal) {
+                if (streamingUIDebounce.timers[convId]) {
+                    clearTimeout(streamingUIDebounce.timers[convId]);
+                    delete streamingUIDebounce.timers[convId];
+                }
+                delete streamingUIDebounce.pending[convId];
+                updateAssistantMessage(convId, text, tools, true);
+                return;
+            }
+
+            // Store pending update
+            streamingUIDebounce.pending[convId] = { text, tools };
+
+            // If no timer, start one
+            if (!streamingUIDebounce.timers[convId]) {
+                streamingUIDebounce.timers[convId] = setTimeout(() => {
+                    const pending = streamingUIDebounce.pending[convId];
+                    if (pending && currentConversationId === convId) {
+                        updateAssistantMessage(convId, pending.text, pending.tools, false);
+                    }
+                    delete streamingUIDebounce.timers[convId];
+                }, streamingUIDebounce.DELAY_MS);
+            }
+        }
+
         // Get tool executions for current conversation
         function getToolExecutions() {
             if (!currentConversationId) return [];
@@ -3862,6 +4006,27 @@
 
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
+            // Global link click handler - open external URLs in default browser (Chrome new tab)
+            // Note: Only intercepts <a href> elements with external URLs, does not affect buttons
+            document.addEventListener('click', (e) => {
+                // Only handle actual <a> element clicks, not buttons or other elements
+                const link = e.target.closest('a[href]');
+                if (!link) return;  // Not a link click, let it pass through
+
+                const href = link.getAttribute('href');
+                // Only handle external HTTP/HTTPS URLs
+                if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                    e.preventDefault();  // Prevent default navigation
+                    // Note: No stopPropagation needed since we're at document level
+                    if (window.electronAPI && window.electronAPI.openExternal) {
+                        window.electronAPI.openExternal(href);
+                    } else {
+                        // Fallback for non-Electron environment
+                        window.open(href, '_blank');
+                    }
+                }
+            });
+
             // Store welcome template for later use (before it gets replaced)
             const welcomeEl = document.getElementById('welcome');
             if (welcomeEl) {
@@ -3894,7 +4059,11 @@
                             updateWorkdirSelector();
                         });
                     } else if (value) {
-                        selectWorkingDir(value);
+                        // Only open file browser, do NOT change session's working directory
+                        // Session's workdir is set only when creating new session
+                        openFileBrowser(value);
+                        // Reset selector to show session's actual workdir
+                        updateWorkdirSelector();
                     }
                 });
             }
@@ -4855,6 +5024,7 @@
 
                 // Update working directory display for this conversation
                 updateWorkingDirDisplay(conv.workingDir || runtime.workingDir);
+                renderWorkingFolders(); // Update active state in workspace sidebar
 
                 renderMessages();
                 renderConversations();
@@ -5478,7 +5648,154 @@
             throw lastError;
         }
 
+        // SSE Stream Parser for handling streaming responses
+        async function* parseSSEStream(reader) {
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+
+                buffer += decoder.decode(value, { stream: true });
+
+                // Split on double newlines (SSE event separator)
+                const events = buffer.split('\n\n');
+                buffer = events.pop() || ''; // Keep incomplete event in buffer
+
+                for (const eventBlock of events) {
+                    if (!eventBlock.trim()) continue;
+
+                    const lines = eventBlock.split('\n');
+                    let eventType = null;
+                    let eventData = null;
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            eventData = line.slice(6);
+                        }
+                    }
+
+                    if (eventType && eventData) {
+                        try {
+                            yield { event: eventType, data: JSON.parse(eventData) };
+                        } catch (e) {
+                            console.warn('SSE parse error:', e, eventData);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Process streaming response and update UI progressively
+        async function processStreamingResponse(response, convId, onTextUpdate, onComplete) {
+            const reader = response.body.getReader();
+            let textContent = '';
+            let toolUses = [];
+            let currentToolUse = null;
+            let currentToolInput = '';
+
+            try {
+                for await (const { event, data } of parseSSEStream(reader)) {
+                    // Check if conversation switched
+                    const runtime = getConvRuntime(convId);
+                    if (!runtime) break;
+
+                    switch (event) {
+                        case 'message_start':
+                            // Message started
+                            console.log(`[${convId}] Stream: message_start`);
+                            break;
+
+                        case 'content_block_start':
+                            const block = data.content_block;
+                            if (block.type === 'tool_use') {
+                                currentToolUse = {
+                                    id: block.id,
+                                    name: block.name,
+                                    input: {}
+                                };
+                                currentToolInput = '';
+                                console.log(`[${convId}] Stream: tool_use started - ${block.name}`);
+                            }
+                            break;
+
+                        case 'content_block_delta':
+                            const delta = data.delta;
+                            if (delta.type === 'text_delta') {
+                                textContent += delta.text;
+                                onTextUpdate(textContent, toolUses, false);
+                            } else if (delta.type === 'input_json_delta' && currentToolUse) {
+                                currentToolInput += delta.partial_json;
+                            }
+                            break;
+
+                        case 'content_block_stop':
+                            if (currentToolUse) {
+                                try {
+                                    currentToolUse.input = JSON.parse(currentToolInput);
+                                } catch (e) {
+                                    currentToolUse.input = {};
+                                }
+                                toolUses.push(currentToolUse);
+                                console.log(`[${convId}] Stream: tool_use complete - ${currentToolUse.name}`);
+                                currentToolUse = null;
+                                currentToolInput = '';
+                                onTextUpdate(textContent, toolUses, false);
+                            }
+                            break;
+
+                        case 'message_stop':
+                            console.log(`[${convId}] Stream: message_stop`);
+                            break;
+
+                        // Server-side auto tool execution events
+                        case 'tool_execution_start':
+                            console.log(`[${convId}] Server executing tools:`, data.tools?.map(t => t.name));
+                            // Add tools to sidebar in running state
+                            if (currentConversationId === convId && data.tools) {
+                                for (const tool of data.tools) {
+                                    addToolExecution({ id: tool.id, name: tool.name, input: {} });
+                                }
+                            }
+                            break;
+
+                        case 'tool_executing':
+                            console.log(`[${convId}] Executing: ${data.name}`);
+                            break;
+
+                        case 'tool_result':
+                            console.log(`[${convId}] Tool result: ${data.name}`);
+                            // Update sidebar with result
+                            if (currentConversationId === convId) {
+                                updateToolExecution(data.id, data.result);
+                            }
+                            break;
+
+                        case 'tool_execution_complete':
+                            console.log(`[${convId}] All ${data.count} tools executed on server`);
+                            break;
+
+                        case 'error':
+                            throw new Error(data.error?.message || 'Stream error');
+                    }
+                }
+
+                onComplete(textContent, toolUses);
+                return { textContent, toolUses };
+
+            } catch (e) {
+                console.error(`[${convId}] Stream error:`, e);
+                throw e;
+            }
+        }
+
         // Execute a tool via the API with timeout and retry
+        // OPTIMIZATION: Reduced timeout and retries to avoid long waits
+        // - 45 second timeout (MCP server has 30s internal timeout)
+        // - 1 retry only (max 90s total instead of 8 minutes)
         async function executeTool(toolName, toolInput) {
             try {
                 console.log(`[executeTool] Starting: ${toolName}`);
@@ -5486,7 +5803,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: toolName, input: toolInput })
-                }, 3, 120000); // 3 retries, 2 minute timeout
+                }, 1, 45000); // 1 retry, 45 second timeout (max 90s total)
 
                 const data = await response.json();
                 const result = data.result || data;
@@ -5501,7 +5818,7 @@
                 return result;
             } catch (e) {
                 const errorMsg = e.name === 'AbortError'
-                    ? `Tool timeout after 120s`
+                    ? `Tool timeout after 45s - the external service may be slow or unavailable`
                     : e.message;
                 console.error(`[executeTool] Error for ${toolName}: ${errorMsg}`);
                 return { error: errorMsg };
@@ -5975,6 +6292,24 @@
         // 1. "unexpected tool_use_id found in tool_result blocks" (orphaned tool_result)
         // 2. "tool_use ids were found without tool_result blocks" (orphaned tool_use)
         function sanitizeMessagesForAPI(messages) {
+            // OPTIMIZATION 4: Quick check - skip sanitization if no tool_use/tool_result blocks
+            let hasToolBlocks = false;
+            for (const msg of messages) {
+                if (Array.isArray(msg.content)) {
+                    for (const block of msg.content) {
+                        if (block.type === 'tool_use' || block.type === 'tool_result') {
+                            hasToolBlocks = true;
+                            break;
+                        }
+                    }
+                    if (hasToolBlocks) break;
+                }
+            }
+            if (!hasToolBlocks) {
+                // No tool blocks, return messages as-is (fast path)
+                return messages;
+            }
+
             // First pass: collect all tool_use IDs and tool_result IDs
             const allToolUseIds = new Set();
             const allToolResultIds = new Set();
@@ -6140,71 +6475,146 @@
             let apiMessages = sanitizeMessagesForAPI(filteredMessages);
             console.log(`[${convId}] Sending ${apiMessages.length} messages to API (filtered from ${filteredMessages.length})`);
 
-            // Check context size and auto-summarize if needed (per conversation)
-            const contextResult = await checkAndSummarizeContext(apiMessages, convId);
-            if (contextResult.summarized) {
-                console.log(`[${convId}] Context was compacted, updating messages`);
-                apiMessages = contextResult.messages;
-                // Update runtime messages with summarized version
-                runtime.messages.length = 0;
-                runtime.messages.push(...apiMessages);
-                // Re-render to show compacted state
-                if (isViewing) renderMessages();
+            // OPTIMIZATION 1: Skip context check when message count is low
+            // Only check context when there are enough messages to potentially need summarization
+            const MIN_MESSAGES_FOR_CONTEXT_CHECK = 10;
+            if (apiMessages.length >= MIN_MESSAGES_FOR_CONTEXT_CHECK) {
+                const contextResult = await checkAndSummarizeContext(apiMessages, convId);
+                if (contextResult.summarized) {
+                    console.log(`[${convId}] Context was compacted, updating messages`);
+                    apiMessages = contextResult.messages;
+                    // Update runtime messages with summarized version
+                    runtime.messages.length = 0;
+                    runtime.messages.push(...apiMessages);
+                    // Re-render to show compacted state
+                    if (isViewing) renderMessages();
+                }
             }
 
             try {
+                // Fetch available tools from backend
+                let tools = [];
+                try {
+                    const toolsResponse = await fetch(`${BASE_URL}/v1/tools`);
+                    const toolsData = await toolsResponse.json();
+                    tools = toolsData.tools || [];
+                    console.log(`[${convId}] Loaded ${tools.length} tools`);
+                } catch (e) {
+                    console.warn(`[${convId}] Failed to load tools:`, e);
+                }
+
+                // System prompt to encourage tool usage
+                const systemPrompt = tools.length > 0 ?
+                    `You are Springo, a helpful AI assistant with access to various tools.
+
+IMPORTANT: When answering questions about current events, recent news, technical documentation, or anything that requires up-to-date information:
+1. ALWAYS use the available tools to search for information first
+2. DO NOT make up or guess answers - use tools to verify facts
+3. If you're unsure about something, use a search tool to find accurate information
+
+**CRITICAL - Time-sensitive searches:**
+When user asks for "最新"/"latest"/"recent"/"newest" content:
+
+RULES (MUST follow ALL):
+1. Use ENGLISH keywords only (never Chinese)
+2. Use freshness="pw" on EVERY search call - including follow-up searches for details
+3. Include "2025 2026" in query to find recent content
+4. NEVER search for old content names like "Building Effective Agents" without freshness
+5. Trust the FIRST search results - don't second-guess by searching for older content
+
+Example workflow:
+- User: "anthropic最新的agent博客"
+- Search 1: brave_web_search(query="Anthropic agent blog 2025 2026 latest", freshness="pw") ✅
+- If need details: brave_web_search(query="<title from result> details", freshness="pw") ✅
+- WRONG: brave_web_search(query="Building Effective Agents") ❌ - this finds OLD content!
+
+WITHOUT freshness="pw", search returns OLD but popular results instead of newest!
+
+Available MCP tool categories:
+- Web search: web-search__brave_web_search (USE freshness="pw" for latest content!)
+- News search: web-search__brave_news_search (for news articles)
+- Documentation: strands-agents, bedrock-agentcore, context7
+- File operations: read_file, write_file, glob, grep, etc.
+
+NOTE: All web searches use MCP servers. DO NOT use built-in web_search (removed).
+
+Be concise and helpful in your responses.` : '';
+
                 const requestBody = {
                     model: model,
                     max_tokens: maxTokens,
                     temperature: temperature,
+                    system: systemPrompt,  // System prompt to guide behavior
                     messages: apiMessages,
-                    stream: false
+                    tools: tools,  // Include tools so model can use them
+                    stream: true  // Enable streaming
                 };
-                console.log(`[${convId}] Request body:`, JSON.stringify(requestBody).substring(0, 200));
+                console.log(`[${convId}] Request body (streaming):`, JSON.stringify(requestBody).substring(0, 200));
 
-                const response = await fetchWithRetry(`${BASE_URL}/v1/messages`, {
+                // Use native fetch for streaming (no retry wrapper)
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout for streaming
+
+                // Link external abort signal
+                if (abortSignal) {
+                    abortSignal.addEventListener('abort', () => controller.abort());
+                }
+
+                // Use auto mode for server-side tool execution (faster)
+                const apiEndpoint = AUTO_TOOL_EXECUTION ? '/v1/messages-auto' : '/v1/messages';
+                const response = await fetch(`${BASE_URL}${apiEndpoint}`, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'x-api-key': 'bedrock-proxy',
                         'anthropic-version': '2023-06-01'
                     },
-                    body: JSON.stringify(requestBody)
-                }, 3, 180000, abortSignal); // 3 retries, 3 minute timeout, with abort signal
-                console.log(`[${convId}] Response status:`, response.status);
+                    body: JSON.stringify(requestBody),
+                    signal: controller.signal
+                });
+
+                clearTimeout(timeoutId);
+                console.log(`[${convId}] Streaming response status:`, response.status);
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+                }
 
                 // Remove thinking message from THIS conversation
                 const thinkingIdx = messages.findIndex(m => m.isThinking);
                 if (thinkingIdx >= 0) messages.splice(thinkingIdx, 1);
 
-                const data = await response.json();
-
-                if (data.error) {
-                    throw new Error(data.error.message || 'API Error');
-                }
-
-                // Parse response content
+                // Process streaming response with progressive UI updates
                 let textContent = '';
                 let toolUses = [];
 
-                for (const block of data.content || []) {
-                    if (block.type === 'text') {
-                        textContent += block.text;
-                    } else if (block.type === 'tool_use') {
-                        toolUses.push({
-                            id: block.id,
-                            name: block.name,
-                            input: block.input || {}
-                        });
+                const { textContent: finalText, toolUses: finalTools } = await processStreamingResponse(
+                    response,
+                    convId,
+                    // onTextUpdate - called for each text chunk
+                    (text, tools, isFinal) => {
+                        textContent = text;
+                        toolUses = tools;
+                        // OPTIMIZATION 3: Debounced UI updates (only if viewing this conversation)
+                        if (currentConversationId === convId) {
+                            debouncedUpdateAssistantMessage(convId, text, tools, false);
+                        }
+                    },
+                    // onComplete - called when stream ends
+                    (text, tools) => {
+                        console.log(`[${convId}] Stream complete: text=${text.length} chars, tools=${tools.length}`);
                     }
-                }
+                );
 
-                console.log(`[${convId}] Parsed response: text=${textContent.length} chars, tools=${toolUses.length}`);
+                textContent = finalText;
+                toolUses = finalTools;
+
                 if (toolUses.length > 0) {
                     console.log(`[${convId}] Tool uses:`, toolUses.map(t => t.name));
                 }
 
-                // Update UI only if viewing this conversation
+                // Final UI update
                 const stillViewing = currentConversationId === convId;
                 if (stillViewing && toolUses.length > 0) {
                     updateToolPanel(toolUses);
@@ -6212,7 +6622,9 @@
                 updateAssistantMessage(convId, textContent, toolUses, true);
 
                 // Execute tools if any were detected
-                if (toolUses.length > 0) {
+                // When AUTO_TOOL_EXECUTION is enabled, tools are already executed on server
+                // so we skip frontend execution and just save the conversation
+                if (toolUses.length > 0 && !AUTO_TOOL_EXECUTION) {
                     if (stillViewing) updateStatus('tool');
 
                     // Start interval to update elapsed time display
@@ -6278,6 +6690,11 @@
                     // Add tool results as user message and continue
                     messages.push({ role: 'user', content: toolResults });
                     await continueConversation(convId);
+                } else if (toolUses.length > 0 && AUTO_TOOL_EXECUTION) {
+                    // AUTO MODE: Tools were executed on server, just save
+                    console.log(`[${convId}] Auto mode: ${toolUses.length} tools executed on server`);
+                    if (stillViewing) hideToolPanel();
+                    saveConversation(convId);
                 } else {
                     // No tools - save and hide panel
                     if (currentConversationId === convId) hideToolPanel();
@@ -6431,7 +6848,7 @@
 
             // Build proper API content (keep tool_use structure for API calls)
             let apiContent = text || '';
-            if (toolUses.length > 0) {
+            if (toolUses && toolUses.length > 0) {
                 apiContent = [];
                 if (text) {
                     apiContent.push({ type: 'text', text: text });
@@ -6996,13 +7413,44 @@
                 const execIndex = executions.findIndex(t => t.id === toolId);
                 if (execIndex >= 0 && toolItems[execIndex]) {
                     const item = toolItems[execIndex];
-                    // Update status
+
+                    // Remove running class from item
+                    item.classList.remove('running');
+
+                    // Update status dot
+                    const dotEl = item.querySelector('.tool-execution-dot');
+                    if (dotEl) {
+                        dotEl.className = `tool-execution-dot ${execution.status}`;
+                    }
+
+                    // Update status text
                     const statusEl = item.querySelector('.tool-execution-status');
                     if (statusEl) {
                         statusEl.className = `tool-execution-status ${execution.status}`;
                         statusEl.textContent = execution.status === 'error' ? 'Error' : 'Complete';
                     }
-                    // Add output section if not exists
+
+                    // Update preview section with result
+                    const previewSection = item.querySelector('.tool-execution-preview');
+                    if (previewSection) {
+                        const { preview, totalLines, hasMore } = getResultPreview(result);
+                        const inputPreview = getResultPreview(execution.input, 2);
+
+                        previewSection.innerHTML = `
+                            ${inputPreview.preview ? `
+                                <div class="tool-preview-line">
+                                    <span class="preview-label">Input:</span>
+                                    <span class="preview-content">${escapeHtml(inputPreview.preview.split('\n')[0])}</span>
+                                </div>
+                            ` : ''}
+                            <div class="tool-preview-result">
+                                <pre class="preview-snippet">${escapeHtml(preview)}</pre>
+                                ${hasMore ? `<span class="preview-more">... +${totalLines - 3} lines (click to expand)</span>` : ''}
+                            </div>
+                        `;
+                    }
+
+                    // Add output section to body if not exists
                     const body = item.querySelector('.tool-execution-body');
                     if (body && !body.querySelector('.tool-execution-section:last-child .tool-execution-label')?.textContent?.includes('Output')) {
                         const duration = `${((execution.endTime - execution.startTime) / 1000).toFixed(1)}s`;
@@ -7010,7 +7458,7 @@
                         outputSection.className = 'tool-execution-section';
                         outputSection.innerHTML = `
                             <div class="tool-execution-label">Output</div>
-                            <pre>${JSON.stringify(result, null, 2)}</pre>
+                            <pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>
                         `;
                         body.appendChild(outputSection);
                         // Update or add duration
@@ -7038,6 +7486,35 @@
             }
         }
 
+        // Helper to create a result preview snippet (like Claude Code)
+        function getResultPreview(result, maxLines = 3) {
+            if (!result) return { preview: '', totalLines: 0, hasMore: false };
+
+            let text = '';
+            // Extract meaningful content from result
+            if (typeof result === 'string') {
+                text = result;
+            } else if (result.error) {
+                text = `Error: ${result.error}`;
+            } else if (result.content) {
+                text = typeof result.content === 'string' ? result.content : JSON.stringify(result.content, null, 2);
+            } else if (result.results && Array.isArray(result.results)) {
+                // Search results
+                text = result.results.map(r => `- ${r.title || r.name || r.url || JSON.stringify(r).slice(0, 100)}`).join('\n');
+            } else if (result.message) {
+                text = result.message;
+            } else {
+                text = JSON.stringify(result, null, 2);
+            }
+
+            const lines = text.split('\n');
+            const totalLines = lines.length;
+            const preview = lines.slice(0, maxLines).join('\n');
+            const hasMore = totalLines > maxLines;
+
+            return { preview, totalLines, hasMore };
+        }
+
         function renderToolExecutionSidebar() {
             const container = document.getElementById('tool-execution-list');
             const executions = getToolExecutions();
@@ -7058,26 +7535,47 @@
                 const statusText = exec.status === 'running' ? 'Running...' : (exec.status === 'error' ? 'Error' : 'Complete');
                 const duration = exec.endTime ? `${((exec.endTime - exec.startTime) / 1000).toFixed(1)}s` : '';
 
+                // Get result preview for Claude Code-like display
+                const { preview, totalLines, hasMore } = getResultPreview(exec.result);
+                const inputPreview = getResultPreview(exec.input, 2);
+
                 return `
-                    <div class="tool-execution-item" onclick="this.classList.toggle('expanded')">
+                    <div class="tool-execution-item ${exec.result ? '' : 'running'}" onclick="this.classList.toggle('expanded')">
                         <div class="tool-execution-header">
-                            <svg class="tool-execution-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-                            </svg>
+                            <span class="tool-execution-dot ${statusClass}"></span>
                             <span class="tool-execution-name">${exec.name}</span>
                             <span class="tool-execution-status ${statusClass}">${statusText}</span>
                         </div>
+                        <!-- Preview section (always visible, like Claude Code) -->
+                        <div class="tool-execution-preview">
+                            ${inputPreview.preview ? `
+                                <div class="tool-preview-line">
+                                    <span class="preview-label">Input:</span>
+                                    <span class="preview-content">${escapeHtml(inputPreview.preview.split('\n')[0])}</span>
+                                </div>
+                            ` : ''}
+                            ${exec.result ? `
+                                <div class="tool-preview-result">
+                                    <pre class="preview-snippet">${escapeHtml(preview)}</pre>
+                                    ${hasMore ? `<span class="preview-more">... +${totalLines - 3} lines (click to expand)</span>` : ''}
+                                </div>
+                            ` : exec.status === 'running' ? `
+                                <div class="tool-preview-running">
+                                    <span class="running-indicator"></span>
+                                    <span>Executing...</span>
+                                </div>
+                            ` : ''}
+                        </div>
+                        <!-- Full details (expanded view) -->
                         <div class="tool-execution-body">
                             <div class="tool-execution-section">
                                 <div class="tool-execution-label">Input</div>
-                                <pre>${JSON.stringify(exec.input, null, 2)}</pre>
+                                <pre>${escapeHtml(JSON.stringify(exec.input, null, 2))}</pre>
                             </div>
                             ${exec.result ? `
                             <div class="tool-execution-section">
                                 <div class="tool-execution-label">Output</div>
-                                <pre>${JSON.stringify(exec.result, null, 2)}</pre>
+                                <pre>${escapeHtml(JSON.stringify(exec.result, null, 2))}</pre>
                             </div>
                             ` : ''}
                             ${duration ? `<div class="tool-execution-time">Duration: ${duration}</div>` : ''}
@@ -7085,6 +7583,17 @@
                     </div>
                 `;
             }).join('');
+        }
+
+        // Helper to escape HTML
+        function escapeHtml(text) {
+            if (!text) return '';
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
         }
 
         function clearToolExecutions() {
@@ -7118,9 +7627,19 @@
 
             empty.style.display = 'none';
             // Build folder items HTML - with drag support for dropping on conversations
+            // Get the actual working directory (conversation's workdir takes priority)
+            let actualWorkdir = currentWorkingDir;
+            if (currentConversationId) {
+                const conv = conversations.find(c => c.id === currentConversationId);
+                const runtime = convRuntime[currentConversationId];
+                const convWorkdir = conv?.workingDir || runtime?.workingDir;
+                if (convWorkdir) {
+                    actualWorkdir = convWorkdir;
+                }
+            }
             const foldersHtml = workingFolders.map((folder, index) => {
                 const name = folder.split('/').pop() || folder;
-                const isActive = folder === currentWorkingDir;
+                const isActive = folder === actualWorkdir;
                 const isDefault = folder === defaultWorkingFolder;
                 const isBrowsing = fileBrowserOpen && fileBrowserCurrentPath === folder;
                 // Escape folder path for use in HTML attributes
@@ -7215,8 +7734,16 @@
             const select = document.getElementById('status-workdir-select');
             if (!select) return;
 
-            // 保存当前选中值
-            const currentValue = currentWorkingDir;
+            // 获取当前应该选中的值（优先使用会话的工作目录）
+            let currentValue = currentWorkingDir;
+            if (currentConversationId) {
+                const conv = conversations.find(c => c.id === currentConversationId);
+                const runtime = convRuntime[currentConversationId];
+                const convWorkdir = conv?.workingDir || runtime?.workingDir;
+                if (convWorkdir) {
+                    currentValue = convWorkdir;
+                }
+            }
 
             // 清空并重新填充选项
             select.innerHTML = '';
@@ -7310,6 +7837,12 @@
             // 同步到服务器
             if (displayDir) {
                 updateServerWorkingDir(displayDir);
+            }
+
+            // 同步更新下拉选择器的选中状态
+            const select = document.getElementById('status-workdir-select');
+            if (select && displayDir) {
+                select.value = displayDir;
             }
         }
 
@@ -8774,13 +9307,6 @@ ${content || 'Task completed successfully.'}
                 showDelegationResultNotification(taskId, targetSessionNum, status, task.result || error);
             }
         });
-
-        // Helper function to escape HTML entities
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
 
         // Show notification banner for delegation result
         function showDelegationResultNotification(taskId, targetSessionNum, status, result) {

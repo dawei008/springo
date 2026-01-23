@@ -118,31 +118,34 @@ def is_command_safe(command: str) -> bool:
 TOOL_DEFINITIONS = [
     {
         "name": "tool_search",
-        "description": """Search for or select deferred tools to make them available for use.
+        "description": """Search for deferred tools and optionally auto-activate the best match.
 
-**MANDATORY PREREQUISITE** - You MUST use this tool to load deferred MCP tools BEFORE calling them.
+**IMPORTANT: Use auto_activate=true to save time!**
 
-**Query modes:**
+When you need to use an MCP tool, call this with auto_activate=true to search AND activate in one step.
 
-1. **Direct selection** - Use `select:<tool_name>` when you know which tool you need:
-   - "select:context7__query-docs"
-   - Returns and activates that specific tool
+**Parameters:**
+- query: Keywords to search (e.g., "strands memory", "aws documentation")
+- auto_activate: Set to true to automatically activate the best matching tool (RECOMMENDED)
+- max_results: Number of results to return (default: 5)
 
-2. **Keyword search** - Use keywords when unsure which tool to use:
-   - "react documentation" - find tools for React docs
-   - "library search" - find library search tools
-   - Returns up to 5 matching tools ranked by relevance
+**Recommended Usage (fast - one API call):**
+```
+tool_search(query="strands long term memory", auto_activate=true)
+```
+This searches, finds the best match, activates it, and you can immediately use it.
 
-**CORRECT Usage Pattern:**
-1. Search or select a tool using this tool
-2. If the tool is "deferred", it will be activated automatically
-3. Then call the activated tool
+**Alternative Usage (slower - requires follow-up call):**
+```
+tool_search(query="select:strands-agents__search_docs")
+```
+Direct selection by exact tool name.
 
 **Example:**
-User: "How do I use React hooks?"
-Assistant: [Calls tool_search with query: "select:context7__resolve-library-id"]
-[Tool is activated]
-Assistant: [Now can call context7__resolve-library-id]
+User: "How does AWS Strands handle memory?"
+Assistant: [Calls tool_search with query="strands memory", auto_activate=true]
+[Best matching tool is automatically activated]
+Assistant: [Immediately calls the activated tool]
 
 **Available deferred tools will be listed in the response.**""",
         "input_schema": {
@@ -150,7 +153,12 @@ Assistant: [Now can call context7__resolve-library-id]
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Query to find tools. Use 'select:<tool_name>' for direct selection, or keywords to search."
+                    "description": "Keywords to search for tools (e.g., 'strands memory', 'react docs')"
+                },
+                "auto_activate": {
+                    "type": "boolean",
+                    "description": "If true, automatically activate the best matching tool. RECOMMENDED for faster execution.",
+                    "default": True
                 },
                 "max_results": {
                     "type": "integer",
@@ -413,45 +421,9 @@ Assistant: [Now can call context7__resolve-library-id]
         }
     },
     # =============================================================================
-    # Web Search Tools
+    # Web Search Tools - REMOVED (use MCP web-search server instead)
     # =============================================================================
-    {
-        "name": "web_search",
-        "description": "Search the web using configured search engine (Brave, Tavily, or Custom API).",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The search query"
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "Maximum number of results to return (default: 10)",
-                    "default": 10
-                }
-            },
-            "required": ["query"]
-        }
-    },
-    {
-        "name": "web_fetch",
-        "description": "Fetch the content of a web page and return the text.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "The URL of the web page to fetch"
-                },
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector to extract specific content (optional)"
-                }
-            },
-            "required": ["url"]
-        }
-    },
+    # NOTE: web_search and web_fetch removed - use MCP brave_web_search instead
     # =============================================================================
     # Browser Tool (Unified - Claude Code pattern)
     # =============================================================================
@@ -1616,8 +1588,13 @@ def get_search_config() -> Dict[str, Any]:
     """Get current search engine configuration"""
     return _search_config.copy()
 
-def _search_brave(query: str, max_results: int, api_key: str) -> Dict[str, Any]:
-    """Search using Brave Search API"""
+def _search_brave(query: str, max_results: int, api_key: str, freshness: str = None) -> Dict[str, Any]:
+    """Search using Brave Search API
+
+    Args:
+        freshness: Time filter - 'pd' (past day), 'pw' (past week), 'pm' (past month), 'py' (past year)
+                   If None, no time filter is applied (returns most relevant results)
+    """
     if not HAS_REQUESTS:
         return {"error": "Requests library not available"}
     if not api_key:
@@ -1632,9 +1609,22 @@ def _search_brave(query: str, max_results: int, api_key: str) -> Dict[str, Any]:
         }
         params = {
             "q": query,
-            "count": min(max_results, 20),
-            "freshness": "pw"  # pw = past week for fresh results
+            "count": min(max_results, 20)
         }
+
+        # Add freshness filter if specified
+        freshness_labels = {
+            "pd": "past_day",
+            "pw": "past_week",
+            "pm": "past_month",
+            "py": "past_year"
+        }
+        if freshness and freshness in freshness_labels:
+            params["freshness"] = freshness
+            freshness_label = freshness_labels[freshness]
+        else:
+            freshness_label = "all_time"
+
         response = requests.get(
             "https://api.search.brave.com/res/v1/web/search",
             headers=headers,
@@ -1657,7 +1647,7 @@ def _search_brave(query: str, max_results: int, api_key: str) -> Dict[str, Any]:
             "query": query,
             "engine": "brave",
             "search_time": current_time,
-            "freshness": "past_week",
+            "freshness": freshness_label,
             "results": results,
             "count": len(results)
         }
@@ -1668,8 +1658,13 @@ def _search_brave(query: str, max_results: int, api_key: str) -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"Brave search failed: {str(e)}"}
 
-def _search_tavily(query: str, max_results: int, api_key: str) -> Dict[str, Any]:
-    """Search using Tavily API"""
+def _search_tavily(query: str, max_results: int, api_key: str, freshness: str = None) -> Dict[str, Any]:
+    """Search using Tavily API
+
+    Args:
+        freshness: Time filter - 'pd' (past day), 'pw' (past week), 'pm' (past month), 'py' (past year)
+                   Converted to days parameter for Tavily API
+    """
     if not HAS_REQUESTS:
         return {"error": "Requests library not available"}
     if not api_key:
@@ -1678,6 +1673,23 @@ def _search_tavily(query: str, max_results: int, api_key: str) -> Dict[str, Any]
         from datetime import datetime
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # Convert freshness to days for Tavily
+        freshness_to_days = {
+            "pd": 1,
+            "pw": 7,
+            "pm": 30,
+            "py": 365
+        }
+        freshness_labels = {
+            "pd": "past_day",
+            "pw": "past_week",
+            "pm": "past_month",
+            "py": "past_year"
+        }
+
+        days = freshness_to_days.get(freshness) if freshness else None
+        freshness_label = freshness_labels.get(freshness, "all_time") if freshness else "all_time"
+
         headers = {
             "Content-Type": "application/json"
         }
@@ -1685,9 +1697,13 @@ def _search_tavily(query: str, max_results: int, api_key: str) -> Dict[str, Any]
             "api_key": api_key,
             "query": query,
             "max_results": min(max_results, 10),
-            "include_answer": True,
-            "days": 7  # Limit to past 7 days for fresh results
+            "include_answer": True
         }
+
+        # Only add days filter if freshness is specified
+        if days:
+            payload["days"] = days
+
         response = requests.post(
             "https://api.tavily.com/search",
             headers=headers,
@@ -1710,7 +1726,7 @@ def _search_tavily(query: str, max_results: int, api_key: str) -> Dict[str, Any]
             "query": query,
             "engine": "tavily",
             "search_time": current_time,
-            "freshness": "past_7_days",
+            "freshness": freshness_label,
             "answer": data.get("answer", ""),
             "results": results,
             "count": len(results)
@@ -1722,8 +1738,13 @@ def _search_tavily(query: str, max_results: int, api_key: str) -> Dict[str, Any]
     except Exception as e:
         return {"error": f"Tavily search failed: {str(e)}"}
 
-def _search_custom(query: str, max_results: int, api_key: str, custom_url: str) -> Dict[str, Any]:
-    """Search using custom API"""
+def _search_custom(query: str, max_results: int, api_key: str, custom_url: str, freshness: str = None) -> Dict[str, Any]:
+    """Search using custom API
+
+    Args:
+        freshness: Time filter - for custom APIs that don't support time filtering,
+                   we append time keywords to the query (e.g., "2025" or "January 2026")
+    """
     if not HAS_REQUESTS:
         return {"error": "Requests library not available"}
     if not custom_url:
@@ -1732,8 +1753,31 @@ def _search_custom(query: str, max_results: int, api_key: str, custom_url: str) 
         from datetime import datetime
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+        # For custom APIs without time filter support, add time keywords to query
+        modified_query = query
+        freshness_label = "all_time"
+        if freshness:
+            now = datetime.now()
+            freshness_labels = {
+                "pd": "past_day",
+                "pw": "past_week",
+                "pm": "past_month",
+                "py": "past_year"
+            }
+            freshness_label = freshness_labels.get(freshness, "all_time")
+
+            # Add time context to query for better results
+            if freshness == "pd":
+                modified_query = f"{query} {now.strftime('%Y-%m-%d')}"
+            elif freshness == "pw":
+                modified_query = f"{query} {now.strftime('%B %Y')}"
+            elif freshness == "pm":
+                modified_query = f"{query} {now.strftime('%B %Y')}"
+            elif freshness == "py":
+                modified_query = f"{query} {now.year}"
+
         # Replace {query} placeholder
-        url = custom_url.replace("{query}", requests.utils.quote(query))
+        url = custom_url.replace("{query}", requests.utils.quote(modified_query))
 
         headers = {"Accept": "application/json"}
         if api_key:
@@ -1759,16 +1803,27 @@ def _search_custom(query: str, max_results: int, api_key: str, custom_url: str) 
 
         return {
             "query": query,
+            "modified_query": modified_query if modified_query != query else None,
             "engine": "custom",
             "search_time": current_time,
+            "freshness": freshness_label,
+            "note": "Custom API may not support time filtering; time keywords added to query" if freshness else None,
             "results": results,
             "count": len(results)
         }
     except Exception as e:
         return {"error": f"Custom search failed: {str(e)}"}
 
-def web_search(query: str, max_results: int = 10) -> Dict[str, Any]:
-    """Search the web using configured search engine (Brave, Tavily, or Custom)"""
+def web_search(query: str, max_results: int = 10, freshness: str = None) -> Dict[str, Any]:
+    """Search the web using configured search engine (Brave, Tavily, or Custom)
+
+    Args:
+        query: The search query
+        max_results: Maximum number of results to return (default: 10)
+        freshness: Time filter for results - 'pd' (past day), 'pw' (past week),
+                   'pm' (past month), 'py' (past year). Use 'pm' for "最新" queries.
+                   If None, returns most relevant results regardless of date.
+    """
     engine = _search_config.get("engine", "brave")
     api_key = _search_config.get("api_key", "")
     custom_url = _search_config.get("custom_url", "")
@@ -1779,13 +1834,13 @@ def web_search(query: str, max_results: int = 10) -> Dict[str, Any]:
     if engine == "custom" and not custom_url:
         return {"error": "Custom search URL not configured. Please set it in Settings."}
 
-    # Execute search with configured engine
+    # Execute search with configured engine, passing freshness parameter
     if engine == "brave":
-        return _search_brave(query, max_results, api_key)
+        return _search_brave(query, max_results, api_key, freshness)
     elif engine == "tavily":
-        return _search_tavily(query, max_results, api_key)
+        return _search_tavily(query, max_results, api_key, freshness)
     elif engine == "custom":
-        return _search_custom(query, max_results, api_key, custom_url)
+        return _search_custom(query, max_results, api_key, custom_url, freshness)
     else:
         return {"error": f"Unknown search engine: {engine}"}
 
@@ -2659,8 +2714,8 @@ def enter_plan_mode(reason: str) -> Dict[str, Any]:
         "ui_update": "plan_mode_indicator",
         "allowed_tools": [
             "read_file", "read_files", "glob", "grep", "list_directory",
-            "search_files", "get_file_info", "web_search", "web_fetch",
-            "todo_write", "todo_read"
+            "search_files", "get_file_info", "todo_write", "todo_read"
+            # web_search, web_fetch removed - use MCP brave_web_search instead
         ],
         "restricted_tools": [
             "write_file", "edit", "delete_file", "move_file",
@@ -2771,7 +2826,7 @@ Focus on exploration, do not modify any files."""
     "research": {
         "name": "Web Researcher",
         "description": "Specialized for web research and information gathering",
-        "tools": ["web_search", "web_fetch", "read_file", "write_file"],
+        "tools": ["web-search__brave_web_search", "read_file", "write_file"],  # Use MCP search
         "system_prompt_addition": """You are a research specialist. Your job is to:
 - Search the web for relevant information
 - Summarize findings clearly
@@ -2885,23 +2940,23 @@ def delegate_task(
 # Tool Search (Lazy Loading)
 # =============================================================================
 
-def tool_search(query: str, max_results: int = 5) -> Dict[str, Any]:
+def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) -> Dict[str, Any]:
     """
     Search for and optionally activate deferred tools.
 
-    Similar to Claude Code's ToolSearch mechanism for lazy loading.
+    With auto_activate=True (default), automatically activates the best matching tool,
+    saving one API round-trip compared to search-then-select pattern.
     """
     try:
         from tool_registry import get_tool_registry
         from mcp_client import get_mcp_manager
 
         registry = get_tool_registry()
+        manager = get_mcp_manager()
 
-        # Handle direct selection with activation
-        if query.startswith("select:"):
-            tool_name = query[7:].strip()
-
-            # Check if already active
+        # Helper function to activate a tool by name
+        def activate_tool(tool_name: str) -> Dict[str, Any]:
+            """Activate a deferred tool and return its info"""
             if registry.is_active(tool_name):
                 return {
                     "status": "already_active",
@@ -2909,40 +2964,60 @@ def tool_search(query: str, max_results: int = 5) -> Dict[str, Any]:
                     "message": f"Tool '{tool_name}' is already active and ready to use."
                 }
 
-            # Check if it's a deferred tool and activate it
-            if registry.is_deferred(tool_name):
-                # Get the full definition from MCP manager
-                if "__" in tool_name:
-                    server_name = tool_name.split("__")[0]
-                    manager = get_mcp_manager()
-
-                    if server_name in manager.servers:
-                        server = manager.servers[server_name]
-                        # Find the tool definition
-                        for tool_def in server.get_tool_definitions():
-                            if tool_def["name"] == tool_name:
-                                registry.activate(tool_name, tool_def)
-                                return {
-                                    "status": "activated",
-                                    "tool": tool_name,
-                                    "description": tool_def.get("description", "")[:300],
-                                    "message": f"Tool '{tool_name}' has been activated. You can now use it."
-                                }
-
+            if not registry.is_deferred(tool_name):
                 return {
-                    "status": "error",
-                    "message": f"Could not activate tool '{tool_name}'. Server may not be running."
+                    "status": "not_found",
+                    "message": f"Tool '{tool_name}' not found in registry."
                 }
 
+            # Get the full definition from MCP manager
+            if "__" in tool_name:
+                server_name = tool_name.split("__")[0]
+
+                if server_name in manager.servers:
+                    server = manager.servers[server_name]
+                    # Find the tool definition
+                    for tool_def in server.get_tool_definitions():
+                        if tool_def["name"] == tool_name:
+                            registry.activate(tool_name, tool_def)
+                            return {
+                                "status": "activated",
+                                "tool": tool_name,
+                                "description": tool_def.get("description", "")[:500],
+                                "input_schema": tool_def.get("input_schema", {}),
+                                "message": f"Tool '{tool_name}' is now ACTIVE. Call it directly with the parameters shown in input_schema."
+                            }
+
             return {
-                "status": "not_found",
-                "message": f"Tool '{tool_name}' not found in registry."
+                "status": "error",
+                "message": f"Could not activate tool '{tool_name}'. Server may not be running."
             }
+
+        # Handle direct selection with activation
+        if query.startswith("select:"):
+            tool_name = query[7:].strip()
+            return activate_tool(tool_name)
 
         # Keyword search
         results = registry.search(query, max_results)
 
-        # Build response with deferred tools list
+        # AUTO-ACTIVATE: If enabled and we have results, activate the best match
+        if auto_activate and results:
+            best_match = results[0]
+            if best_match.get("status") == "deferred" and best_match.get("score", 0) >= 0.3:
+                tool_name = best_match["name"]
+                activation_result = activate_tool(tool_name)
+
+                # Return combined result with search context
+                return {
+                    "status": "auto_activated",
+                    "query": query,
+                    "activated_tool": activation_result,
+                    "other_matches": results[1:5],  # Show other options
+                    "message": f"Auto-activated best match: '{tool_name}'. You can now call it directly. Other matches shown in 'other_matches' if needed."
+                }
+
+        # No auto-activation (either disabled or no good matches)
         deferred = registry.get_deferred_tools()
 
         return {
@@ -2950,8 +3025,7 @@ def tool_search(query: str, max_results: int = 5) -> Dict[str, Any]:
             "query": query,
             "results": results,
             "total_deferred": len(deferred),
-            "deferred_tools": [t["name"] for t in deferred],
-            "hint": "Use 'select:<tool_name>' to activate a deferred tool before using it."
+            "message": "Search complete. Use auto_activate=true next time for faster workflow, or call tool_search with 'select:<tool_name>' to activate a specific tool."
         }
 
     except Exception as e:
@@ -2987,9 +3061,9 @@ TOOL_HANDLERS = {
     "git_pull": git_pull,
     "git_push": git_push,
     "git_clone": git_clone,
-    # Web search tools
-    "web_search": web_search,
-    "web_fetch": web_fetch,
+    # Web search tools - REMOVED (use MCP web-search server instead)
+    # "web_search": web_search,  # Use MCP brave_web_search
+    # "web_fetch": web_fetch,    # Use MCP fetch
     # Unified Browser tool (Claude Code pattern)
     "browser": browser,
     # Legacy Browser tools (for backward compatibility)

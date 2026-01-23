@@ -52,6 +52,10 @@ class ContextManager:
         # In-memory context state per session
         self._session_contexts: Dict[str, Dict] = {}
 
+        # OPTIMIZATION 2: Token count cache (message hash -> token count)
+        self._token_cache: Dict[str, int] = {}
+        self._token_cache_max_size = 1000  # Limit cache size
+
     # ========== Token Counting ==========
 
     def count_tokens(self, text: str) -> int:
@@ -64,14 +68,26 @@ class ContextManager:
             # Fallback: rough estimation (1 token ≈ 4 characters for English, 2 for Chinese)
             return len(text) // 3
 
+    def _get_message_hash(self, message: Dict[str, Any]) -> str:
+        """Generate a hash for a message for caching purposes"""
+        # Use a fast hash of the JSON representation
+        content = json.dumps(message, sort_keys=True, default=str)
+        return hashlib.md5(content.encode()).hexdigest()
+
     def count_message_tokens(self, message: Dict[str, Any]) -> int:
-        """Count tokens in a single message"""
+        """Count tokens in a single message (with caching)"""
+        # OPTIMIZATION 2: Check cache first
+        msg_hash = self._get_message_hash(message)
+        if msg_hash in self._token_cache:
+            return self._token_cache[msg_hash]
+
+        # Calculate tokens
         content = message.get("content", "")
+        total = 0
 
         if isinstance(content, str):
-            return self.count_tokens(content)
+            total = self.count_tokens(content)
         elif isinstance(content, list):
-            total = 0
             for block in content:
                 if isinstance(block, dict):
                     if block.get("type") == "text":
@@ -89,8 +105,16 @@ class ContextManager:
                         total += 1500  # Image tokens estimate
                 elif isinstance(block, str):
                     total += self.count_tokens(block)
-            return total
-        return 0
+
+        # Store in cache (with size limit)
+        if len(self._token_cache) >= self._token_cache_max_size:
+            # Remove oldest entries (simple FIFO-like cleanup)
+            keys_to_remove = list(self._token_cache.keys())[:100]
+            for key in keys_to_remove:
+                del self._token_cache[key]
+        self._token_cache[msg_hash] = total
+
+        return total
 
     def count_messages_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """Count total tokens in all messages"""

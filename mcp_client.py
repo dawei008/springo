@@ -186,10 +186,11 @@ class MCPServerConnection:
 
     def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Call a tool on this server"""
+        # Use 40 second timeout for tool calls (slightly less than frontend's 45s)
         result = self._send_request("tools/call", {
             "name": name,
             "arguments": arguments
-        })
+        }, timeout=40)
 
         if result and "result" in result:
             return result["result"]

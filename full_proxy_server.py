@@ -33,7 +33,8 @@ from auth.config_manager import AuthConfigManager
 from ui.routes import config_bp
 
 # MCP 工具模块
-from mcp_tools import get_tool_definitions, execute_tool, set_search_config, get_search_config, set_working_dir, get_working_dir
+from mcp_tools import get_tool_definitions, execute_tool, set_working_dir, get_working_dir
+# NOTE: set_search_config, get_search_config removed - use MCP web-search server instead
 
 # 上下文管理模块
 from context_manager import get_context_manager, get_stats as get_context_stats
@@ -206,10 +207,16 @@ For complex tasks, use `enter_plan_mode` first:
    - When generating HTML/code files, keep them focused and modular
    - If creating multiple files, do them in separate tool calls, not all at once
 
-7. **Web search efficiency**:
-   - Combine related searches into one comprehensive query
-   - Use max_results=5-10 for initial exploration, increase only if needed
-   - After searching, fetch specific URLs rather than searching again
+7. **Web search (MCP only)**:
+   - Use MCP tool: web-search__brave_web_search (built-in web_search removed)
+   - **IMPORTANT**: When user asks for "最新"/"latest"/"recent" content, ALWAYS use freshness parameter:
+     - freshness="pd" (past day) - for breaking news
+     - freshness="pw" (past week) - RECOMMENDED for "最新" queries
+     - freshness="pm" (past month) - for broader recent content
+     - freshness="py" (past year) - for annual content
+   - Use ENGLISH keywords in query, include year (e.g., "topic 2025 2026")
+   - Use count=5-10 for initial exploration
+   - For news: use web-search__brave_news_search
 
 8. **Specialized agents** with `task` tool:
    - Use agent_type="explore" for code exploration
@@ -392,6 +399,301 @@ def messages_api():
             status=http_status,
             mimetype='application/json'
         )
+
+
+# ==================== 服务端自动工具执行 (性能优化) ====================
+
+@app.route('/v1/messages-auto', methods=['POST'])
+def messages_auto_api():
+    """
+    自动工具执行 API - 消除前端往返延迟
+
+    工作流程:
+    1. 调用 Bedrock API
+    2. 如果返回 tool_use，在服务端直接执行工具
+    3. 将 tool_result 发送回 Bedrock
+    4. 重复直到没有更多 tool_use 或达到最大迭代次数
+    5. 返回最终响应
+
+    优势: 消除每个工具的前端往返延迟 (每个工具节省 ~1-3秒)
+    """
+    try:
+        anthropic_request = request.get_json()
+        is_streaming = anthropic_request.get("stream", False)
+        max_tool_iterations = anthropic_request.pop("max_tool_iterations", 10)
+
+        logger.info(f"Messages-Auto API: model={anthropic_request.get('model')}, stream={is_streaming}")
+
+        if is_streaming:
+            return Response(
+                stream_with_context(handle_auto_streaming(anthropic_request, max_tool_iterations)),
+                mimetype='text/event-stream',
+                headers={
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive',
+                    'X-Accel-Buffering': 'no'
+                }
+            )
+        else:
+            result = handle_auto_nonstreaming(anthropic_request, max_tool_iterations)
+            return Response(json.dumps(result), mimetype='application/json')
+
+    except Exception as e:
+        logger.error(f"Messages-Auto Error: {e}")
+        error_response = format_error_response(e, lang="zh")
+        http_status = get_http_status(e)
+        return Response(json.dumps(error_response), status=http_status, mimetype='application/json')
+
+
+def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 10) -> Generator:
+    """处理流式响应并自动执行工具"""
+    from mcp_tools import execute_tool
+
+    bedrock_client = get_bedrock_client()
+    original_model = anthropic_request.get("model", "claude-3-5-sonnet-20241022")
+    messages = anthropic_request.get("messages", [])
+    tools = anthropic_request.get("tools", [])
+    system = anthropic_request.get("system", "")
+
+    iteration = 0
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        # 构建请求
+        model_id, bedrock_body = convert_anthropic_to_bedrock({
+            "model": original_model,
+            "messages": messages,
+            "tools": tools,
+            "system": system,
+            "max_tokens": anthropic_request.get("max_tokens", 8192),
+            "stream": True
+        })
+
+        # 调用 Bedrock 流式 API
+        try:
+            response = bedrock_client.invoke_model_with_response_stream(
+                modelId=model_id,
+                body=json.dumps(bedrock_body),
+                contentType="application/json",
+                accept="application/json"
+            )
+        except Exception as e:
+            logger.error(f"Bedrock API error: {e}")
+            error_response = format_error_response(e, lang="zh")
+            yield f"event: error\ndata: {json.dumps(error_response)}\n\n"
+            return
+
+        # 收集完整响应
+        message_id = f"msg_{uuid.uuid4().hex[:24]}"
+        content_blocks = []
+        current_block = None
+        current_block_index = -1
+        stop_reason = None
+        usage = {"input_tokens": 0, "output_tokens": 0}
+
+        for event in response.get("body", []):
+            chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
+            chunk_type = chunk.get("type")
+
+            if chunk_type == "message_start":
+                msg = chunk.get("message", {})
+                msg["model"] = original_model
+                yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': msg})}\n\n"
+
+            elif chunk_type == "content_block_start":
+                current_block_index = chunk.get("index", 0)
+                current_block = chunk.get("content_block", {})
+                content_blocks.append(current_block.copy())
+                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': current_block})}\n\n"
+
+            elif chunk_type == "content_block_delta":
+                index = chunk.get("index", current_block_index)
+                delta = chunk.get("delta", {})
+
+                # 累积内容
+                if index < len(content_blocks):
+                    block = content_blocks[index]
+                    if "text" in delta:
+                        block["text"] = block.get("text", "") + delta["text"]
+                    if "partial_json" in delta:
+                        # 使用单独字段累积 JSON 字符串，避免类型冲突
+                        if "_input_json" not in block:
+                            block["_input_json"] = ""
+                        block["_input_json"] = block["_input_json"] + delta["partial_json"]
+
+                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': index, 'delta': delta})}\n\n"
+
+            elif chunk_type == "content_block_stop":
+                index = chunk.get("index", current_block_index)
+
+                # 解析 tool_use 的 input
+                if index < len(content_blocks):
+                    block = content_blocks[index]
+                    if block.get("type") == "tool_use":
+                        # 从累积的 JSON 字符串解析
+                        if "_input_json" in block:
+                            try:
+                                block["input"] = json.loads(block["_input_json"])
+                            except:
+                                block["input"] = {}
+                            del block["_input_json"]
+                        # 兜底：如果 input 仍是字符串
+                        elif isinstance(block.get("input"), str):
+                            try:
+                                block["input"] = json.loads(block["input"])
+                            except:
+                                block["input"] = {}
+
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
+
+            elif chunk_type == "message_delta":
+                delta = chunk.get("delta", {})
+                stop_reason = delta.get("stop_reason", stop_reason)
+                usage = chunk.get("usage", usage)
+                yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': delta, 'usage': usage})}\n\n"
+
+            elif chunk_type == "message_stop":
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+        # 检查是否需要执行工具
+        tool_uses = [b for b in content_blocks if b.get("type") == "tool_use"]
+
+        if not tool_uses or stop_reason != "tool_use":
+            # 没有工具调用，完成
+            return
+
+        # 执行工具并发送进度更新
+        yield f"event: tool_execution_start\ndata: {json.dumps({'type': 'tool_execution_start', 'tools': [{'id': t['id'], 'name': t['name']} for t in tool_uses]})}\n\n"
+
+        tool_results = []
+        for tool_use in tool_uses:
+            tool_id = tool_use.get("id")
+            tool_name = tool_use.get("name")
+            tool_input = tool_use.get("input", {})
+
+            # Log search tool calls for debugging
+            if 'search' in tool_name.lower():
+                logger.info(f"🔍 SEARCH TOOL CALL: {tool_name}")
+                logger.info(f"   Query: {tool_input.get('query', 'N/A')}")
+                logger.info(f"   Freshness: {tool_input.get('freshness', 'NOT SET')}")
+                logger.info(f"   Full params: {json.dumps(tool_input)}")
+
+            # 发送工具开始执行事件
+            yield f"event: tool_executing\ndata: {json.dumps({'type': 'tool_executing', 'id': tool_id, 'name': tool_name})}\n\n"
+
+            # 执行工具
+            try:
+                result = execute_tool(tool_name, tool_input)
+            except Exception as e:
+                result = {"error": str(e)}
+
+            # 发送工具完成事件
+            yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'id': tool_id, 'name': tool_name, 'result': result})}\n\n"
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": json.dumps(result) if isinstance(result, dict) else str(result)
+            })
+
+        yield f"event: tool_execution_complete\ndata: {json.dumps({'type': 'tool_execution_complete', 'count': len(tool_results)})}\n\n"
+
+        # 清理临时字段，避免发送给 Bedrock API
+        cleaned_blocks = []
+        for block in content_blocks:
+            clean_block = {k: v for k, v in block.items() if not k.startswith("_")}
+            cleaned_blocks.append(clean_block)
+
+        # 更新消息历史，继续对话
+        messages.append({
+            "role": "assistant",
+            "content": cleaned_blocks
+        })
+        messages.append({
+            "role": "user",
+            "content": tool_results
+        })
+
+    # 达到最大迭代次数
+    yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': f'Reached maximum tool iterations ({max_iterations})'}})}\n\n"
+
+
+def handle_auto_nonstreaming(anthropic_request: dict, max_iterations: int = 10) -> dict:
+    """处理非流式响应并自动执行工具"""
+    from mcp_tools import execute_tool
+
+    bedrock_client = get_bedrock_client()
+    original_model = anthropic_request.get("model", "claude-3-5-sonnet-20241022")
+    messages = anthropic_request.get("messages", [])
+    tools = anthropic_request.get("tools", [])
+    system = anthropic_request.get("system", "")
+
+    iteration = 0
+    final_response = None
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        model_id, bedrock_body = convert_anthropic_to_bedrock({
+            "model": original_model,
+            "messages": messages,
+            "tools": tools,
+            "system": system,
+            "max_tokens": anthropic_request.get("max_tokens", 8192),
+            "stream": False
+        })
+
+        response = bedrock_client.invoke_model(
+            modelId=model_id,
+            body=json.dumps(bedrock_body),
+            contentType="application/json",
+            accept="application/json"
+        )
+
+        bedrock_response = json.loads(response['body'].read())
+        content = bedrock_response.get("content", [])
+        stop_reason = bedrock_response.get("stop_reason")
+
+        final_response = {
+            "id": f"msg_{uuid.uuid4().hex[:24]}",
+            "type": "message",
+            "role": "assistant",
+            "content": content,
+            "model": original_model,
+            "stop_reason": stop_reason,
+            "usage": bedrock_response.get("usage", {})
+        }
+
+        # 检查是否需要执行工具
+        tool_uses = [b for b in content if b.get("type") == "tool_use"]
+
+        if not tool_uses or stop_reason != "tool_use":
+            return final_response
+
+        # 执行工具
+        tool_results = []
+        for tool_use in tool_uses:
+            tool_id = tool_use.get("id")
+            tool_name = tool_use.get("name")
+            tool_input = tool_use.get("input", {})
+
+            try:
+                result = execute_tool(tool_name, tool_input)
+            except Exception as e:
+                result = {"error": str(e)}
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": json.dumps(result) if isinstance(result, dict) else str(result)
+            })
+
+        # 更新消息历史
+        messages.append({"role": "assistant", "content": content})
+        messages.append({"role": "user", "content": tool_results})
+
+    return final_response or {"error": f"Reached maximum iterations ({max_iterations})"}
 
 
 @app.route('/v1/models', methods=['GET'])
@@ -882,35 +1184,21 @@ def get_skills_path():
         )
 
 
-# ==================== 搜索引擎配置端点 ====================
+# ==================== 搜索引擎配置端点 (DEPRECATED) ====================
+# NOTE: Built-in search removed. Use MCP web-search server (brave_web_search) instead.
+# The endpoint is kept for backward compatibility but returns deprecation notice.
 
 @app.route('/v1/config/search', methods=['GET', 'POST'])
 def search_config():
-    """获取或设置搜索引擎配置"""
-    if request.method == 'GET':
-        return Response(
-            json.dumps(get_search_config()),
-            mimetype='application/json'
-        )
-    else:
-        try:
-            data = request.get_json()
-            engine = data.get('engine', 'duckduckgo')
-            api_key = data.get('apiKey', '')
-            custom_url = data.get('customUrl', '')
-            set_search_config(engine, api_key, custom_url)
-            logger.info(f"Search config updated: engine={engine}")
-            return Response(
-                json.dumps({"success": True, "engine": engine}),
-                mimetype='application/json'
-            )
-        except Exception as e:
-            logger.error(f"Search config error: {e}")
-            return Response(
-                json.dumps({"error": str(e)}),
-                status=500,
-                mimetype='application/json'
-            )
+    """已弃用：搜索引擎配置已移至 MCP 服务器"""
+    return Response(
+        json.dumps({
+            "deprecated": True,
+            "message": "Built-in search removed. Use MCP web-search server (brave_web_search) instead.",
+            "mcp_tools": ["web-search__brave_web_search", "web-search__brave_news_search"]
+        }),
+        mimetype='application/json'
+    )
 
 
 @app.route('/v1/config/working-dir', methods=['GET', 'POST'])
@@ -1184,6 +1472,44 @@ if __name__ == '__main__':
             mcp_status = manager.get_status()
             if mcp_status:
                 print(f"    MCP 服务器已启动: {list(mcp_status.keys())}")
+
+            # Pre-activate commonly used MCP tools to avoid tool_search overhead
+            # This saves 1 API round-trip per query (~1-3 seconds)
+            from tool_registry import get_tool_registry
+            registry = get_tool_registry()
+
+            PREACTIVATE_TOOLS = [
+                'strands-agents__search_docs',
+                'strands-agents__fetch_doc',
+                'bedrock-agentcore__search_agentcore_docs',
+                'bedrock-agentcore__fetch_agentcore_doc',
+                'web-search__brave_web_search',
+                'context7__resolve-library-id',
+                'context7__query-docs',
+            ]
+
+            activated = []
+            for tool_name in PREACTIVATE_TOOLS:
+                if registry.is_deferred(tool_name):
+                    # Get tool definition from MCP server
+                    server_name = tool_name.split('__')[0]
+                    actual_tool = tool_name.split('__', 1)[1]
+                    if server_name in manager.servers:
+                        server = manager.servers[server_name]
+                        for tool in server.tools:
+                            if tool['name'] == actual_tool:
+                                definition = {
+                                    'name': tool_name,
+                                    'description': tool.get('description', ''),
+                                    'input_schema': tool.get('inputSchema', {'type': 'object', 'properties': {}})
+                                }
+                                if registry.activate(tool_name, definition):
+                                    activated.append(tool_name)
+                                break
+
+            if activated:
+                print(f"    预激活工具: {len(activated)} 个")
+                logger.info(f"Pre-activated tools: {activated}")
     except Exception as e:
         logger.warning(f"MCP auto-init failed: {e}")
 
