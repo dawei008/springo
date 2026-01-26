@@ -77,7 +77,7 @@
             localStorage.removeItem('settings');
         }
         let toolExecutionsPerConv = {}; // Track tool executions per conversation
-        let rightSidebarOpen = false;
+        let rightSidebarOpen = true; // Sidebar is visible by default
 
         // OPTIMIZATION: Server-side auto tool execution (eliminates frontend round-trips)
         // When enabled, tools are executed on the server, saving ~1-3 seconds per tool
@@ -1208,6 +1208,7 @@
                 syncStatusBarWithConversation(newId);
                 renderConversations();
                 hideContextIndicator(); // Reset context indicator for new conversation
+                removeInlineChatToolPanel(); // Remove inline tool panel for new conversation
 
                 // Update status bar path display for new conversation
                 updateWorkingDirDisplay(workingDir);
@@ -1279,6 +1280,7 @@
                 updateTokenCount();
                 renderToolExecutionSidebar(); // Update right sidebar for this conversation
                 hideContextIndicator(); // Reset context indicator for new conversation
+                removeInlineChatToolPanel(); // Remove inline tool panel when switching conversations
 
                 // Restore inline tasks for this conversation
                 updateInlineTasks(runtime.todos);
@@ -1676,13 +1678,14 @@
             }
 
             // Filter out internal messages for display
-            const filteredMessages = messages.filter(m => {
+            const filteredMessages = messages.filter((m, idx) => {
                 // Skip tool_result user messages
                 if (m.role === 'user' && Array.isArray(m.content)) {
                     return !m.content.some(c => c.type === 'tool_result');
                 }
                 // Skip assistant messages that only have tool_use (no text)
-                if (m.role === 'assistant' && m.hasToolUse) {
+                // BUT don't skip the last message (it's the active streaming message)
+                if (m.role === 'assistant' && m.hasToolUse && idx < messages.length - 1) {
                     const display = m.displayContent || '';
                     if (!display.trim()) return false; // Hide if no text content
                 }
@@ -1794,6 +1797,18 @@
 
         function formatContent(content) {
             if (!content) return '';
+
+            // If content contains chat-tool-container (new tool display), preserve it
+            if (typeof content === 'string' && content.includes('<div class="chat-tool-container"')) {
+                // Split by tool container using END marker for reliable matching
+                const parts = content.split(/(<div class="chat-tool-container">[\s\S]*?<!-- END_TOOL_CONTAINER -->)/g);
+                return parts.map(part => {
+                    if (part.includes('<div class="chat-tool-container"')) {
+                        return part;
+                    }
+                    return part.trim() ? marked.parse(part) : '';
+                }).join('');
+            }
 
             // If content is already HTML (contains tool-call divs), return as-is
             if (typeof content === 'string' && content.includes('<div class="tool-call"')) {
@@ -1977,14 +1992,17 @@
                                 onTextUpdate(textContent, toolUses, false);
                             } else if (delta.type === 'input_json_delta' && currentToolUse) {
                                 currentToolInput += delta.partial_json;
+                                console.log(`[${convId}] input_json_delta for ${currentToolUse.name}: +${delta.partial_json.length} chars`);
                             }
                             break;
 
                         case 'content_block_stop':
                             if (currentToolUse) {
                                 try {
-                                    currentToolUse.input = JSON.parse(currentToolInput);
+                                    currentToolUse.input = JSON.parse(currentToolInput || '{}');
+                                    console.log(`[${convId}] Parsed input for ${currentToolUse.name}:`, JSON.stringify(currentToolUse.input).substring(0, 100));
                                 } catch (e) {
+                                    console.error(`[${convId}] Failed to parse tool input: ${e.message}, raw: ${currentToolInput.substring(0, 100)}`);
                                     currentToolUse.input = {};
                                 }
                                 toolUses.push(currentToolUse);
@@ -2002,10 +2020,10 @@
                         // Server-side auto tool execution events
                         case 'tool_execution_start':
                             console.log(`[${convId}] Server executing tools:`, data.tools?.map(t => t.name));
-                            // Add tools to sidebar in running state
+                            // Add tools to sidebar in running state (now includes input from server)
                             if (currentConversationId === convId && data.tools) {
                                 for (const tool of data.tools) {
-                                    addToolExecution({ id: tool.id, name: tool.name, input: {} });
+                                    addToolExecution({ id: tool.id, name: tool.name, input: tool.input || {} });
                                 }
                             }
                             break;
@@ -2015,15 +2033,32 @@
                             break;
 
                         case 'tool_result':
-                            console.log(`[${convId}] Tool result: ${data.name}`);
+                            // Backend sends: tool_use_id, tool_name, result
+                            console.log(`[${convId}] Tool result: ${data.tool_name}`);
                             // Update sidebar with result
                             if (currentConversationId === convId) {
-                                updateToolExecution(data.id, data.result);
+                                updateToolExecution(data.tool_use_id, data.result);
+                            }
+                            // Store result in toolUses array for chat display
+                            const matchingTool = toolUses.find(tu => tu.id === data.tool_use_id);
+                            if (matchingTool) {
+                                matchingTool.result = data.result;
                             }
                             break;
 
                         case 'tool_execution_complete':
                             console.log(`[${convId}] All ${data.count} tools executed on server`);
+                            // Tool details are shown in the inline panel, no need to embed in chat
+                            break;
+
+                        case 'context_compact':
+                            // Claude Code 风格：context 接近限制时自动 compact
+                            console.log(`[${convId}] Context compacted: ${data.reason}`);
+                            // 可选：显示通知给用户
+                            if (currentConversationId === convId) {
+                                updateStatus('ready');  // Brief status update
+                                console.log('Context window approaching limit, conversation compacted to continue');
+                            }
                             break;
 
                         case 'error':
@@ -2087,21 +2122,29 @@
             document.getElementById('tool-panel').classList.toggle('collapsed');
         }
 
-        // Show the floating tool panel (disabled - using right sidebar instead)
+        // Right sidebar tool panel is disabled - using inline panel instead
         function showToolPanel() {
-            // Floating panel disabled - we now use the right sidebar
-            // document.getElementById('tool-panel').classList.add('visible');
+            // No-op: tool details now shown in inline panel
         }
 
-        // Hide the floating tool panel
+        function collapseToolPanel() {
+            // No-op: tool details now shown in inline panel
+        }
+
         function hideToolPanel() {
-            const panel = document.getElementById('tool-panel');
-            if (panel) {
-                panel.classList.remove('visible');
-            }
-            // Clear tracking state when panel is hidden
+            // No-op: tool details now shown in inline panel
             toolPanelRenderedIds.clear();
             toolPanelLastStatus = {};
+        }
+
+        // Auto-scroll tool panel list to bottom
+        function scrollToolPanelToBottom() {
+            const listEl = document.getElementById('tool-panel-list');
+            if (listEl) {
+                setTimeout(() => {
+                    listEl.scrollTop = listEl.scrollHeight;
+                }, 50);
+            }
         }
 
         // Track hide timeout
@@ -2166,21 +2209,10 @@
             `;
         }
 
-        // Update the floating tool panel with current tool uses
+        // Update the floating tool panel - disabled, using inline panel instead
         function updateToolPanel(toolUses) {
-            if (!toolUses || toolUses.length === 0) {
-                return; // Don't hide immediately, let auto-hide handle it
-            }
-
-            // Cancel any pending hide
-            if (toolPanelHideTimer) {
-                clearTimeout(toolPanelHideTimer);
-                toolPanelHideTimer = null;
-            }
-
-            currentToolUses = toolUses;
-            toolPanelUpdateId++;
-            const currentUpdateId = toolPanelUpdateId;
+            // No-op: tool details now shown in inline panel
+            return;
 
             const statusEl = document.getElementById('tool-panel-status');
             const listEl = document.getElementById('tool-panel-list');
@@ -2191,9 +2223,9 @@
 
             // Update status text
             if (allComplete) {
-                statusEl.textContent = `✓ ${completedCount} 个工具已完成`;
+                statusEl.textContent = `✓ ${completedCount} tools completed`;
             } else {
-                statusEl.textContent = `正在执行 ${runningCount} 个工具...`;
+                statusEl.textContent = `Running ${runningCount} tool${runningCount > 1 ? 's' : ''}...`;
             }
 
             // Collect current tool IDs
@@ -2226,11 +2258,15 @@
                     listEl.insertAdjacentHTML('beforeend', itemHTML);
                     toolPanelRenderedIds.add(toolId);
                     toolPanelLastStatus[toolId] = currentStatus;
+                    // Auto-scroll to show new item
+                    scrollToolPanelToBottom();
                 } else if (toolPanelLastStatus[toolId] !== currentStatus) {
                     // Status changed - update this item only
                     const itemHTML = createToolItemHTML(tu, toolId);
                     existingItem.outerHTML = itemHTML;
                     toolPanelLastStatus[toolId] = currentStatus;
+                    // Also scroll on status change
+                    scrollToolPanelToBottom();
                 }
                 // If status unchanged, do nothing (avoid flicker)
             }
@@ -2245,19 +2281,173 @@
                 }
             }
 
+            // Show panel (expanded) when tools are running
             showToolPanel();
 
-            // Auto-hide after completion (with delay)
+            // Auto-collapse (not hide) after completion - keep panel visible but minimized
             if (allComplete) {
                 toolPanelHideTimer = setTimeout(() => {
                     if (toolPanelUpdateId === currentUpdateId) {
-                        hideToolPanel();
-                        // Clear tracking when panel hides
-                        toolPanelRenderedIds.clear();
-                        toolPanelLastStatus = {};
+                        // Collapse instead of hide - user can still see the summary
+                        collapseToolPanel();
                     }
-                }, 2000);
+                }, 1500);
             }
+        }
+
+        // ==================== Inline Chat Tool Panel ====================
+        // This panel is embedded in the chat content area, showing tool execution status
+        // as part of the conversation flow
+
+        let inlinePanelRenderedIds = new Set();
+        let inlinePanelLastStatus = {};
+
+        // Create or update the inline tool panel in chat area
+        function updateInlineChatToolPanel(toolUses) {
+            if (!toolUses || toolUses.length === 0) return;
+
+            const chatContent = document.getElementById('chat-content');
+            if (!chatContent) return;
+
+            // Find or create the inline panel
+            let panel = document.getElementById('inline-chat-tool-panel');
+            if (!panel) {
+                panel = document.createElement('div');
+                panel.id = 'inline-chat-tool-panel';
+                panel.className = 'inline-chat-tool-panel';
+                panel.innerHTML = `
+                    <div class="inline-panel-header" onclick="toggleInlineChatToolPanel()">
+                        <svg class="inline-panel-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
+                        </svg>
+                        <span class="inline-panel-status">Running tools...</span>
+                        <svg class="inline-panel-toggle" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                        </svg>
+                    </div>
+                    <div class="inline-panel-list"></div>
+                `;
+                chatContent.appendChild(panel);
+                // Reset tracking
+                inlinePanelRenderedIds.clear();
+                inlinePanelLastStatus = {};
+            }
+
+            const statusEl = panel.querySelector('.inline-panel-status');
+            const listEl = panel.querySelector('.inline-panel-list');
+
+            const allComplete = toolUses.every(t => t.result);
+            const completedCount = toolUses.filter(t => t.result).length;
+            const runningCount = toolUses.length - completedCount;
+
+            // Update status text
+            if (allComplete) {
+                statusEl.textContent = `✓ ${completedCount} tools completed`;
+            } else {
+                statusEl.textContent = `Running ${runningCount} tool${runningCount > 1 ? 's' : ''}...`;
+            }
+
+            // Update items
+            for (const tu of toolUses) {
+                const toolId = tu.id || 'tool_' + Math.random().toString(36).substr(2, 9);
+
+                // Track start time
+                if (!tu.result && !toolStartTimes[toolId]) {
+                    toolStartTimes[toolId] = Date.now();
+                }
+                if (tu.result && toolStartTimes[toolId]) {
+                    delete toolStartTimes[toolId];
+                }
+
+                // Store for detail view
+                toolDataStore[toolId] = tu;
+
+                const currentStatus = getToolStatusKey(tu);
+                const existingItem = listEl.querySelector(`[data-tool-id="${toolId}"]`);
+
+                if (!existingItem) {
+                    const itemHTML = createInlinePanelItemHTML(tu, toolId);
+                    listEl.insertAdjacentHTML('beforeend', itemHTML);
+                    inlinePanelRenderedIds.add(toolId);
+                    inlinePanelLastStatus[toolId] = currentStatus;
+                    // Auto-scroll
+                    setTimeout(() => { listEl.scrollTop = listEl.scrollHeight; }, 50);
+                } else if (inlinePanelLastStatus[toolId] !== currentStatus) {
+                    const itemHTML = createInlinePanelItemHTML(tu, toolId);
+                    existingItem.outerHTML = itemHTML;
+                    inlinePanelLastStatus[toolId] = currentStatus;
+                    setTimeout(() => { listEl.scrollTop = listEl.scrollHeight; }, 50);
+                }
+            }
+
+            // Scroll chat container to bottom to show the panel
+            scrollToBottom();
+        }
+
+        // Create HTML for inline panel item
+        function createInlinePanelItemHTML(tu, toolId) {
+            let statusClass = '';
+            let statusIcon;
+            if (tu.result?.error) {
+                statusClass = 'error';
+                statusIcon = `<svg class="item-status-icon error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+                </svg>`;
+            } else if (tu.result) {
+                statusClass = 'complete';
+                statusIcon = `<svg class="item-status-icon success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                </svg>`;
+            } else {
+                statusClass = 'running';
+                statusIcon = `<svg class="item-status-icon running" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                </svg>`;
+            }
+
+            const paramsStr = JSON.stringify(tu.input || {});
+            const truncatedParams = paramsStr.length > 60 ? paramsStr.substring(0, 60) + '...' : paramsStr;
+
+            let elapsedTime = '';
+            if (!tu.result && toolStartTimes[toolId]) {
+                const elapsed = Math.floor((Date.now() - toolStartTimes[toolId]) / 1000);
+                elapsedTime = elapsed >= 60 ? `${Math.floor(elapsed/60)}m ${elapsed%60}s` : `${elapsed}s`;
+            }
+
+            return `
+                <div class="inline-panel-item ${statusClass}" data-tool-id="${toolId}" onclick="showToolDetail('${toolId}')">
+                    ${statusIcon}
+                    <span class="item-name">${tu.name}</span>
+                    ${elapsedTime ? `<span class="item-elapsed">${elapsedTime}</span>` : ''}
+                    <span class="item-params">${truncatedParams}</span>
+                </div>
+            `;
+        }
+
+        // Toggle inline panel collapsed state
+        function toggleInlineChatToolPanel() {
+            const panel = document.getElementById('inline-chat-tool-panel');
+            if (panel) {
+                panel.classList.toggle('collapsed');
+            }
+        }
+
+        // Collapse inline panel after completion
+        function collapseInlineChatToolPanel() {
+            setTimeout(() => {
+                const panel = document.getElementById('inline-chat-tool-panel');
+                if (panel) {
+                    panel.classList.add('collapsed');
+                }
+            }, 1500);
+        }
+
+        // Remove inline panel (for new conversation)
+        function removeInlineChatToolPanel() {
+            const panel = document.getElementById('inline-chat-tool-panel');
+            if (panel) panel.remove();
+            inlinePanelRenderedIds.clear();
+            inlinePanelLastStatus = {};
         }
 
         // Show tool detail modal
@@ -2315,6 +2505,101 @@
             // This is kept for compatibility but the container version is preferred
             toolUse.result = result;
             return ''; // Return empty, container handles rendering
+        }
+
+        // Format tool calls for display in chat messages (fixed height, scrollable)
+        function formatToolCallsForChat(toolUses) {
+            if (!toolUses || toolUses.length === 0) return '';
+
+            const toolsHtml = toolUses.map(tu => {
+                const hasResult = tu.result !== undefined && tu.result !== null;
+                const hasError = tu.result?.error;
+
+                // Status indicator
+                let statusHtml;
+                if (hasError) {
+                    statusHtml = '<span class="tool-status error">✗ Error</span>';
+                } else if (hasResult) {
+                    statusHtml = '<span class="tool-status success">✓ Done</span>';
+                } else {
+                    statusHtml = '<span class="tool-status running">⟳ Running</span>';
+                }
+
+                // Format input
+                let inputStr = '';
+                if (tu.input) {
+                    try {
+                        inputStr = JSON.stringify(tu.input, null, 2);
+                    } catch {
+                        inputStr = String(tu.input);
+                    }
+                }
+
+                // Format output (truncate if too long)
+                let outputStr = '';
+                if (hasResult) {
+                    try {
+                        const resultData = hasError ? tu.result.error : tu.result;
+                        if (typeof resultData === 'string') {
+                            outputStr = resultData;
+                        } else {
+                            outputStr = JSON.stringify(resultData, null, 2);
+                        }
+                        // Truncate very long outputs
+                        if (outputStr.length > 2000) {
+                            outputStr = outputStr.substring(0, 2000) + '\n... (truncated)';
+                        }
+                    } catch {
+                        outputStr = String(tu.result);
+                    }
+                }
+
+                return `
+                    <div class="chat-tool-item ${hasError ? 'error' : hasResult ? 'success' : 'running'}">
+                        <div class="chat-tool-header">
+                            <span class="chat-tool-name">${tu.name}</span>
+                            ${statusHtml}
+                        </div>
+                        <div class="chat-tool-body">
+                            <div class="chat-tool-section">
+                                <div class="chat-tool-label">Input</div>
+                                <pre class="chat-tool-code">${escapeHtml(inputStr)}</pre>
+                            </div>
+                            ${hasResult ? `
+                            <div class="chat-tool-section">
+                                <div class="chat-tool-label">${hasError ? 'Error' : 'Output'}</div>
+                                <pre class="chat-tool-code ${hasError ? 'error' : ''}">${escapeHtml(outputStr)}</pre>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Use marker comment for reliable splitting in formatContent
+            return `
+                <div class="chat-tool-container">
+                    <div class="chat-tool-header-bar">
+                        <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+                        </svg>
+                        <span>${toolUses.length} Tool${toolUses.length > 1 ? 's' : ''} Executed</span>
+                    </div>
+                    <div class="chat-tool-list">
+                        ${toolsHtml}
+                    </div>
+                </div><!-- END_TOOL_CONTAINER -->`;
+        }
+
+        // Helper to escape HTML
+        function escapeHtml(str) {
+            if (!str) return '';
+            return str
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
         }
 
         // Send message with tool support
@@ -2795,7 +3080,8 @@ Be concise and helpful in your responses.` : '';
                     system: systemPrompt,  // System prompt to guide behavior
                     messages: apiMessages,
                     tools: tools,  // Include tools so model can use them
-                    stream: true  // Enable streaming
+                    stream: true,  // Enable streaming
+                    compact_model: settings.compactModel || 'claude-haiku-4-5-20251001'  // Model for context compaction
                 };
                 console.log(`[${convId}] Request body (streaming):`, JSON.stringify(requestBody).substring(0, 200));
 
@@ -2859,14 +3145,29 @@ Be concise and helpful in your responses.` : '';
 
                 if (toolUses.length > 0) {
                     console.log(`[${convId}] Tool uses:`, toolUses.map(t => t.name));
+                    const withResults = toolUses.filter(t => t.result !== undefined);
+                    console.log(`[${convId}] Tools with results: ${withResults.length}/${toolUses.length}`);
                 }
+                console.log(`[${convId}] Final textContent length: ${textContent.length}`);
 
                 // Final UI update
                 const stillViewing = currentConversationId === convId;
                 if (stillViewing && toolUses.length > 0) {
                     updateToolPanel(toolUses);
                 }
+                // Clear any pending debounced updates to prevent them from overwriting the final content
+                if (streamingUIDebounce.timers[convId]) {
+                    clearTimeout(streamingUIDebounce.timers[convId]);
+                    delete streamingUIDebounce.timers[convId];
+                }
+                delete streamingUIDebounce.pending[convId];
                 updateAssistantMessage(convId, textContent, toolUses, true);
+                console.log(`[${convId}] Called updateAssistantMessage with isFinal=true`);
+
+                // Collapse inline panel after stream ends
+                if (stillViewing) {
+                    collapseInlineChatToolPanel();
+                }
 
                 // Execute tools if any were detected
                 // When AUTO_TOOL_EXECUTION is enabled, tools are already executed on server
@@ -2932,6 +3233,18 @@ Be concise and helpful in your responses.` : '';
                     if (toolUpdateInterval) {
                         clearInterval(toolUpdateInterval);
                         toolUpdateInterval = null;
+                    }
+
+                    // Update chat display with tool results (non-AUTO mode)
+                    const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
+                    if (toolsWithResults.length > 0 && currentConversationId === convId) {
+                        const toolHtml = formatToolCallsForChat(toolsWithResults);
+                        const displayContent = toolHtml + (textContent ? '\n\n' + textContent : '');
+                        const lastMsg = messages[messages.length - 1];
+                        if (lastMsg && lastMsg.role === 'assistant') {
+                            lastMsg.displayContent = displayContent;
+                            updateLastMessageContent(displayContent);
+                        }
                     }
 
                     // Add tool results as user message and continue
@@ -3083,13 +3396,22 @@ Be concise and helpful in your responses.` : '';
 
             let displayContent = text || '';
 
+            // Tool details are shown in the inline panel, so we don't embed them in chat
+            // Just ensure there's some text if tools completed without a response
+            if (isFinal && toolUses && toolUses.length > 0) {
+                const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
+                if (toolsWithResults.length > 0 && !displayContent) {
+                    // If no text response but tools completed, add a brief indicator
+                    displayContent = `✓ Task completed with ${toolsWithResults.length} tool${toolsWithResults.length > 1 ? 's' : ''} executed.`;
+                }
+            }
 
-            // Show/hide tool panel based on state (only if viewing)
-            if (isViewing) {
-                if (toolUses && toolUses.length > 0) {
-                    updateToolPanel(toolUses);
-                } else if (isFinal) {
-                    hideToolPanel();
+            // Show/update inline tool panel in chat area (only if viewing)
+            if (isViewing && toolUses && toolUses.length > 0) {
+                updateInlineChatToolPanel(toolUses);
+                if (isFinal) {
+                    console.log('[Inline Panel] isFinal=true, collapsing panel');
+                    collapseInlineChatToolPanel();
                 }
             }
 
@@ -3119,26 +3441,33 @@ Be concise and helpful in your responses.` : '';
             const lastMsg = messages[messages.length - 1];
 
             if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.isThinking) {
+                // Update existing assistant message
                 lastMsg.displayContent = displayContent;
                 if (apiContent || toolUses.length > 0) {
                     lastMsg.content = apiContent;
                     lastMsg.hasToolUse = toolUses.length > 0;
                 }
-                // Only update UI if there's actual text content to display
-                // Skip update for tool_use-only messages to avoid UI flicker
-                if (isViewing && displayContent) {
-                    updateLastMessageContent(displayContent);
+                // Update UI - always update when isFinal to show final result
+                if (isViewing && (displayContent || isFinal)) {
+                    updateLastMessageContent(displayContent || '');
                 }
             } else if (text || toolUses.length > 0 || isFinal) {
+                // Remove thinking indicator if present (it has isThinking=true)
+                const thinkingIdx = messages.findIndex(m => m.isThinking);
+                if (thinkingIdx >= 0) {
+                    messages.splice(thinkingIdx, 1);
+                }
+
+                // Push new assistant message
                 messages.push({
                     role: 'assistant',
                     content: apiContent || text || '',
                     displayContent: displayContent,
                     hasToolUse: toolUses.length > 0
                 });
-                // Only render UI if there's actual text content to display
-                // Skip rendering for tool_use-only messages to avoid UI flicker
-                if (isViewing && (text || (!toolUses.length && isFinal))) {
+
+                // ALWAYS render to create the DOM element when pushing new message
+                if (isViewing) {
                     renderMessages();
                 }
             }
@@ -3147,9 +3476,13 @@ Be concise and helpful in your responses.` : '';
         // Update only the last message content without re-rendering everything
         function updateLastMessageContent(displayContent) {
             const chatContent = document.querySelector('.chat-content');
-            const lastMessageEl = chatContent?.querySelector('.message:last-child .message-content');
+            // Find the last .message element (not :last-child, because inline panel may be after it)
+            const messages = chatContent?.querySelectorAll('.message');
+            const lastMessage = messages?.[messages.length - 1];
+            const lastMessageEl = lastMessage?.querySelector('.message-content');
             if (lastMessageEl) {
-                lastMessageEl.innerHTML = sanitizeHTML(marked.parse(displayContent || ''));
+                // Use formatContent to preserve tool HTML while parsing markdown
+                lastMessageEl.innerHTML = formatContent(displayContent);
                 // Re-apply code highlighting
                 lastMessageEl.querySelectorAll('pre code').forEach(block => {
                     hljs.highlightElement(block);
@@ -3168,6 +3501,8 @@ Be concise and helpful in your responses.` : '';
                         pre.appendChild(btn);
                     }
                 });
+                // Auto-scroll to bottom as content updates
+                scrollToBottom();
             }
         }
 
@@ -3324,15 +3659,12 @@ Be concise and helpful in your responses.` : '';
         // Settings
         function openSettings() {
             document.getElementById('settings-modal').classList.add('active');
-            document.getElementById('settings-model').value = settings.model || 'claude-sonnet-4-20250514';
+            document.getElementById('settings-model').value = settings.model || 'claude-sonnet-4-5-20250929';
             document.getElementById('settings-max-tokens').value = settings.maxTokens || 16384;
             document.getElementById('settings-temperature').value = settings.temperature || 0.7;
             document.getElementById('temp-value').textContent = settings.temperature || 0.7;
-            // Load search settings
-            document.getElementById('settings-search-engine').value = settings.searchEngine || 'brave';
-            document.getElementById('settings-search-api-key').value = settings.searchApiKey || '';
-            document.getElementById('settings-custom-search-url').value = settings.customSearchUrl || '';
-            toggleSearchApiKey();
+            // Compact model setting (default to Haiku 4.5)
+            document.getElementById('settings-compact-model').value = settings.compactModel || 'claude-haiku-4-5-20251001';
             // Load AWS credentials settings
             loadAwsSettings();
             // Load Skills and MCP servers lists
@@ -3345,26 +3677,46 @@ Be concise and helpful in your responses.` : '';
             settings.model = document.getElementById('settings-model').value;
             settings.maxTokens = document.getElementById('settings-max-tokens').value;
             settings.temperature = document.getElementById('settings-temperature').value;
-            // Save search settings
-            settings.searchEngine = document.getElementById('settings-search-engine').value;
-            settings.searchApiKey = document.getElementById('settings-search-api-key').value;
-            settings.customSearchUrl = document.getElementById('settings-custom-search-url').value;
+            settings.compactModel = document.getElementById('settings-compact-model').value;
             localStorage.setItem('settings', JSON.stringify(settings));
             document.getElementById('model-select').value = settings.model;
-            // Sync search config to backend
-            syncSearchConfig();
             // Save AWS credentials
             saveAwsSettings();
         }
 
         function loadSettings() {
+            // Migrate old model settings to 4.5 defaults
+            migrateSettings();
+
             if (settings.model) {
                 document.getElementById('model-select').value = settings.model;
             }
             // Always use light theme by default
             setTheme('light');
-            // Sync search config on load
-            syncSearchConfig();
+        }
+
+        function migrateSettings() {
+            let needsSave = false;
+
+            // Migrate compact model: 3.5 Haiku -> 4.5 Haiku
+            if (settings.compactModel === 'claude-3-5-haiku-20241022' ||
+                settings.compactModel === 'claude-3-haiku-20240307') {
+                settings.compactModel = 'claude-haiku-4-5-20251001';
+                needsSave = true;
+                console.log('[Settings Migration] compactModel upgraded to Haiku 4.5');
+            }
+
+            // Migrate main model: 3.5 Sonnet -> 4.5 Sonnet
+            if (settings.model === 'claude-3-5-sonnet-20241022') {
+                settings.model = 'claude-sonnet-4-5-20250929';
+                needsSave = true;
+                console.log('[Settings Migration] model upgraded to Sonnet 4.5');
+            }
+
+            if (needsSave) {
+                localStorage.setItem('settings', JSON.stringify(settings));
+                console.log('[Settings Migration] Settings saved');
+            }
         }
 
         function saveSettings() {
@@ -3372,129 +3724,56 @@ Be concise and helpful in your responses.` : '';
             localStorage.setItem('settings', JSON.stringify(settings));
         }
 
-        function toggleSearchApiKey() {
-            const engine = document.getElementById('settings-search-engine').value;
-            const apiKeyGroup = document.getElementById('search-api-key-group');
-            const customGroup = document.getElementById('custom-search-group');
-            const hint = document.getElementById('search-api-hint');
-
-            if (engine === 'brave') {
-                apiKeyGroup.style.display = 'block';
-                customGroup.style.display = 'none';
-                hint.textContent = 'Get your API key from brave.com/search/api';
-            } else if (engine === 'tavily') {
-                apiKeyGroup.style.display = 'block';
-                customGroup.style.display = 'none';
-                hint.textContent = 'Get your API key from tavily.com';
-            } else if (engine === 'custom') {
-                apiKeyGroup.style.display = 'block';
-                customGroup.style.display = 'block';
-                hint.textContent = 'API key for authentication (optional)';
-            }
-        }
-
-        async function syncSearchConfig() {
-            try {
-                await fetch(`${BASE_URL}/v1/config/search`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        engine: settings.searchEngine || 'brave',
-                        apiKey: settings.searchApiKey || '',
-                        customUrl: settings.customSearchUrl || ''
-                    })
-                });
-            } catch (e) {
-                console.log('Failed to sync search config:', e);
-            }
-        }
-
         // ==================== AWS Credentials Management ====================
         async function loadAwsSettings() {
             try {
                 const res = await fetch(`${BASE_URL}/v1/config/aws`);
                 const data = await res.json();
+                const statusEl = document.getElementById('aws-connection-status');
 
-                // Set auth method
-                const method = data.method || 'env_file';
-                document.getElementById('settings-aws-auth-method').value = method;
-                toggleAwsCredentials();
-
-                // Set credentials if using env_file
-                if (data.access_key_id) {
-                    document.getElementById('settings-aws-access-key').value = data.access_key_id;
-                }
-
-                // Load profiles if using aws_profile
-                if (method === 'aws_profile' && data.profiles) {
-                    const select = document.getElementById('settings-aws-profile');
-                    select.innerHTML = '';
-                    data.profiles.forEach(p => {
-                        const opt = document.createElement('option');
-                        opt.value = p.name;
-                        opt.textContent = p.name + (p.region ? ` [${p.region}]` : '');
-                        select.appendChild(opt);
-                    });
-                    if (data.profile_name) {
-                        select.value = data.profile_name;
-                    }
-                }
-
-                // Check env vars status if using env_vars
-                if (method === 'env_vars') {
-                    const statusEl = document.getElementById('aws-env-status');
-                    if (data.env_vars_set) {
-                        const hasKey = data.env_vars_set.AWS_ACCESS_KEY_ID;
-                        const hasSecret = data.env_vars_set.AWS_SECRET_ACCESS_KEY;
-                        if (hasKey && hasSecret) {
-                            statusEl.innerHTML = '<span style="color: #22c55e;">✓ Environment variables are set</span>';
-                        } else {
-                            const missing = [];
-                            if (!hasKey) missing.push('AWS_ACCESS_KEY_ID');
-                            if (!hasSecret) missing.push('AWS_SECRET_ACCESS_KEY');
-                            statusEl.innerHTML = `<span style="color: #ef4444;">✗ Missing: ${missing.join(', ')}</span>`;
-                        }
-                    }
-                }
-
-                // Show connection status
                 if (data.connected) {
-                    document.getElementById('aws-connection-status').innerHTML =
-                        '<span style="color: #22c55e;">✓ Connected</span>';
+                    // Show connection status with source
+                    let source = '';
+                    if (data.method === 'aws_profile') {
+                        source = `via ~/.aws/credentials`;
+                    } else if (data.method === 'env_vars') {
+                        source = `via env vars`;
+                    } else if (data.method === 'env_file') {
+                        source = `via ~/.springo/.env`;
+                    }
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ Connected (${data.identity?.account || ''}) ${source}</span>`;
+                } else {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not connected</span>';
                 }
             } catch (e) {
                 console.log('Failed to load AWS settings:', e);
+                document.getElementById('aws-connection-status').innerHTML = '';
             }
         }
 
         async function saveAwsSettings() {
-            const method = document.getElementById('settings-aws-auth-method').value;
-            const config = { method, region: 'us-east-1' };  // Fixed region for Cross-Region Inference
+            const accessKey = document.getElementById('settings-aws-access-key').value;
+            const secretKey = document.getElementById('settings-aws-secret-key').value;
 
-            if (method === 'env_file') {
-                config.access_key_id = document.getElementById('settings-aws-access-key').value;
-                config.secret_access_key = document.getElementById('settings-aws-secret-key').value;
-            } else if (method === 'aws_profile') {
-                config.profile_name = document.getElementById('settings-aws-profile').value;
+            // Only save if user entered credentials
+            if (!accessKey || !secretKey) {
+                return;
             }
-            // env_vars doesn't need any additional config
 
             try {
                 await fetch(`${BASE_URL}/v1/config/aws`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(config)
+                    body: JSON.stringify({
+                        method: 'env_file',
+                        access_key_id: accessKey,
+                        secret_access_key: secretKey,
+                        region: 'us-east-1'
+                    })
                 });
             } catch (e) {
                 console.log('Failed to save AWS settings:', e);
             }
-        }
-
-        function toggleAwsCredentials() {
-            const method = document.getElementById('settings-aws-auth-method').value;
-            document.getElementById('aws-env-file-group').style.display = method === 'env_file' ? 'block' : 'none';
-            document.getElementById('aws-profile-group').style.display = method === 'aws_profile' ? 'block' : 'none';
-            document.getElementById('aws-env-vars-group').style.display = method === 'env_vars' ? 'block' : 'none';
         }
 
         async function testAwsConnection() {
@@ -3505,7 +3784,7 @@ Be concise and helpful in your responses.` : '';
             btn.textContent = 'Testing...';
             statusEl.innerHTML = '';
 
-            // Save settings first
+            // Save settings first if user entered credentials
             await saveAwsSettings();
 
             try {
@@ -3514,6 +3793,8 @@ Be concise and helpful in your responses.` : '';
 
                 if (data.valid) {
                     statusEl.innerHTML = `<span style="color: #22c55e;">✓ Connected (${data.account})</span>`;
+                    // Reload to show auto-detected state
+                    loadAwsSettings();
                 } else {
                     statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
                 }
@@ -3734,15 +4015,20 @@ Be concise and helpful in your responses.` : '';
         // ========== Right Sidebar (Tool Execution) Functions ==========
 
         function toggleRightSidebar() {
-            const sidebar = document.getElementById('right-sidebar');
-            rightSidebarOpen = !rightSidebarOpen;
-            sidebar.classList.toggle('open', rightSidebarOpen);
+            // Right sidebar removed - no-op
         }
 
         function openRightSidebar() {
-            if (!rightSidebarOpen) {
-                rightSidebarOpen = true;
-                document.getElementById('right-sidebar').classList.add('open');
+            // Right sidebar removed - no-op
+        }
+
+        function scrollToolExecutionToBottom() {
+            const container = document.getElementById('tool-execution-list');
+            if (container) {
+                // Use setTimeout to ensure DOM has updated
+                setTimeout(() => {
+                    container.scrollTop = container.scrollHeight;
+                }, 50);
             }
         }
 
@@ -3761,8 +4047,8 @@ Be concise and helpful in your responses.` : '';
             setToolExecutions(executions);
             renderToolExecutionSidebar();
             updateToolsBadge(true);
-            // Don't auto-open sidebar - user can click the tool button to open manually
-            // openRightSidebar();
+            // Auto-scroll to bottom to show latest tool execution
+            scrollToolExecutionToBottom();
             return execution;
         }
 
@@ -3841,6 +4127,8 @@ Be concise and helpful in your responses.` : '';
                     // Fallback to full render if element not found
                     renderToolExecutionSidebar();
                 }
+                // Scroll to show the updated tool
+                scrollToolExecutionToBottom();
             }
             const hasRunning = executions.some(t => t.status === 'running');
             updateToolsBadge(hasRunning);
@@ -3884,6 +4172,7 @@ Be concise and helpful in your responses.` : '';
 
         function renderToolExecutionSidebar() {
             const container = document.getElementById('tool-execution-list');
+            if (!container) return; // Right sidebar removed, skip rendering
             const executions = getToolExecutions();
             if (executions.length === 0) {
                 container.innerHTML = `

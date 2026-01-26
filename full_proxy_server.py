@@ -34,6 +34,7 @@ from ui.routes import config_bp
 
 # MCP 工具模块
 from mcp_tools import get_tool_definitions, execute_tool, set_working_dir, get_working_dir
+from mcp_tools.session import consume_active_skill
 # NOTE: set_search_config, get_search_config removed - use MCP web-search server instead
 
 # 上下文管理模块
@@ -131,6 +132,18 @@ def get_bedrock_client():
 
 # Default system prompt with tool usage guidelines
 DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
+
+## CRITICAL: Always Use Absolute Paths
+
+**For ALL tool calls that accept file or directory paths, you MUST use absolute paths.**
+
+- ✓ Correct: `/Users/name/project/file.txt`
+- ✓ Correct: `~/.springo/skills/pptx/script.py` (~ expands to home directory)
+- ✗ Wrong: `file.txt` (relative path)
+- ✗ Wrong: `./project/file.txt` (relative path)
+- ✗ Wrong: `workspace/file.txt` (relative path)
+
+The working directory will be provided below. Use it to construct absolute paths.
 
 ## Tool Selection Guidelines
 
@@ -437,13 +450,17 @@ def messages_auto_api():
     try:
         anthropic_request = request.get_json()
         is_streaming = anthropic_request.get("stream", False)
-        max_tool_iterations = anthropic_request.pop("max_tool_iterations", 10)
+        # Claude Code 风格：基于 context 窗口，而非固定迭代次数
+        # 1000 仅作为安全上限，正常情况下由 context compact 控制
+        max_tool_iterations = anthropic_request.pop("max_tool_iterations", 1000)
+        # Context compact 使用的模型 (默认 Haiku 4.5，更快更便宜)
+        compact_model = anthropic_request.pop("compact_model", "claude-haiku-4-5-20251001")
 
-        logger.info(f"Messages-Auto API: model={anthropic_request.get('model')}, stream={is_streaming}")
+        logger.info(f"Messages-Auto API: model={anthropic_request.get('model')}, stream={is_streaming}, compact_model={compact_model}")
 
         if is_streaming:
             return Response(
-                stream_with_context(handle_auto_streaming(anthropic_request, max_tool_iterations)),
+                stream_with_context(handle_auto_streaming(anthropic_request, max_tool_iterations, compact_model)),
                 mimetype='text/event-stream',
                 headers={
                     'Cache-Control': 'no-cache',
@@ -462,13 +479,19 @@ def messages_auto_api():
         return Response(json.dumps(error_response), status=http_status, mimetype='application/json')
 
 
-def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 10) -> Generator:
-    """处理流式响应并自动执行工具"""
+def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 1000, compact_model: str = "claude-haiku-4-5-20251001") -> Generator:
+    """处理流式响应并自动执行工具
+
+    Claude Code 风格：不限制迭代次数，基于 context 窗口自动 compact
+    max_iterations 仅作为安全上限，正常情况下不会触发
+    compact_model: 用于 context 压缩的模型 (默认 Haiku 4.5，更快更便宜)
+    """
     from mcp_tools import execute_tool
 
     bedrock_client = get_bedrock_client()
+    ctx_manager = get_context_manager()
     original_model = anthropic_request.get("model", "claude-3-5-sonnet-20241022")
-    messages = anthropic_request.get("messages", [])
+    messages = list(anthropic_request.get("messages", []))  # Make a copy
     tools = anthropic_request.get("tools", [])
     system = anthropic_request.get("system", "")
 
@@ -476,6 +499,33 @@ def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 10) -> 
 
     while iteration < max_iterations:
         iteration += 1
+
+        # Claude Code style: inject active skill into system prompt
+        active_skill = consume_active_skill()
+        if active_skill:
+            skill_injection = f"""
+
+<skill name="{active_skill['name']}">
+{active_skill['instructions']}
+</skill>
+
+IMPORTANT: You have activated the '{active_skill['name']}' skill.
+Please follow the skill instructions above to complete the user's request.
+User's original request: {active_skill.get('user_request', '(not specified)')}
+"""
+            system = system + skill_injection
+            logger.info(f"Injected skill '{active_skill['name']}' into system prompt")
+            yield f"event: skill_injected\ndata: {json.dumps({'type': 'skill_injected', 'skill_name': active_skill['name']})}\n\n"
+
+        # Context 检查和自动 compact (Claude Code 风格)
+        if ctx_manager.should_summarize(messages):
+            logger.info(f"Context approaching limit, compacting with {compact_model}... (iteration {iteration})")
+            yield f"event: context_compact\ndata: {json.dumps({'type': 'context_compact', 'reason': 'approaching_limit', 'model': compact_model})}\n\n"
+            try:
+                messages = ctx_manager.summarize_messages(messages, model=compact_model)
+                logger.info(f"Context compacted, now {len(messages)} messages")
+            except Exception as e:
+                logger.warning(f"Context compact failed: {e}, continuing anyway")
 
         # 构建请求
         model_id, bedrock_body = convert_anthropic_to_bedrock({
@@ -580,8 +630,9 @@ def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 10) -> 
             # 没有工具调用，完成
             return
 
-        # 执行工具并发送进度更新
-        yield f"event: tool_execution_start\ndata: {json.dumps({'type': 'tool_execution_start', 'tools': [{'id': t['id'], 'name': t['name']} for t in tool_uses]})}\n\n"
+        # 执行工具并发送进度更新 (include input for frontend display)
+        tools_for_event = [{'id': t['id'], 'name': t['name'], 'input': t.get('input', {})} for t in tool_uses]
+        yield f"event: tool_execution_start\ndata: {json.dumps({'type': 'tool_execution_start', 'tools': tools_for_event})}\n\n"
 
         tool_results = []
         for tool_use in tool_uses:
@@ -605,8 +656,8 @@ def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 10) -> 
             except Exception as e:
                 result = {"error": str(e)}
 
-            # 发送工具完成事件
-            yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'id': tool_id, 'name': tool_name, 'result': result})}\n\n"
+            # 发送工具完成事件 (use tool_use_id and tool_name for consistency with api/messages.py)
+            yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': tool_id, 'tool_name': tool_name, 'result': result})}\n\n"
 
             tool_results.append({
                 "type": "tool_result",
@@ -636,7 +687,7 @@ def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 10) -> 
     yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': f'Reached maximum tool iterations ({max_iterations})'}})}\n\n"
 
 
-def handle_auto_nonstreaming(anthropic_request: dict, max_iterations: int = 10) -> dict:
+def handle_auto_nonstreaming(anthropic_request: dict, max_iterations: int = 1000) -> dict:
     """处理非流式响应并自动执行工具"""
     from mcp_tools import execute_tool
 
@@ -651,6 +702,22 @@ def handle_auto_nonstreaming(anthropic_request: dict, max_iterations: int = 10) 
 
     while iteration < max_iterations:
         iteration += 1
+
+        # Claude Code style: inject active skill into system prompt
+        active_skill = consume_active_skill()
+        if active_skill:
+            skill_injection = f"""
+
+<skill name="{active_skill['name']}">
+{active_skill['instructions']}
+</skill>
+
+IMPORTANT: You have activated the '{active_skill['name']}' skill.
+Please follow the skill instructions above to complete the user's request.
+User's original request: {active_skill.get('user_request', '(not specified)')}
+"""
+            system = system + skill_injection
+            logger.info(f"Injected skill '{active_skill['name']}' into system prompt (non-streaming)")
 
         model_id, bedrock_body = convert_anthropic_to_bedrock({
             "model": original_model,
@@ -1198,23 +1265,6 @@ def get_skills_path():
             status=500,
             mimetype='application/json'
         )
-
-
-# ==================== 搜索引擎配置端点 (DEPRECATED) ====================
-# NOTE: Built-in search removed. Use MCP web-search server (brave_web_search) instead.
-# The endpoint is kept for backward compatibility but returns deprecation notice.
-
-@app.route('/v1/config/search', methods=['GET', 'POST'])
-def search_config():
-    """已弃用：搜索引擎配置已移至 MCP 服务器"""
-    return Response(
-        json.dumps({
-            "deprecated": True,
-            "message": "Built-in search removed. Use MCP web-search server (brave_web_search) instead.",
-            "mcp_tools": ["web-search__brave_web_search", "web-search__brave_news_search"]
-        }),
-        mimetype='application/json'
-    )
 
 
 @app.route('/v1/config/aws', methods=['GET', 'POST'])

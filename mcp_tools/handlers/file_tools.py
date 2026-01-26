@@ -50,6 +50,18 @@ def read_file(path: str, encoding: str = "utf-8") -> Dict[str, Any]:
         if size > 1024 * 1024:
             return {"error": f"File too large ({size} bytes). Maximum is 1MB."}
 
+        # Handle base64 encoding request - read as binary and encode
+        if encoding.lower() == "base64":
+            with open(abs_path, 'rb') as f:
+                content = base64.b64encode(f.read()).decode('ascii')
+            return {
+                "content": content,
+                "path": abs_path,
+                "size": size,
+                "encoding": "base64",
+                "is_binary": True
+            }
+
         try:
             with open(abs_path, 'r', encoding=encoding) as f:
                 content = f.read()
@@ -183,7 +195,7 @@ def search_files(path: str = None, pattern: str = "*") -> Dict[str, Any]:
 def get_file_info(path: str) -> Dict[str, Any]:
     """Get file/directory information"""
     try:
-        abs_path = os.path.abspath(os.path.expanduser(path))
+        abs_path = resolve_path(path, default_to_working_dir=True)
 
         if not is_path_allowed(abs_path):
             return {"error": f"Access denied: {path} is outside allowed directories"}
@@ -216,7 +228,7 @@ def get_file_info(path: str) -> Dict[str, Any]:
 def create_directory(path: str) -> Dict[str, Any]:
     """Create directory"""
     try:
-        abs_path = os.path.abspath(os.path.expanduser(path))
+        abs_path = resolve_path(path, default_to_working_dir=True)
 
         if not is_path_allowed_for_write(abs_path):
             return {"error": f"Access denied: {path} is outside allowed write directories"}
@@ -234,8 +246,9 @@ def create_directory(path: str) -> Dict[str, Any]:
 def move_file(source: str, destination: str) -> Dict[str, Any]:
     """Move/rename file or directory"""
     try:
-        src_path = os.path.abspath(os.path.expanduser(source))
-        dst_path = os.path.abspath(os.path.expanduser(destination))
+        # Use resolve_path to properly handle relative paths and ~ expansion
+        src_path = resolve_path(source, default_to_working_dir=True)
+        dst_path = resolve_path(destination, default_to_working_dir=True)
 
         if not is_path_allowed_for_write(src_path):
             return {"error": f"Access denied: {source} is outside allowed write directories"}
@@ -243,7 +256,7 @@ def move_file(source: str, destination: str) -> Dict[str, Any]:
             return {"error": f"Access denied: {destination} is outside allowed write directories"}
 
         if not os.path.exists(src_path):
-            return {"error": f"Source not found: {source}"}
+            return {"error": f"Source not found: {source} (resolved to {src_path})"}
 
         shutil.move(src_path, dst_path)
 
@@ -259,7 +272,7 @@ def move_file(source: str, destination: str) -> Dict[str, Any]:
 def delete_file(path: str) -> Dict[str, Any]:
     """Delete file or empty directory"""
     try:
-        abs_path = os.path.abspath(os.path.expanduser(path))
+        abs_path = resolve_path(path, default_to_working_dir=True)
 
         if not is_path_allowed_for_write(abs_path):
             return {"error": f"Access denied: {path} is outside allowed write directories"}

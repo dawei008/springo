@@ -6,6 +6,7 @@ Playwright-based browser control
 import os
 import base64
 import tempfile
+import threading
 from typing import Any, Dict
 
 # Optional playwright import
@@ -14,6 +15,9 @@ try:
     HAS_PLAYWRIGHT = True
 except ImportError:
     HAS_PLAYWRIGHT = False
+
+# Thread lock for browser operations
+_browser_lock = threading.Lock()
 
 
 class BrowserManager:
@@ -236,4 +240,11 @@ def browser(action: str, **kwargs) -> Dict[str, Any]:
     if action not in handlers:
         return {"error": f"Unknown browser action: {action}. Valid actions: {', '.join(handlers.keys())}"}
 
-    return handlers[action]()
+    # Use thread lock to prevent concurrent access issues
+    with _browser_lock:
+        try:
+            return handlers[action]()
+        except Exception as e:
+            # Reset browser on error to allow retry
+            BrowserManager.get_instance().close()
+            return {"error": f"Browser operation failed: {str(e)}"}

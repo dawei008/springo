@@ -20,10 +20,12 @@ def resolve_path(path: str = None, default_to_working_dir: bool = True) -> str:
     """Resolve path, using working directory as default if set"""
     working_dir = get_working_dir()
     if path:
+        # First expand ~ to handle home directory paths
+        expanded_path = os.path.expanduser(path)
         # If path is relative and working dir is set, resolve relative to working dir
-        if not os.path.isabs(path) and working_dir:
-            return os.path.abspath(os.path.join(working_dir, path))
-        return os.path.abspath(os.path.expanduser(path))
+        if not os.path.isabs(expanded_path) and working_dir:
+            return os.path.abspath(os.path.join(working_dir, expanded_path))
+        return os.path.abspath(expanded_path)
     elif default_to_working_dir and working_dir:
         return working_dir
     else:
