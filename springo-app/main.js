@@ -45,11 +45,9 @@ process.stderr?.on?.('error', (err) => {
 // Disable Electron's default error dialog for EPIPE
 // This will be set after app is ready
 
-// Enable remote debugging for Playwright testing (configurable via env)
-const DEBUG_PORT = process.env.ELECTRON_DEBUG_PORT || (process.env.NODE_ENV === 'development' ? '9222' : null);
-if (DEBUG_PORT) {
-    app.commandLine.appendSwitch('remote-debugging-port', DEBUG_PORT);
-}
+// Enable remote debugging for Playwright testing (always enabled for E2E testing)
+const DEBUG_PORT = process.env.ELECTRON_DEBUG_PORT || '9222';
+app.commandLine.appendSwitch('remote-debugging-port', DEBUG_PORT);
 
 let mainWindow;
 let serverProcess = null;

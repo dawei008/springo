@@ -76,9 +76,6 @@
             settings = {};
             localStorage.removeItem('settings');
         }
-        let toolExecutionsPerConv = {}; // Track tool executions per conversation
-        let rightSidebarOpen = true; // Sidebar is visible by default
-
         // OPTIMIZATION: Server-side auto tool execution (eliminates frontend round-trips)
         // When enabled, tools are executed on the server, saving ~1-3 seconds per tool
         const AUTO_TOOL_EXECUTION = true;
@@ -115,18 +112,6 @@
                     delete streamingUIDebounce.timers[convId];
                 }, streamingUIDebounce.DELAY_MS);
             }
-        }
-
-        // Get tool executions for current conversation
-        function getToolExecutions() {
-            if (!currentConversationId) return [];
-            return toolExecutionsPerConv[currentConversationId] || [];
-        }
-
-        // Set tool executions for current conversation
-        function setToolExecutions(executions) {
-            if (!currentConversationId) return;
-            toolExecutionsPerConv[currentConversationId] = executions;
         }
 
         // Per-conversation runtime state (not persisted to localStorage)
@@ -2114,45 +2099,6 @@
         // Store tool data for detail modal
         let toolDataStore = {};
 
-        // Current tool uses for the floating panel
-        let currentToolUses = [];
-
-        // Toggle floating tool panel collapse
-        function toggleToolPanel() {
-            document.getElementById('tool-panel').classList.toggle('collapsed');
-        }
-
-        // Right sidebar tool panel is disabled - using inline panel instead
-        function showToolPanel() {
-            // No-op: tool details now shown in inline panel
-        }
-
-        function collapseToolPanel() {
-            // No-op: tool details now shown in inline panel
-        }
-
-        function hideToolPanel() {
-            // No-op: tool details now shown in inline panel
-            toolPanelRenderedIds.clear();
-            toolPanelLastStatus = {};
-        }
-
-        // Auto-scroll tool panel list to bottom
-        function scrollToolPanelToBottom() {
-            const listEl = document.getElementById('tool-panel-list');
-            if (listEl) {
-                setTimeout(() => {
-                    listEl.scrollTop = listEl.scrollHeight;
-                }, 50);
-            }
-        }
-
-        // Track hide timeout
-        let toolPanelHideTimer = null;
-        let toolPanelUpdateId = 0;
-        let toolPanelRenderedIds = new Set(); // Track rendered tool IDs
-        let toolPanelLastStatus = {}; // Track last known status for each tool
-
         // Helper to get status key for a tool use
         function getToolStatusKey(tu) {
             if (tu.result?.error) return 'error';
@@ -2160,139 +2106,9 @@
             return 'running';
         }
 
-        // Helper to create tool item HTML
-        function createToolItemHTML(tu, toolId) {
-            // Status class and icon
-            let statusClass = '';
-            let statusIcon;
-            if (tu.result?.error) {
-                statusClass = 'error';
-                statusIcon = `<svg class="status-icon error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                </svg>`;
-            } else if (tu.result) {
-                statusClass = '';
-                statusIcon = `<svg class="status-icon success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                </svg>`;
-            } else {
-                statusClass = 'running';
-                statusIcon = `<svg class="status-icon running" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-                </svg>`;
-            }
-
-            // Truncate params
-            const paramsStr = JSON.stringify(tu.input || {});
-            const truncatedParams = paramsStr.length > 50 ? paramsStr.substring(0, 50) + '...' : paramsStr;
-
-            // Calculate elapsed time for running tools
-            let elapsedTime = '';
-            if (!tu.result && toolStartTimes[toolId]) {
-                const elapsed = Math.floor((Date.now() - toolStartTimes[toolId]) / 1000);
-                if (elapsed >= 60) {
-                    const mins = Math.floor(elapsed / 60);
-                    const secs = elapsed % 60;
-                    elapsedTime = `${mins}m ${secs}s`;
-                } else {
-                    elapsedTime = `${elapsed}s`;
-                }
-            }
-
-            return `
-                <div class="tool-panel-item ${statusClass}" data-tool-id="${toolId}" onclick="showToolDetail('${toolId}')">
-                    ${statusIcon}
-                    <span class="tool-name">${tu.name}</span>
-                    ${elapsedTime ? `<span class="tool-elapsed">${elapsedTime}</span>` : ''}
-                    <span class="tool-params">${truncatedParams}</span>
-                </div>
-            `;
-        }
-
-        // Update the floating tool panel - disabled, using inline panel instead
+        // updateToolPanel - disabled, using inline panel instead
         function updateToolPanel(toolUses) {
             // No-op: tool details now shown in inline panel
-            return;
-
-            const statusEl = document.getElementById('tool-panel-status');
-            const listEl = document.getElementById('tool-panel-list');
-
-            const allComplete = toolUses.every(t => t.result);
-            const completedCount = toolUses.filter(t => t.result).length;
-            const runningCount = toolUses.length - completedCount;
-
-            // Update status text
-            if (allComplete) {
-                statusEl.textContent = `✓ ${completedCount} tools completed`;
-            } else {
-                statusEl.textContent = `Running ${runningCount} tool${runningCount > 1 ? 's' : ''}...`;
-            }
-
-            // Collect current tool IDs
-            const currentIds = new Set();
-
-            // Process each tool use
-            for (const tu of toolUses) {
-                const toolId = tu.id || 'tool_' + Math.random().toString(36).substr(2, 9);
-                currentIds.add(toolId);
-
-                // Track start time
-                if (!tu.result && !toolStartTimes[toolId]) {
-                    toolStartTimes[toolId] = Date.now();
-                }
-
-                // Clean up completed
-                if (tu.result && toolStartTimes[toolId]) {
-                    delete toolStartTimes[toolId];
-                }
-
-                // Store tool data for detail view
-                toolDataStore[toolId] = tu;
-
-                const currentStatus = getToolStatusKey(tu);
-                const existingItem = listEl.querySelector(`[data-tool-id="${toolId}"]`);
-
-                if (!existingItem) {
-                    // New tool - append it
-                    const itemHTML = createToolItemHTML(tu, toolId);
-                    listEl.insertAdjacentHTML('beforeend', itemHTML);
-                    toolPanelRenderedIds.add(toolId);
-                    toolPanelLastStatus[toolId] = currentStatus;
-                    // Auto-scroll to show new item
-                    scrollToolPanelToBottom();
-                } else if (toolPanelLastStatus[toolId] !== currentStatus) {
-                    // Status changed - update this item only
-                    const itemHTML = createToolItemHTML(tu, toolId);
-                    existingItem.outerHTML = itemHTML;
-                    toolPanelLastStatus[toolId] = currentStatus;
-                    // Also scroll on status change
-                    scrollToolPanelToBottom();
-                }
-                // If status unchanged, do nothing (avoid flicker)
-            }
-
-            // Remove items that are no longer in the list
-            for (const renderedId of toolPanelRenderedIds) {
-                if (!currentIds.has(renderedId)) {
-                    const item = listEl.querySelector(`[data-tool-id="${renderedId}"]`);
-                    if (item) item.remove();
-                    toolPanelRenderedIds.delete(renderedId);
-                    delete toolPanelLastStatus[renderedId];
-                }
-            }
-
-            // Show panel (expanded) when tools are running
-            showToolPanel();
-
-            // Auto-collapse (not hide) after completion - keep panel visible but minimized
-            if (allComplete) {
-                toolPanelHideTimer = setTimeout(() => {
-                    if (toolPanelUpdateId === currentUpdateId) {
-                        // Collapse instead of hide - user can still see the summary
-                        collapseToolPanel();
-                    }
-                }, 1500);
-            }
         }
 
         // ==================== Inline Chat Tool Panel ====================
@@ -4012,251 +3828,16 @@ Be concise and helpful in your responses.` : '';
             document.getElementById('send-btn').disabled = false;
         }
 
-        // ========== Right Sidebar (Tool Execution) Functions ==========
+        // ========== Right Sidebar Functions (REMOVED - using inline panel) ==========
+        // These are kept as no-op stubs for compatibility
 
-        function toggleRightSidebar() {
-            // Right sidebar removed - no-op
-        }
-
-        function openRightSidebar() {
-            // Right sidebar removed - no-op
-        }
-
-        function scrollToolExecutionToBottom() {
-            const container = document.getElementById('tool-execution-list');
-            if (container) {
-                // Use setTimeout to ensure DOM has updated
-                setTimeout(() => {
-                    container.scrollTop = container.scrollHeight;
-                }, 50);
-            }
-        }
-
-        function addToolExecution(toolUse) {
-            const execution = {
-                id: toolUse.id,
-                name: toolUse.name,
-                input: toolUse.input,
-                status: 'running',
-                result: null,
-                startTime: Date.now(),
-                endTime: null
-            };
-            const executions = getToolExecutions();
-            executions.push(execution);  // Add to bottom (newest at bottom)
-            setToolExecutions(executions);
-            renderToolExecutionSidebar();
-            updateToolsBadge(true);
-            // Auto-scroll to bottom to show latest tool execution
-            scrollToolExecutionToBottom();
-            return execution;
-        }
-
-        function updateToolExecution(toolId, result) {
-            const executions = getToolExecutions();
-            const execution = executions.find(t => t.id === toolId);
-            if (execution) {
-                execution.result = result;
-                execution.status = result?.error ? 'error' : 'success';
-                execution.endTime = Date.now();
-                setToolExecutions(executions);
-
-                // Targeted DOM update instead of full re-render to avoid flicker
-                const toolItems = document.querySelectorAll('.tool-execution-item');
-                const execIndex = executions.findIndex(t => t.id === toolId);
-                if (execIndex >= 0 && toolItems[execIndex]) {
-                    const item = toolItems[execIndex];
-
-                    // Remove running class from item
-                    item.classList.remove('running');
-
-                    // Update status dot
-                    const dotEl = item.querySelector('.tool-execution-dot');
-                    if (dotEl) {
-                        dotEl.className = `tool-execution-dot ${execution.status}`;
-                    }
-
-                    // Update status text
-                    const statusEl = item.querySelector('.tool-execution-status');
-                    if (statusEl) {
-                        statusEl.className = `tool-execution-status ${execution.status}`;
-                        statusEl.textContent = execution.status === 'error' ? 'Error' : 'Complete';
-                    }
-
-                    // Update preview section with result
-                    const previewSection = item.querySelector('.tool-execution-preview');
-                    if (previewSection) {
-                        const { preview, totalLines, hasMore } = getResultPreview(result);
-                        const inputPreview = getResultPreview(execution.input, 2);
-
-                        previewSection.innerHTML = `
-                            ${inputPreview.preview ? `
-                                <div class="tool-preview-line">
-                                    <span class="preview-label">Input:</span>
-                                    <span class="preview-content">${escapeHtml(inputPreview.preview.split('\n')[0])}</span>
-                                </div>
-                            ` : ''}
-                            <div class="tool-preview-result">
-                                <pre class="preview-snippet">${escapeHtml(preview)}</pre>
-                                ${hasMore ? `<span class="preview-more">... +${totalLines - 3} lines (click to expand)</span>` : ''}
-                            </div>
-                        `;
-                    }
-
-                    // Add output section to body if not exists
-                    const body = item.querySelector('.tool-execution-body');
-                    if (body && !body.querySelector('.tool-execution-section:last-child .tool-execution-label')?.textContent?.includes('Output')) {
-                        const duration = `${((execution.endTime - execution.startTime) / 1000).toFixed(1)}s`;
-                        const outputSection = document.createElement('div');
-                        outputSection.className = 'tool-execution-section';
-                        outputSection.innerHTML = `
-                            <div class="tool-execution-label">Output</div>
-                            <pre>${escapeHtml(JSON.stringify(result, null, 2))}</pre>
-                        `;
-                        body.appendChild(outputSection);
-                        // Update or add duration
-                        let timeEl = body.querySelector('.tool-execution-time');
-                        if (!timeEl) {
-                            timeEl = document.createElement('div');
-                            timeEl.className = 'tool-execution-time';
-                            body.appendChild(timeEl);
-                        }
-                        timeEl.textContent = `Duration: ${duration}`;
-                    }
-                } else {
-                    // Fallback to full render if element not found
-                    renderToolExecutionSidebar();
-                }
-                // Scroll to show the updated tool
-                scrollToolExecutionToBottom();
-            }
-            const hasRunning = executions.some(t => t.status === 'running');
-            updateToolsBadge(hasRunning);
-        }
-
-        function updateToolsBadge(active) {
-            const badge = document.getElementById('tools-badge');
-            if (badge) {
-                badge.classList.toggle('active', active);
-            }
-        }
-
-        // Helper to create a result preview snippet (like Claude Code)
-        function getResultPreview(result, maxLines = 3) {
-            if (!result) return { preview: '', totalLines: 0, hasMore: false };
-
-            let text = '';
-            // Extract meaningful content from result
-            if (typeof result === 'string') {
-                text = result;
-            } else if (result.error) {
-                text = `Error: ${result.error}`;
-            } else if (result.content) {
-                text = typeof result.content === 'string' ? result.content : JSON.stringify(result.content, null, 2);
-            } else if (result.results && Array.isArray(result.results)) {
-                // Search results
-                text = result.results.map(r => `- ${r.title || r.name || r.url || JSON.stringify(r).slice(0, 100)}`).join('\n');
-            } else if (result.message) {
-                text = result.message;
-            } else {
-                text = JSON.stringify(result, null, 2);
-            }
-
-            const lines = text.split('\n');
-            const totalLines = lines.length;
-            const preview = lines.slice(0, maxLines).join('\n');
-            const hasMore = totalLines > maxLines;
-
-            return { preview, totalLines, hasMore };
-        }
-
-        function renderToolExecutionSidebar() {
-            const container = document.getElementById('tool-execution-list');
-            if (!container) return; // Right sidebar removed, skip rendering
-            const executions = getToolExecutions();
-            if (executions.length === 0) {
-                container.innerHTML = `
-                    <div class="right-sidebar-empty">
-                        <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
-                            <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
-                        </svg>
-                        <p>No tool executions yet</p>
-                    </div>
-                `;
-                return;
-            }
-
-            container.innerHTML = executions.map(exec => {
-                const statusClass = exec.status;
-                const statusText = exec.status === 'running' ? 'Running...' : (exec.status === 'error' ? 'Error' : 'Complete');
-                const duration = exec.endTime ? `${((exec.endTime - exec.startTime) / 1000).toFixed(1)}s` : '';
-
-                // Get result preview for Claude Code-like display
-                const { preview, totalLines, hasMore } = getResultPreview(exec.result);
-                const inputPreview = getResultPreview(exec.input, 2);
-
-                return `
-                    <div class="tool-execution-item ${exec.result ? '' : 'running'}" onclick="this.classList.toggle('expanded')">
-                        <div class="tool-execution-header">
-                            <span class="tool-execution-dot ${statusClass}"></span>
-                            <span class="tool-execution-name">${exec.name}</span>
-                            <span class="tool-execution-status ${statusClass}">${statusText}</span>
-                        </div>
-                        <!-- Preview section (always visible, like Claude Code) -->
-                        <div class="tool-execution-preview">
-                            ${inputPreview.preview ? `
-                                <div class="tool-preview-line">
-                                    <span class="preview-label">Input:</span>
-                                    <span class="preview-content">${escapeHtml(inputPreview.preview.split('\n')[0])}</span>
-                                </div>
-                            ` : ''}
-                            ${exec.result ? `
-                                <div class="tool-preview-result">
-                                    <pre class="preview-snippet">${escapeHtml(preview)}</pre>
-                                    ${hasMore ? `<span class="preview-more">... +${totalLines - 3} lines (click to expand)</span>` : ''}
-                                </div>
-                            ` : exec.status === 'running' ? `
-                                <div class="tool-preview-running">
-                                    <span class="running-indicator"></span>
-                                    <span>Executing...</span>
-                                </div>
-                            ` : ''}
-                        </div>
-                        <!-- Full details (expanded view) -->
-                        <div class="tool-execution-body">
-                            <div class="tool-execution-section">
-                                <div class="tool-execution-label">Input</div>
-                                <pre>${escapeHtml(JSON.stringify(exec.input, null, 2))}</pre>
-                            </div>
-                            ${exec.result ? `
-                            <div class="tool-execution-section">
-                                <div class="tool-execution-label">Output</div>
-                                <pre>${escapeHtml(JSON.stringify(exec.result, null, 2))}</pre>
-                            </div>
-                            ` : ''}
-                            ${duration ? `<div class="tool-execution-time">Duration: ${duration}</div>` : ''}
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        }
-
-        // Helper to escape HTML
-        function escapeHtml(text) {
-            if (!text) return '';
-            return String(text)
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
-        }
-
-        function clearToolExecutions() {
-            setToolExecutions([]);
-            renderToolExecutionSidebar();
-            updateToolsBadge(false);
-        }
+        function toggleRightSidebar() {}
+        function openRightSidebar() {}
+        function hideToolPanel() {}
+        function addToolExecution(toolUse) {}
+        function updateToolExecution(toolId, result) {}
+        function renderToolExecutionSidebar() {}
+        function clearToolExecutions() {}
 
         // ========== Workspace Functions ==========
 
