@@ -38,7 +38,13 @@ class ContextManager:
     RECENT_MESSAGES_TO_KEEP = 10  # Always keep last N messages in full
 
     # Session storage directory
+    # Structure: sessions/{session_id}/{session_id}.jsonl
+    #            sessions/{session_id}/tool-results/toolu_bdrk_{id}.txt      (Bedrock tools)
+    #            sessions/{session_id}/tool-results/mcp-{server}-{tool}-{ts}.txt  (MCP tools)
     SESSIONS_DIR = os.path.expanduser("~/.springo/sessions")
+
+    # Max tool result size before saving to file (30KB)
+    MAX_INLINE_OUTPUT_SIZE = 30 * 1024
 
     def __init__(self):
         if HAS_TIKTOKEN:
@@ -46,7 +52,7 @@ class ContextManager:
         else:
             self._encoder = None
 
-        # Ensure sessions directory exists
+        # Ensure base directory exists
         Path(self.SESSIONS_DIR).mkdir(parents=True, exist_ok=True)
 
         # In-memory context state per session
@@ -419,9 +425,13 @@ class ContextManager:
 
     # ========== Session Persistence (JSONL) ==========
 
+    def get_session_dir(self, session_id: str) -> str:
+        """Get the directory path for a session"""
+        return os.path.join(self.SESSIONS_DIR, session_id)
+
     def get_session_path(self, session_id: str) -> str:
-        """Get the JSONL file path for a session"""
-        return os.path.join(self.SESSIONS_DIR, f"{session_id}.jsonl")
+        """Get the JSONL file path for a session: sessions/{session_id}/{session_id}.jsonl"""
+        return os.path.join(self.get_session_dir(session_id), f"{session_id}.jsonl")
 
     def get_session_hash(self, working_dir: str) -> str:
         """Generate a hash for the working directory (like Claude Code project hash)"""
@@ -429,6 +439,8 @@ class ContextManager:
 
     def save_message(self, session_id: str, message: Dict[str, Any]):
         """Append a single message to the session JSONL file"""
+        session_dir = self.get_session_dir(session_id)
+        Path(session_dir).mkdir(parents=True, exist_ok=True)
         session_path = self.get_session_path(session_id)
         entry = {
             "timestamp": datetime.now().isoformat(),
@@ -438,7 +450,9 @@ class ContextManager:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def save_messages(self, session_id: str, messages: List[Dict[str, Any]]):
-        """Save multiple messages to the session JSONL file"""
+        """Save multiple messages to the session JSONL file (append mode)"""
+        session_dir = self.get_session_dir(session_id)
+        Path(session_dir).mkdir(parents=True, exist_ok=True)
         session_path = self.get_session_path(session_id)
         with open(session_path, "a", encoding="utf-8") as f:
             for message in messages:
@@ -448,8 +462,43 @@ class ContextManager:
                 }
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+    def save_session_complete(self, session_id: str, messages: List[Dict[str, Any]], metadata: Dict[str, Any] = None):
+        """Save complete session to JSONL file (overwrite mode, like Claude Code)
+
+        Format:
+        - First line: session metadata (title, workingDir, timestamps)
+        - Following lines: each message with timestamp
+        """
+        session_dir = self.get_session_dir(session_id)
+        Path(session_dir).mkdir(parents=True, exist_ok=True)
+        session_path = self.get_session_path(session_id)
+
+        # Write complete session (overwrite)
+        with open(session_path, "w", encoding="utf-8") as f:
+            # Write session header/metadata
+            header = {
+                "type": "session_start",
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat(),
+                "metadata": metadata or {}
+            }
+            f.write(json.dumps(header, ensure_ascii=False) + "\n")
+
+            # Write each message
+            for i, message in enumerate(messages):
+                entry = {
+                    "type": "message",
+                    "index": i,
+                    "timestamp": message.get("timestamp") or datetime.now().isoformat(),
+                    "message": message
+                }
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
     def load_session(self, session_id: str) -> List[Dict[str, Any]]:
-        """Load all messages from a session JSONL file"""
+        """Load all messages from a session JSONL file
+
+        Format: sessions/{session_id}/{session_id}.jsonl
+        """
         session_path = self.get_session_path(session_id)
         messages = []
 
@@ -479,39 +528,317 @@ class ContextManager:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
     def list_sessions(self, working_dir: str = None) -> List[Dict[str, Any]]:
-        """List all saved sessions, optionally filtered by working directory"""
+        """List all saved sessions, optionally filtered by working directory
+
+        Format: sessions/{session_id}/{session_id}.jsonl
+        """
         sessions = []
         project_hash = self.get_session_hash(working_dir) if working_dir else None
 
-        for filename in os.listdir(self.SESSIONS_DIR):
-            if filename.endswith(".jsonl"):
-                session_id = filename[:-6]
+        for entry in os.listdir(self.SESSIONS_DIR):
+            entry_path = os.path.join(self.SESSIONS_DIR, entry)
 
-                # Filter by project hash if specified
-                if project_hash and not session_id.startswith(project_hash):
-                    continue
+            # Only support directory format: sessions/{session_id}/
+            if not os.path.isdir(entry_path):
+                continue
 
-                session_path = os.path.join(self.SESSIONS_DIR, filename)
-                stat = os.stat(session_path)
+            session_id = entry
+            session_path = os.path.join(entry_path, f"{session_id}.jsonl")
+            if not os.path.exists(session_path):
+                continue
 
-                sessions.append({
-                    "session_id": session_id,
-                    "file": filename,
-                    "size": stat.st_size,
-                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
-                })
+            # Filter by project hash if specified
+            if project_hash and not session_id.startswith(project_hash):
+                continue
+
+            stat = os.stat(session_path)
+
+            # Read metadata from first line of JSONL file
+            metadata = {}
+            try:
+                with open(session_path, 'r', encoding='utf-8') as f:
+                    first_line = f.readline().strip()
+                    if first_line:
+                        first_entry = json.loads(first_line)
+                        if first_entry.get('type') == 'session_start':
+                            metadata = first_entry.get('metadata', {})
+            except Exception:
+                pass  # Ignore errors, use empty metadata
+
+            sessions.append({
+                "session_id": session_id,
+                "file": f"{session_id}/{session_id}.jsonl",
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "metadata": metadata
+            })
 
         return sorted(sessions, key=lambda x: x["modified"], reverse=True)
 
     def delete_session(self, session_id: str) -> bool:
-        """Delete a session file"""
-        session_path = self.get_session_path(session_id)
-        if os.path.exists(session_path):
-            os.remove(session_path)
+        """Delete a session directory
+
+        Format: sessions/{session_id}/
+        """
+        import shutil
+
+        session_dir = self.get_session_dir(session_id)
+        if os.path.isdir(session_dir):
+            shutil.rmtree(session_dir)
             return True
+
         return False
 
+    # ========== Tool Result Management (like Claude Code) ==========
+
+    def get_tool_results_dir(self, session_id: str) -> str:
+        """Get the tool-results directory for a session: sessions/{session_id}/tool-results/"""
+        return os.path.join(self.get_session_dir(session_id), "tool-results")
+
+    def get_tool_result_path(self, session_id: str, tool_use_id: str, tool_name: str = None) -> str:
+        """
+        Get file path for storing large tool result.
+
+        Naming convention:
+        - Bedrock tools: toolu_bdrk_{id}.txt
+        - MCP tools: mcp-{server}-{tool}-{timestamp}.txt
+
+        Args:
+            session_id: Session ID
+            tool_use_id: Tool use ID (e.g., "toolu_bdrk_01Abc123")
+            tool_name: Tool name (e.g., "read_file" or "web-search__brave_web_search")
+        """
+        tool_results_dir = self.get_tool_results_dir(session_id)
+        Path(tool_results_dir).mkdir(parents=True, exist_ok=True)
+
+        # Generate filename based on tool type
+        if tool_name and '__' in tool_name:
+            # MCP tool: mcp-{server}-{tool}-{timestamp}.txt
+            parts = tool_name.split('__', 1)
+            server = parts[0]
+            tool = parts[1] if len(parts) > 1 else 'unknown'
+            # Use last 8 chars of tool_use_id as timestamp substitute
+            ts = tool_use_id[-8:] if len(tool_use_id) >= 8 else tool_use_id
+            filename = f"mcp-{server}-{tool}-{ts}.txt"
+        elif tool_use_id.startswith('toolu_bdrk_'):
+            # Bedrock tool: toolu_bdrk_{id}.txt
+            filename = f"{tool_use_id}.txt"
+        else:
+            # Fallback: use tool_use_id with .txt extension
+            filename = f"{tool_use_id}.txt"
+
+        return os.path.join(tool_results_dir, filename)
+
+    def find_tool_result_file(self, session_id: str, tool_use_id: str) -> Optional[str]:
+        """
+        Find tool result file by tool_use_id.
+        Searches tool-results directory for files containing the tool_use_id.
+
+        Returns:
+            File path if found, None otherwise
+        """
+        tool_results_dir = self.get_tool_results_dir(session_id)
+        if not os.path.exists(tool_results_dir):
+            return None
+
+        # For Bedrock tools: toolu_bdrk_{id}.txt - exact match
+        if tool_use_id.startswith('toolu_bdrk_'):
+            exact_path = os.path.join(tool_results_dir, f"{tool_use_id}.txt")
+            if os.path.exists(exact_path):
+                return exact_path
+
+        # For MCP tools or fallback: search for files containing tool_use_id or its suffix
+        tool_id_suffix = tool_use_id[-8:] if len(tool_use_id) >= 8 else tool_use_id
+        for filename in os.listdir(tool_results_dir):
+            if tool_id_suffix in filename or tool_use_id in filename:
+                return os.path.join(tool_results_dir, filename)
+
+        return None
+
+    def save_tool_result(self, session_id: str, tool_use_id: str, result: str, tool_name: str = None) -> Dict[str, Any]:
+        """
+        Save large tool result to file and return reference.
+        Like Claude Code's task output handling.
+
+        Args:
+            session_id: The session ID
+            tool_use_id: The tool use ID (unique identifier)
+            result: The tool result content
+            tool_name: Optional tool name for metadata
+
+        Returns:
+            Dict with result info:
+            - If result is small: {"inline": True, "content": result}
+            - If result is large: {"inline": False, "file_path": path, "size": size, "preview": first_500_chars}
+        """
+        result_size = len(result.encode('utf-8'))
+
+        # If result is small enough, return inline
+        if result_size <= self.MAX_INLINE_OUTPUT_SIZE:
+            return {
+                "inline": True,
+                "content": result,
+                "size": result_size
+            }
+
+        # Save large result to file
+        result_path = self.get_tool_result_path(session_id, tool_use_id, tool_name)
+
+        with open(result_path, 'w', encoding='utf-8') as f:
+            # Write metadata header
+            metadata = {
+                "type": "tool_result",
+                "session_id": session_id,
+                "tool_use_id": tool_use_id,
+                "tool_name": tool_name,
+                "timestamp": datetime.now().isoformat(),
+                "size": result_size
+            }
+            f.write(json.dumps(metadata, ensure_ascii=False) + "\n")
+            f.write("---\n")
+            f.write(result)
+
+        # Return reference with preview
+        preview = result[:500] + "..." if len(result) > 500 else result
+
+        return {
+            "inline": False,
+            "file_path": result_path,
+            "size": result_size,
+            "preview": preview,
+            "truncated_message": f"[Result saved to file: {result_path}] ({result_size:,} bytes)"
+        }
+
+    def load_tool_result(self, file_path: str) -> str:
+        """Load tool result from file"""
+        if not os.path.exists(file_path):
+            return None
+
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            # Skip metadata header if present
+            if content.startswith('{'):
+                lines = content.split('\n', 2)
+                if len(lines) > 2 and lines[1] == '---':
+                    return lines[2]
+            return content
+
+    def list_tool_results(self, session_id: str) -> List[Dict[str, Any]]:
+        """List all tool results for a session"""
+        tool_results_dir = self.get_tool_results_dir(session_id)
+        if not os.path.exists(tool_results_dir):
+            return []
+
+        results = []
+        for filename in os.listdir(tool_results_dir):
+            if filename.endswith('.output'):
+                file_path = os.path.join(tool_results_dir, filename)
+                stat = os.stat(file_path)
+                results.append({
+                    "tool_use_id": filename[:-7],  # Remove .output
+                    "file_path": file_path,
+                    "size": stat.st_size,
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+                })
+
+        return sorted(results, key=lambda x: x["modified"], reverse=True)
+
+    def cleanup_old_tool_results(self, max_age_days: int = 7) -> int:
+        """Clean up tool results in sessions older than max_age_days"""
+        import shutil
+        cleaned = 0
+        now = datetime.now()
+        max_age = max_age_days * 24 * 60 * 60  # Convert to seconds
+
+        for session_dir_name in os.listdir(self.SESSIONS_DIR):
+            session_dir = os.path.join(self.SESSIONS_DIR, session_dir_name)
+            if os.path.isdir(session_dir):
+                tool_results_dir = os.path.join(session_dir, "tool-results")
+                if os.path.isdir(tool_results_dir):
+                    dir_mtime = os.path.getmtime(tool_results_dir)
+                    if (now.timestamp() - dir_mtime) > max_age:
+                        shutil.rmtree(tool_results_dir)
+                        cleaned += 1
+
+        return cleaned
+
     # ========== Auto-Summarization ==========
+
+    def summarize_messages(self, messages: List[Dict[str, Any]], model: str = "claude-haiku-4-5-20251001") -> List[Dict[str, Any]]:
+        """
+        Perform automatic summarization of messages using the specified model.
+        Returns a new message list with summary + recent messages.
+
+        Args:
+            messages: The full message list to summarize
+            model: The model to use for summarization (default: Haiku 4.5 for cost efficiency)
+
+        Returns:
+            New message list with summary replacing old messages
+        """
+        import boto3
+        import json
+        from botocore.config import Config
+
+        # Model mapping for Bedrock
+        model_mapping = {
+            "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            "claude-3-5-haiku-20241022": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+            "claude-3-5-sonnet-20241022": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        }
+
+        bedrock_model_id = model_mapping.get(model, model_mapping["claude-haiku-4-5-20251001"])
+
+        # Split messages
+        old_messages, recent_messages = self.split_messages_for_summary(messages)
+
+        if not old_messages:
+            return messages  # Nothing to summarize
+
+        # Prepare summary prompt
+        summary_prompt = self.prepare_summary_prompt(old_messages)
+
+        # Call Bedrock for summarization
+        try:
+            from auth.config_manager import AuthConfigManager
+            auth_manager = AuthConfigManager()
+            bedrock_client = auth_manager.get_bedrock_client()
+        except Exception:
+            config = Config(
+                region_name="us-east-1",
+                retries={'max_attempts': 3, 'mode': 'adaptive'}
+            )
+            bedrock_client = boto3.client('bedrock-runtime', config=config)
+
+        try:
+            response = bedrock_client.invoke_model(
+                modelId=bedrock_model_id,
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 4096,
+                    "messages": [{"role": "user", "content": summary_prompt}],
+                    "temperature": 0.3  # Lower temperature for more consistent summaries
+                }),
+                contentType="application/json",
+                accept="application/json"
+            )
+
+            result = json.loads(response['body'].read())
+            summary_text = ""
+            for block in result.get("content", []):
+                if block.get("type") == "text":
+                    summary_text += block.get("text", "")
+
+            # Create new message list with summary
+            return self.create_summary_messages(summary_text, recent_messages)
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Summarization failed: {e}")
+            # Return original messages if summarization fails
+            return messages
 
     def check_and_prepare_auto_summary(self, messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """

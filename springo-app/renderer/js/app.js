@@ -31,35 +31,8 @@
         // Welcome template HTML (stored on load, used when creating new chats)
         let welcomeTemplate = '';
 
-        // State - with corruption recovery
+        // Sessions are stored only in backend JSONL (localStorage not used for sessions)
         let conversations = [];
-        try {
-            const stored = localStorage.getItem('conversations');
-            if (stored) {
-                conversations = JSON.parse(stored);
-                if (!Array.isArray(conversations)) {
-                    console.warn('localStorage conversations is not an array, resetting');
-                    conversations = [];
-                }
-            }
-        } catch (e) {
-            console.error('Failed to parse conversations from localStorage, resetting:', e);
-            conversations = [];
-            // Clear corrupted data
-            localStorage.removeItem('conversations');
-        }
-
-        // Reset any stuck "running" status on app startup
-        let conversationsModified = false;
-        conversations.forEach(c => {
-            if (c.status === 'running') {
-                c.status = 'idle';
-                conversationsModified = true;
-            }
-        });
-        if (conversationsModified) {
-            localStorage.setItem('conversations', JSON.stringify(conversations));
-        }
         let currentConversationId = null;
 
         let settings = {};
@@ -79,6 +52,73 @@
         // OPTIMIZATION: Server-side auto tool execution (eliminates frontend round-trips)
         // When enabled, tools are executed on the server, saving ~1-3 seconds per tool
         const AUTO_TOOL_EXECUTION = true;
+
+        // ==================== Session Storage API ====================
+        // Use backend JSONL storage instead of localStorage (like Claude Code)
+        // Note: Session ID is just the conversation ID (without hash prefix)
+        // Tool results use getSessionId(convId) which adds hash prefix
+        const SessionAPI = {
+            // Save session to backend (uses convId directly as session_id)
+            async save(convId, messages, metadata = {}) {
+                try {
+                    const response = await fetch(`${BASE_URL}/v1/sessions/${convId}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ messages, metadata })
+                    });
+                    return response.ok;
+                } catch (e) {
+                    console.error('SessionAPI.save error:', e);
+                    return false;
+                }
+            },
+
+            // Load session from backend
+            async load(sessionId) {
+                try {
+                    const response = await fetch(`${BASE_URL}/v1/sessions/${sessionId}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        return data.messages || [];
+                    }
+                    return [];
+                } catch (e) {
+                    console.error('SessionAPI.load error:', e);
+                    return [];
+                }
+            },
+
+            // List all sessions
+            async list(workingDir = null) {
+                try {
+                    const url = workingDir
+                        ? `${BASE_URL}/v1/sessions?working_dir=${encodeURIComponent(workingDir)}`
+                        : `${BASE_URL}/v1/sessions`;
+                    const response = await fetch(url);
+                    if (response.ok) {
+                        const data = await response.json();
+                        return data.sessions || [];
+                    }
+                    return [];
+                } catch (e) {
+                    console.error('SessionAPI.list error:', e);
+                    return [];
+                }
+            },
+
+            // Delete session
+            async delete(sessionId) {
+                try {
+                    const response = await fetch(`${BASE_URL}/v1/sessions/${sessionId}`, {
+                        method: 'DELETE'
+                    });
+                    return response.ok;
+                } catch (e) {
+                    console.error('SessionAPI.delete error:', e);
+                    return false;
+                }
+            }
+        };
 
         // OPTIMIZATION 3: Debounced streaming UI updates
         const streamingUIDebounce = {
@@ -277,6 +317,39 @@
 
             loadSettings();
             renderWorkingFolders();
+
+            // Load conversations from backend JSONL storage
+            console.log('[JSONL] Loading conversations from backend...');
+            const loadStart = performance.now();
+            try {
+                const sessions = await SessionAPI.list();
+                const loadEnd = performance.now();
+                console.log(`[JSONL] Loaded ${sessions.length} sessions in ${(loadEnd - loadStart).toFixed(2)}ms`);
+
+                // Convert backend sessions to conversation format
+                // Backend returns: session_id, file, size, modified, metadata
+                conversations = sessions.map(s => {
+                    const createdAt = s.metadata?.createdAt || s.createdAt || (s.modified ? new Date(s.modified).getTime() : Date.now());
+                    const updatedAt = s.modified ? new Date(s.modified).getTime() : createdAt;
+                    return {
+                        id: s.session_id || s.id,
+                        title: s.metadata?.title || s.title || 'Untitled',
+                        createdAt: createdAt,
+                        updatedAt: updatedAt,  // CRITICAL: Required for cleanupOldConversations()
+                        status: 'idle',
+                        workingDir: s.metadata?.workingDir || s.workingDir || '',
+                        isCustomTitle: s.metadata?.isCustomTitle || false,
+                        messages: [] // Messages loaded on demand
+                    };
+                });
+
+                // Sort by createdAt descending
+                conversations.sort((a, b) => b.createdAt - a.createdAt);
+                console.log(`[JSONL] Converted ${conversations.length} conversations`);
+            } catch (e) {
+                console.error('[JSONL] Failed to load from backend:', e);
+            }
+
             renderConversations();
             // Initialize workdir selector and display
             updateWorkdirSelector();
@@ -292,11 +365,9 @@
                             updateWorkdirSelector();
                         });
                     } else if (value) {
-                        // Only open file browser, do NOT change session's working directory
-                        // Session's workdir is set only when creating new session
+                        // Change working directory and open file browser
+                        selectWorkingDir(value);
                         openFileBrowser(value);
-                        // Reset selector to show session's actual workdir
-                        updateWorkdirSelector();
                     }
                 });
             }
@@ -304,7 +375,17 @@
             if (currentWorkingDir) {
                 updateServerWorkingDir(currentWorkingDir);
             }
+            // Start connection check - run immediately and more frequently until connected
             checkConnection();
+            // Fast retry interval for startup (every 3 seconds until connected)
+            const startupCheckInterval = setInterval(() => {
+                if (lastConnectionHealthy) {
+                    clearInterval(startupCheckInterval);
+                } else {
+                    checkConnection();
+                }
+            }, 3000);
+            // Regular interval for ongoing monitoring (every 30 seconds)
             setInterval(checkConnection, 30000);
 
             // Auto-resize textarea
@@ -1022,12 +1103,19 @@
         // ==================== Connection Check ====================
 
         let lastConnectionHealthy = false; // Track connection state
+        let connectionCheckAttempts = 0; // Track failed attempts for startup
 
         async function checkConnection() {
             try {
                 const res = await fetch(`${BASE_URL}/health`);
+                // Check if response is JSON before parsing
+                const contentType = res.headers.get('content-type') || '';
+                if (!contentType.includes('application/json')) {
+                    throw new Error('Server returned non-JSON response');
+                }
                 const data = await res.json();
                 if (data.status === 'healthy') {
+                    connectionCheckAttempts = 0; // Reset counter on success
                     // Always verify and sync working directory on first connection or reconnection
                     if (!lastConnectionHealthy && currentWorkingDir) {
                         console.log('Connection established, syncing working directory:', currentWorkingDir);
@@ -1036,10 +1124,13 @@
                         // Periodically verify backend working directory matches frontend
                         try {
                             const wdRes = await fetch(`${BASE_URL}/v1/config/working-dir`);
-                            const wdData = await wdRes.json();
-                            if (wdData.working_dir !== currentWorkingDir) {
-                                console.log('Working directory mismatch detected, syncing:', currentWorkingDir);
-                                await updateServerWorkingDir(currentWorkingDir);
+                            const wdContentType = wdRes.headers.get('content-type') || '';
+                            if (wdContentType.includes('application/json')) {
+                                const wdData = await wdRes.json();
+                                if (wdData.working_dir !== currentWorkingDir) {
+                                    console.log('Working directory mismatch detected, syncing:', currentWorkingDir);
+                                    await updateServerWorkingDir(currentWorkingDir);
+                                }
                             }
                         } catch (e) {
                             console.warn('Failed to verify working directory:', e.message);
@@ -1063,7 +1154,14 @@
                 }
             } catch (e) {
                 lastConnectionHealthy = false;
-                updateStatus('disconnected');
+                connectionCheckAttempts++;
+                // Show "Starting..." for first 60 seconds (60 attempts at 1/sec, or 2 at 30/sec)
+                // Then show "Disconnected" if still failing
+                if (connectionCheckAttempts <= 2) {
+                    updateStatus('error', 'Server starting...');
+                } else {
+                    updateStatus('disconnected');
+                }
             }
         }
 
@@ -1182,7 +1280,6 @@
                     createdAt: Date.now()
                 };
                 conversations.unshift(newConv);
-                localStorage.setItem('conversations', JSON.stringify(conversations));
 
                 // Use stored welcome template (original element may have been replaced)
                 document.getElementById('chat-content').innerHTML = welcomeTemplate;
@@ -1204,7 +1301,7 @@
             }
         }
 
-        function loadConversation(id) {
+        async function loadConversation(id) {
             const conv = conversations.find(c => c.id === id);
             if (conv) {
                 // Store the previous conversation ID before switching
@@ -1219,7 +1316,6 @@
                     const prevConv = conversations.find(c => c.id === previousConvId);
                     if (prevConv) {
                         prevConv.status = 'running'; // Mark as still running
-                        localStorage.setItem('conversations', JSON.stringify(conversations));
                     }
                 }
 
@@ -1232,14 +1328,23 @@
                     runtime.workingDir = conv.workingDir;
                 }
 
+                // Load messages from backend JSONL storage
+                let rawMessages = conv.messages || runtime.messages || [];
+                if (rawMessages.length === 0) {
+                    console.log(`[JSONL] Loading messages for conversation ${id}...`);
+                    const loadStart = performance.now();
+                    const backendMessages = await SessionAPI.load(id);
+                    const loadEnd = performance.now();
+                    console.log(`[JSONL] Loaded ${backendMessages.length} messages in ${(loadEnd - loadStart).toFixed(2)}ms`);
+                    rawMessages = backendMessages;
+                }
+
                 // Validate and clean up messages (fixes orphaned tool_results from interrupted sessions)
-                const rawMessages = conv.messages || runtime.messages || [];
                 runtime.messages = validateConversationMessages(rawMessages);
 
                 // Update saved conversation if messages were cleaned up
                 if (runtime.messages.length !== rawMessages.length) {
                     conv.messages = runtime.messages;
-                    localStorage.setItem('conversations', JSON.stringify(conversations));
                     console.log(`Cleaned up ${rawMessages.length - runtime.messages.length} invalid messages from conversation ${id}`);
                 }
 
@@ -1249,7 +1354,6 @@
                 // (handles case where app was closed during a request)
                 if (conv.status === 'running' && !runtime.isStreaming) {
                     conv.status = 'idle';
-                    localStorage.setItem('conversations', JSON.stringify(conversations));
                 }
 
                 // Sync status bar and send button with loaded conversation
@@ -1280,11 +1384,18 @@
             const streaming = isCurrentStreaming();
 
             if (btn) {
-                // Disable if streaming OR if input is empty and no attachments
+                // Disable if streaming OR if input is empty and no attachments OR if server is not connected
                 const hasContent = input && input.value.trim().length > 0;
                 const hasAttachments = attachments && attachments.length > 0;
-                btn.disabled = streaming || (!hasContent && !hasAttachments);
+                const serverDisconnected = !lastConnectionHealthy;
+                btn.disabled = streaming || serverDisconnected || (!hasContent && !hasAttachments);
                 btn.style.display = streaming ? 'none' : 'flex';
+                // Show title hint when disabled due to disconnection
+                if (serverDisconnected) {
+                    btn.title = 'Server is starting up, please wait...';
+                } else {
+                    btn.title = '';
+                }
             }
             if (stopBtn) {
                 stopBtn.classList.toggle('visible', streaming);
@@ -1328,6 +1439,7 @@
         }
 
         // Save conversation - can specify ID to save a specific conversation (for background saves)
+        // Sessions are saved to backend JSONL only (localStorage not used for sessions)
         function saveConversation(convId = null) {
             const targetId = convId || currentConversationId;
             if (!targetId) return;
@@ -1381,13 +1493,62 @@
                 conversations.unshift(conv);
             }
 
-            localStorage.setItem('conversations', JSON.stringify(conversations));
             renderConversations();
+
+            // Save to backend JSONL (persistent, full message history)
+            SessionAPI.save(targetId, msgs, {
+                title: title,
+                workingDir: existingWorkingDir || '',
+                updatedAt: Date.now()
+            }).then(success => {
+                if (success) {
+                    console.log(`[${targetId}] Session saved to backend JSONL`);
+                }
+            });
 
             // Only update token count if this is the current conversation
             if (targetId === currentConversationId) {
                 updateTokenCount();
             }
+
+            // Auto cleanup old conversations (30 days retention)
+            cleanupOldConversations();
+        }
+
+        // Cleanup conversations older than 30 days
+        const RETENTION_DAYS = 30;
+        function cleanupOldConversations() {
+            const now = Date.now();
+            const maxAge = RETENTION_DAYS * 24 * 60 * 60 * 1000; // 30 days in ms
+
+            const oldConversations = conversations.filter(c => {
+                const age = now - (c.updatedAt || 0);
+                return age > maxAge;
+            });
+
+            if (oldConversations.length === 0) return;
+
+            console.log(`[Cleanup] Found ${oldConversations.length} conversations older than ${RETENTION_DAYS} days`);
+
+            // Remove old conversations
+            const oldIds = new Set(oldConversations.map(c => c.id));
+            conversations = conversations.filter(c => !oldIds.has(c.id));
+
+            // Delete from backend JSONL
+            oldConversations.forEach(c => {
+                SessionAPI.delete(c.id).then(success => {
+                    if (success) {
+                        console.log(`[Cleanup] Deleted old session: ${c.id} (${c.title})`);
+                    }
+                });
+                // Clean up runtime if exists
+                if (convRuntime[c.id]) {
+                    delete convRuntime[c.id];
+                }
+            });
+
+            console.log(`[Cleanup] Removed ${oldConversations.length} old conversations`);
+            renderConversations();
         }
 
         function deleteConversation(id, e) {
@@ -1395,7 +1556,13 @@
 
             // Remove from conversations list
             conversations = conversations.filter(c => c.id !== id);
-            localStorage.setItem('conversations', JSON.stringify(conversations));
+
+            // Delete from backend JSONL
+            SessionAPI.delete(id).then(success => {
+                if (success) {
+                    console.log(`[${id}] Session deleted from backend`);
+                }
+            });
 
             // Clean up runtime state (messages, streaming state, etc.)
             if (convRuntime[id]) {
@@ -1568,7 +1735,14 @@
                 conv.isCustomTitle = true;  // Mark that user manually named this session
             }
 
-            localStorage.setItem('conversations', JSON.stringify(conversations));
+            // Save renamed title to backend
+            const runtime = convRuntime[convId];
+            SessionAPI.save(convId, runtime?.messages || conv.messages || [], {
+                title: conv.title,
+                workingDir: conv.workingDir || '',
+                isCustomTitle: conv.isCustomTitle,
+                updatedAt: Date.now()
+            });
 
             // Update header if this is current conversation
             if (convId === currentConversationId) {
@@ -1635,7 +1809,7 @@
                         statusEl.title = getStatusTitle(status);
                     }
                 }
-                localStorage.setItem('conversations', JSON.stringify(conversations));
+                // Session saved to backend via SessionAPI
 
                 // Also sync status bar if this is the currently viewed conversation
                 if (currentConversationId === conversationId) {
@@ -1746,11 +1920,27 @@
                     label = 'You';
                 }
 
+                // Format timestamp - show date if not today
+                let timeStr = '';
+                if (m.timestamp) {
+                    const msgDate = new Date(m.timestamp);
+                    const today = new Date();
+                    const isToday = msgDate.toDateString() === today.toDateString();
+                    if (isToday) {
+                        timeStr = msgDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                    } else {
+                        // Show month-day + time for older messages
+                        timeStr = msgDate.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }) + ' ' +
+                                  msgDate.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+                    }
+                }
+
                 return `
                     <div class="message message-${m.role}${extraClass}">
                         <div class="message-header">
                             <div class="message-avatar">${avatar}</div>
                             <span class="message-label">${label}</span>
+                            ${timeStr ? `<span class="message-time">${timeStr}</span>` : ''}
                         </div>
                         <div class="message-content">${formatContent(contentToRender)}</div>
                     </div>
@@ -1780,8 +1970,136 @@
             scrollToBottom();
         }
 
+        // Make file paths clickable in HTML (applied AFTER markdown parsing)
+        // This processes HTML and finds file paths that are NOT already inside anchor tags
+        function linkifyFilePaths(html) {
+            if (!html || typeof html !== 'string') return html;
+
+            // Use DOM parsing for safe HTML manipulation
+            const temp = document.createElement('div');
+            temp.innerHTML = html;
+
+            // Walk through all text nodes and linkify paths
+            const walker = document.createTreeWalker(temp, NodeFilter.SHOW_TEXT, null, false);
+            const nodesToProcess = [];
+
+            while (walker.nextNode()) {
+                const node = walker.currentNode;
+                // Skip if inside an anchor tag (already a link)
+                // But DO process code blocks - file paths in code should still be clickable
+                let parent = node.parentNode;
+                let skip = false;
+                while (parent && parent !== temp) {
+                    if (parent.tagName === 'A') {
+                        skip = true;
+                        break;
+                    }
+                    parent = parent.parentNode;
+                }
+                if (!skip && node.textContent) {
+                    nodesToProcess.push(node);
+                }
+            }
+
+            // Patterns for file paths
+            const pathPattern = /(\/(?:Users|home|tmp|var|etc|opt|Downloads|Documents|Desktop)[^\s"'`)<>\n]+|~\/[^\s"'`)<>\n]+)/g;
+
+            // Process each text node
+            for (const node of nodesToProcess) {
+                const text = node.textContent;
+                // Reset regex state before testing
+                pathPattern.lastIndex = 0;
+                if (!pathPattern.test(text)) continue;
+
+                // Reset again for exec loop
+                pathPattern.lastIndex = 0;
+
+                // Create a fragment with linkified paths
+                const fragment = document.createDocumentFragment();
+                let lastIndex = 0;
+                let match;
+
+                while ((match = pathPattern.exec(text)) !== null) {
+                    // Add text before match
+                    if (match.index > lastIndex) {
+                        fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+                    }
+
+                    // Clean up path (remove trailing punctuation)
+                    let cleanPath = match[0].replace(/[.,;:!?)\]]+$/, '');
+                    const trailing = match[0].slice(cleanPath.length);
+
+                    // Create clickable link
+                    const link = document.createElement('a');
+                    link.href = '#';
+                    link.className = 'clickable-path';
+                    link.setAttribute('data-path', cleanPath);
+                    link.title = 'Click to open';
+                    link.textContent = cleanPath;
+                    fragment.appendChild(link);
+
+                    // Add trailing punctuation as text
+                    if (trailing) {
+                        fragment.appendChild(document.createTextNode(trailing));
+                    }
+
+                    lastIndex = match.index + match[0].length;
+                }
+
+                // Add remaining text
+                if (lastIndex < text.length) {
+                    fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+                }
+
+                // Replace the text node with the fragment
+                node.parentNode.replaceChild(fragment, node);
+            }
+
+            return temp.innerHTML;
+        }
+
+        // Escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Handle clicks on URLs and paths
+        document.addEventListener('click', (e) => {
+            const urlLink = e.target.closest('.clickable-url');
+            const pathLink = e.target.closest('.clickable-path');
+
+            if (urlLink) {
+                e.preventDefault();
+                const url = urlLink.getAttribute('data-url');
+                if (url && window.electronAPI?.openExternal) {
+                    window.electronAPI.openExternal(url);
+                } else if (url) {
+                    window.open(url, '_blank');
+                }
+            } else if (pathLink) {
+                e.preventDefault();
+                const path = pathLink.getAttribute('data-path');
+                if (path && window.electronAPI?.openPath) {
+                    // Expand ~ to home directory is handled by backend
+                    window.electronAPI.openPath(path);
+                }
+            }
+        });
+
         function formatContent(content) {
             if (!content) return '';
+
+            // Helper to parse markdown and make file paths clickable
+            // Order: marked.parse → linkifyFilePaths (on rendered HTML)
+            const parseAndLinkify = (text) => {
+                if (!text || !text.trim()) return '';
+                // 1. Parse markdown (this also handles URLs)
+                const parsed = marked.parse(text);
+                // 2. Linkify file paths in the rendered HTML
+                return linkifyFilePaths(parsed);
+            };
 
             // If content contains chat-tool-container (new tool display), preserve it
             if (typeof content === 'string' && content.includes('<div class="chat-tool-container"')) {
@@ -1791,7 +2109,7 @@
                     if (part.includes('<div class="chat-tool-container"')) {
                         return part;
                     }
-                    return part.trim() ? marked.parse(part) : '';
+                    return parseAndLinkify(part);
                 }).join('');
             }
 
@@ -1803,7 +2121,7 @@
                     if (part.startsWith('<div class="tool-call"')) {
                         return part;
                     }
-                    return marked.parse(part);
+                    return parseAndLinkify(part);
                 }).join('');
             }
 
@@ -1815,7 +2133,7 @@
             // Handle array content (complex messages with images etc)
             if (Array.isArray(content)) {
                 return content.map(c => {
-                    if (c.type === 'text') return marked.parse(c.text);
+                    if (c.type === 'text') return parseAndLinkify(c.text);
                     if (c.type === 'image') return '[Image]';
                     return '';
                 }).join('');
@@ -1831,7 +2149,7 @@
                 },
                 breaks: true
             });
-            return marked.parse(content);
+            return parseAndLinkify(content);
         }
 
         function scrollToBottom() {
@@ -2445,7 +2763,7 @@
                 const conv = conversations.find(c => c.id === currentConversationId);
                 if (conv) {
                     conv.messages = [];
-                    localStorage.setItem('conversations', JSON.stringify(conversations));
+                    // Session saved to backend via SessionAPI
                 }
                 renderMessages();
                 updateStatus('completed', 'Messages cleared');
@@ -2544,7 +2862,8 @@
             // Add user message to THIS conversation's messages
             const userMsg = {
                 role: 'user',
-                content: attachments.length > 0 ? messageContent : content
+                content: attachments.length > 0 ? messageContent : content,
+                timestamp: Date.now()
             };
             runtime.messages.push(userMsg);
 
@@ -2560,7 +2879,7 @@
             }
 
             try {
-                // Save conversation first to ensure it exists in localStorage
+                // Save conversation to backend JSONL
                 saveConversation(thisConvId);
                 console.log('Conversation saved, ID:', thisConvId);
 
@@ -2845,16 +3164,26 @@
                 let tools = [];
                 try {
                     const toolsResponse = await fetch(`${BASE_URL}/v1/tools`);
-                    const toolsData = await toolsResponse.json();
-                    tools = toolsData.tools || [];
-                    console.log(`[${convId}] Loaded ${tools.length} tools`);
+                    // Check if response is JSON before parsing
+                    const contentType = toolsResponse.headers.get('content-type') || '';
+                    if (!toolsResponse.ok || !contentType.includes('application/json')) {
+                        console.warn(`[${convId}] Tools endpoint returned non-JSON or error: ${toolsResponse.status}`);
+                    } else {
+                        const toolsData = await toolsResponse.json();
+                        tools = toolsData.tools || [];
+                        console.log(`[${convId}] Loaded ${tools.length} tools`);
+                    }
                 } catch (e) {
                     console.warn(`[${convId}] Failed to load tools:`, e);
                 }
 
                 // System prompt to encourage tool usage
+                // NOTE: System prompt is kept static for KV cache efficiency
+                // Dynamic time is injected into the first user message by the backend
                 const systemPrompt = tools.length > 0 ?
                     `You are Springo, a helpful AI assistant with access to various tools.
+
+**IMPORTANT: Do NOT use emojis in your responses or generated files.** Keep all output clean and text-based.
 
 IMPORTANT: When answering questions about current events, recent news, technical documentation, or anything that requires up-to-date information:
 1. ALWAYS use the available tools to search for information first
@@ -2873,9 +3202,9 @@ RULES (MUST follow ALL):
 
 Example workflow:
 - User: "anthropic最新的agent博客"
-- Search 1: brave_web_search(query="Anthropic agent blog 2025 2026 latest", freshness="pw") ✅
-- If need details: brave_web_search(query="<title from result> details", freshness="pw") ✅
-- WRONG: brave_web_search(query="Building Effective Agents") ❌ - this finds OLD content!
+- Search 1: brave_web_search(query="Anthropic agent blog 2025 2026 latest", freshness="pw") [CORRECT]
+- If need details: brave_web_search(query="<title from result> details", freshness="pw") [CORRECT]
+- WRONG: brave_web_search(query="Building Effective Agents") [WRONG - finds OLD content]
 
 WITHOUT freshness="pw", search returns OLD but popular results instead of newest!
 
@@ -2897,7 +3226,8 @@ Be concise and helpful in your responses.` : '';
                     messages: apiMessages,
                     tools: tools,  // Include tools so model can use them
                     stream: true,  // Enable streaming
-                    compact_model: settings.compactModel || 'claude-haiku-4-5-20251001'  // Model for context compaction
+                    compact_model: settings.compactModel || 'claude-haiku-4-5-20251001',  // Model for context compaction
+                    session_id: convId  // Session ID for tool-results storage (matches session directory)
                 };
                 console.log(`[${convId}] Request body (streaming):`, JSON.stringify(requestBody).substring(0, 200));
 
@@ -2926,8 +3256,24 @@ Be concise and helpful in your responses.` : '';
                 console.log(`[${convId}] Streaming response status:`, response.status);
 
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error?.message || `HTTP ${response.status}`);
+                    // Check if response is JSON before parsing
+                    const contentType = response.headers.get('content-type') || '';
+                    let errorMessage = `HTTP ${response.status}`;
+                    if (contentType.includes('application/json')) {
+                        try {
+                            const errorData = await response.json();
+                            errorMessage = errorData.error?.message || errorMessage;
+                        } catch (e) {
+                            console.warn(`[${convId}] Failed to parse error response as JSON`);
+                        }
+                    } else {
+                        // Non-JSON response (likely HTML error page)
+                        const text = await response.text();
+                        if (text.includes('<!doctype') || text.includes('<html')) {
+                            errorMessage = `Server returned HTML instead of JSON (status ${response.status}). The server may still be starting up - please wait a moment and try again.`;
+                        }
+                    }
+                    throw new Error(errorMessage);
                 }
 
                 // Remove thinking message from THIS conversation
@@ -3279,7 +3625,8 @@ Be concise and helpful in your responses.` : '';
                     role: 'assistant',
                     content: apiContent || text || '',
                     displayContent: displayContent,
-                    hasToolUse: toolUses.length > 0
+                    hasToolUse: toolUses.length > 0,
+                    timestamp: Date.now()
                 });
 
                 // ALWAYS render to create the DOM element when pushing new message
@@ -3690,20 +4037,37 @@ Be concise and helpful in your responses.` : '';
             try {
                 const res = await fetch(`${BASE_URL}/v1/mcp/servers`);
                 const data = await res.json();
-                const servers = data.servers || {};
-                const serverNames = Object.keys(servers);
+                const servers = data.servers || [];  // Now an array
 
-                if (serverNames.length === 0) {
-                    listEl.innerHTML = '<div class="settings-list-empty">No MCP servers connected</div>';
+                if (servers.length === 0) {
+                    listEl.innerHTML = '<div class="settings-list-empty">No MCP servers configured</div>';
                     return;
                 }
 
-                listEl.innerHTML = serverNames.map(name => {
-                    const server = servers[name];
+                listEl.innerHTML = servers.map(server => {
+                    const name = server.name;
                     const isRunning = server.running;
-                    const toolCount = server.tools_count || 0;
+                    const isEnabled = server.enabled !== false;
+                    const status = server.status || 'configured';
+                    const toolCount = server.tools || 0;
+                    const description = server.description || server.command || '';
+
+                    // Status display
+                    let statusClass = 'stopped';
+                    let statusText = 'Ready';
+                    if (!isEnabled) {
+                        statusClass = 'disabled';
+                        statusText = 'Disabled';
+                    } else if (isRunning) {
+                        statusClass = 'running';
+                        statusText = `Running (${toolCount} tools)`;
+                    } else if (status === 'error') {
+                        statusClass = 'error';
+                        statusText = 'Error';
+                    }
+
                     return `
-                        <div class="settings-list-item">
+                        <div class="settings-list-item ${!isEnabled ? 'disabled' : ''}">
                             <div class="item-icon">
                                 <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                                     <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
@@ -3712,12 +4076,12 @@ Be concise and helpful in your responses.` : '';
                                 </svg>
                             </div>
                             <div class="item-info">
-                                <div class="item-name">${name}</div>
-                                <div class="item-desc">${toolCount} tools available</div>
+                                <div class="item-name">${escapeHTML(name)}</div>
+                                <div class="item-desc">${escapeHTML(description)}</div>
                             </div>
-                            <span class="item-status ${isRunning ? 'running' : 'stopped'}">${isRunning ? 'Running' : 'Stopped'}</span>
+                            <span class="item-status ${statusClass}">${statusText}</span>
                             <div class="item-actions">
-                                <button class="danger" onclick="removeMcpServer('${name}')">Remove</button>
+                                <button class="danger" onclick="removeMcpServer('${escapeHTML(name)}')">Remove</button>
                             </div>
                         </div>
                     `;
@@ -3921,7 +4285,7 @@ Be concise and helpful in your responses.` : '';
                 const conv = conversations.find(c => c.id === currentConversationId);
                 if (conv) {
                     conv.workingDir = folder;
-                    localStorage.setItem('conversations', JSON.stringify(conversations));
+                    // Session saved to backend via SessionAPI
                 }
                 const runtime = getConvRuntime(currentConversationId);
                 if (runtime) {
@@ -4850,7 +5214,7 @@ Be concise and helpful in your responses.` : '';
                 const conv = conversations.find(c => c.id === currentConversationId);
                 if (conv) {
                     conv.todos = todos || [];
-                    localStorage.setItem('conversations', JSON.stringify(conversations));
+                    // Session saved to backend via SessionAPI
                 }
             }
 
@@ -5741,7 +6105,7 @@ ${content || 'Task completed successfully.'}
                     createdAt: Date.now()
                 };
                 conversations.unshift(newConv);
-                localStorage.setItem('conversations', JSON.stringify(conversations));
+                // Session saved to backend via SessionAPI
 
                 document.getElementById('chat-content').innerHTML = welcomeTemplate;
                 document.getElementById('header-title').textContent = 'New Chat';

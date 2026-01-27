@@ -23,6 +23,7 @@ import time
 import uuid
 import logging
 import os
+from datetime import datetime
 from typing import Generator
 from flask import Flask, request, Response, stream_with_context
 import boto3
@@ -133,15 +134,19 @@ def get_bedrock_client():
 # Default system prompt with tool usage guidelines
 DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
 
+## Communication Style
+
+**IMPORTANT: Do NOT use emojis in your responses or generated files.** Keep all output clean and text-based. No emoticons, no unicode symbols like checkmarks or crosses.
+
 ## CRITICAL: Always Use Absolute Paths
 
 **For ALL tool calls that accept file or directory paths, you MUST use absolute paths.**
 
-- ✓ Correct: `/Users/name/project/file.txt`
-- ✓ Correct: `~/.springo/skills/pptx/script.py` (~ expands to home directory)
-- ✗ Wrong: `file.txt` (relative path)
-- ✗ Wrong: `./project/file.txt` (relative path)
-- ✗ Wrong: `workspace/file.txt` (relative path)
+- Correct: `/Users/name/project/file.txt`
+- Correct: `~/.springo/skills/pptx/script.py` (~ expands to home directory)
+- Wrong: `file.txt` (relative path)
+- Wrong: `./project/file.txt` (relative path)
+- Wrong: `workspace/file.txt` (relative path)
 
 The working directory will be provided below. Use it to construct absolute paths.
 
@@ -277,24 +282,47 @@ def convert_anthropic_to_bedrock(anthropic_request: dict, include_tools: bool = 
             bedrock_body[key] = anthropic_request[key]
 
     # Add default system prompt with tool guidelines if not provided
-    # IMPORTANT: Dynamically inject the current working directory so the model knows where to create files
+    # NOTE: System prompt is kept static for KV cache efficiency
+    # Dynamic context (time) is injected into the first user message instead
     current_working_dir = get_working_dir()
+
+    # Static working directory info (changes infrequently, acceptable in system prompt)
     working_dir_info = ""
     if current_working_dir:
         working_dir_info = f"""
 
-## Current Working Directory
-**IMPORTANT**: The user has set the working directory to: `{current_working_dir}`
-- All file operations should be relative to this directory
-- When creating files/directories, use paths relative to this working directory
-- Example: To create a file at `{current_working_dir}/output/test.txt`, use path `output/test.txt`
+## Working Directory
+- **Path**: `{current_working_dir}`
+- All file operations should use absolute paths based on this directory
 """
 
     if "system" not in bedrock_body:
         bedrock_body["system"] = DEFAULT_SYSTEM_PROMPT + working_dir_info
     else:
-        # Append working directory info to existing system prompt
+        # Append working dir info to existing system prompt
         bedrock_body["system"] = bedrock_body["system"] + working_dir_info
+
+    # Inject dynamic time into the LAST user message (preserves KV cache for system prompt)
+    # This ensures each new request has current time, even in long-running sessions
+    if bedrock_body.get("messages"):
+        now = datetime.now()
+        weekday_names = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+        weekday = weekday_names[now.weekday()]
+        time_str = now.strftime('%Y-%m-%d %H:%M')
+        time_prefix = f"[Current time: {time_str} ({weekday})]\n\n"
+
+        # Find the LAST user message and prepend time
+        for i in range(len(bedrock_body["messages"]) - 1, -1, -1):
+            msg = bedrock_body["messages"][i]
+            if msg.get("role") == "user":
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    bedrock_body["messages"][i]["content"] = time_prefix + content
+                elif isinstance(content, list) and len(content) > 0:
+                    # Handle array content format
+                    if content[0].get("type") == "text":
+                        content[0]["text"] = time_prefix + content[0].get("text", "")
+                break  # Only modify the last user message
 
     # 自动添加 MCP 工具 (动态生成，包含技能列表)
     if include_tools and "tools" not in bedrock_body:
@@ -656,13 +684,34 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             except Exception as e:
                 result = {"error": str(e)}
 
+            # Handle large tool results (like Claude Code)
+            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+            result_size = len(result_str.encode('utf-8'))
+
+            # If result exceeds 64KB, save to file and return reference
+            if result_size > ctx_manager.MAX_INLINE_OUTPUT_SIZE:
+                # Get session_id from request context or generate one
+                session_id = anthropic_request.get('session_id', f"auto_{uuid.uuid4().hex[:8]}")
+                result_info = ctx_manager.save_tool_result(session_id, tool_id, result_str, tool_name)
+                logger.info(f"Large tool result saved: {tool_name} ({result_size:,} bytes) -> {result_info.get('file_path', 'inline')}")
+
+                # Use truncated content for API, but full result for frontend event
+                if not result_info.get('inline'):
+                    result_str = json.dumps({
+                        "result_truncated": True,
+                        "file_path": result_info.get('file_path'),
+                        "size": result_size,
+                        "preview": result_info.get('preview', result_str[:500]),
+                        "message": f"Result saved to file ({result_size:,} bytes). Use /v1/tool-results/{session_id}/{tool_id} to retrieve full content."
+                    })
+
             # 发送工具完成事件 (use tool_use_id and tool_name for consistency with api/messages.py)
             yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': tool_id, 'tool_name': tool_name, 'result': result})}\n\n"
 
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_id,
-                "content": json.dumps(result) if isinstance(result, dict) else str(result)
+                "content": result_str
             })
 
         yield f"event: tool_execution_complete\ndata: {json.dumps({'type': 'tool_execution_complete', 'count': len(tool_results)})}\n\n"
@@ -692,6 +741,7 @@ def handle_auto_nonstreaming(anthropic_request: dict, max_iterations: int = 1000
     from mcp_tools import execute_tool
 
     bedrock_client = get_bedrock_client()
+    ctx_manager = get_context_manager()
     original_model = anthropic_request.get("model", "claude-3-5-sonnet-20241022")
     messages = anthropic_request.get("messages", [])
     tools = anthropic_request.get("tools", [])
@@ -767,10 +817,29 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             except Exception as e:
                 result = {"error": str(e)}
 
+            # Handle large tool results (like Claude Code)
+            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+            result_size = len(result_str.encode('utf-8'))
+
+            # If result exceeds 64KB, save to file and return reference
+            if result_size > ctx_manager.MAX_INLINE_OUTPUT_SIZE:
+                session_id = anthropic_request.get('session_id', f"auto_{uuid.uuid4().hex[:8]}")
+                result_info = ctx_manager.save_tool_result(session_id, tool_id, result_str, tool_name)
+                logger.info(f"Large tool result saved: {tool_name} ({result_size:,} bytes)")
+
+                if not result_info.get('inline'):
+                    result_str = json.dumps({
+                        "result_truncated": True,
+                        "file_path": result_info.get('file_path'),
+                        "size": result_size,
+                        "preview": result_info.get('preview', result_str[:500]),
+                        "message": f"Result saved to file ({result_size:,} bytes)."
+                    })
+
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": tool_id,
-                "content": json.dumps(result) if isinstance(result, dict) else str(result)
+                "content": result_str
             })
 
         # 更新消息历史
@@ -1030,16 +1099,15 @@ def get_session(session_id):
 
 @app.route('/v1/sessions/<session_id>', methods=['POST'])
 def save_session_messages(session_id):
-    """保存消息到会话"""
+    """保存消息到会话（完整覆盖，类似 Claude Code 的 JSONL 格式）"""
     try:
         data = request.get_json()
         messages = data.get('messages', [])
+        metadata = data.get('metadata', {})
         ctx_manager = get_context_manager()
 
-        if isinstance(messages, list):
-            ctx_manager.save_messages(session_id, messages)
-        else:
-            ctx_manager.save_message(session_id, messages)
+        # Save complete session (overwrite mode for full sync)
+        ctx_manager.save_session_complete(session_id, messages, metadata)
 
         return Response(json.dumps({
             "success": True,
@@ -1080,6 +1148,109 @@ def get_session_hash():
         }), mimetype='application/json')
     except Exception as e:
         logger.error(f"Session hash error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+# ==================== Tool Result Management (like Claude Code) ====================
+
+@app.route('/v1/tool-results/<session_id>', methods=['GET'])
+def list_tool_results_api(session_id):
+    """List all tool results for a session"""
+    try:
+        ctx_manager = get_context_manager()
+        results = ctx_manager.list_tool_results(session_id)
+        return Response(json.dumps({
+            "session_id": session_id,
+            "results": results,
+            "count": len(results)
+        }), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"List tool results error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+@app.route('/v1/tool-results/<session_id>/<tool_use_id>', methods=['GET'])
+def get_tool_result_api(session_id, tool_use_id):
+    """Get a specific tool result content"""
+    try:
+        ctx_manager = get_context_manager()
+        # Use find_tool_result_file to search for files with new naming convention
+        file_path = ctx_manager.find_tool_result_file(session_id, tool_use_id)
+
+        if not file_path or not os.path.exists(file_path):
+            return Response(json.dumps({
+                "error": "Tool result not found",
+                "session_id": session_id,
+                "tool_use_id": tool_use_id
+            }), status=404, mimetype='application/json')
+
+        content = ctx_manager.load_tool_result(file_path)
+        return Response(json.dumps({
+            "session_id": session_id,
+            "tool_use_id": tool_use_id,
+            "content": content,
+            "size": len(content) if content else 0
+        }), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"Get tool result error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+@app.route('/v1/tool-results', methods=['POST'])
+def save_tool_result_api():
+    """
+    Save a tool result (auto-detects if it should be stored in file or inline).
+    Used when tool execution produces large output.
+
+    Request body:
+    {
+        "session_id": "...",
+        "tool_use_id": "...",
+        "tool_name": "...",  // optional
+        "result": "..."
+    }
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        tool_use_id = data.get('tool_use_id')
+        tool_name = data.get('tool_name')
+        result = data.get('result', '')
+
+        if not session_id or not tool_use_id:
+            return Response(json.dumps({
+                "error": "session_id and tool_use_id are required"
+            }), status=400, mimetype='application/json')
+
+        ctx_manager = get_context_manager()
+        result_info = ctx_manager.save_tool_result(session_id, tool_use_id, result, tool_name)
+
+        return Response(json.dumps(result_info), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"Save tool result error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+@app.route('/v1/tool-results/cleanup', methods=['POST'])
+def cleanup_tool_results_api():
+    """
+    Clean up old tool results.
+    Request body: {"max_age_days": 7}  // optional, defaults to 7
+    """
+    try:
+        data = request.get_json() or {}
+        max_age_days = data.get('max_age_days', 7)
+
+        ctx_manager = get_context_manager()
+        cleaned_count = ctx_manager.cleanup_old_tool_results(max_age_days)
+
+        return Response(json.dumps({
+            "success": True,
+            "cleaned_sessions": cleaned_count,
+            "max_age_days": max_age_days
+        }), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"Cleanup tool results error: {e}")
         return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
 
 
@@ -1385,11 +1556,11 @@ def working_dir_config():
 
 @app.route('/v1/mcp/servers', methods=['GET'])
 def list_mcp_servers():
-    """列出所有已连接的 MCP 服务器"""
+    """列出所有配置的 MCP 服务器（含状态：configured/running/error/disabled）"""
     manager = get_mcp_manager()
     return Response(
         json.dumps({
-            "servers": manager.get_status(),
+            "servers": manager.get_configured_servers(),
             "config_path": manager.config_path
         }),
         mimetype='application/json'
