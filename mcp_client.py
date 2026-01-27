@@ -35,8 +35,32 @@ class MCPServerConnection:
     def start(self) -> bool:
         """Start the MCP server process"""
         try:
-            # Prepare environment
+            # Prepare environment with extended PATH for bundled apps
             process_env = os.environ.copy()
+
+            # Add common tool paths that might be missing in bundled app
+            home = os.path.expanduser("~")
+            extra_paths = [
+                "/usr/local/bin",
+                "/opt/homebrew/bin",
+                "/opt/homebrew/sbin",
+                f"{home}/.local/bin",
+                f"{home}/.npm-global/bin",
+                f"{home}/.volta/bin",
+                f"{home}/.nvm/versions/node/*/bin",  # NVM
+                f"{home}/.asdf/shims",
+                f"{home}/.cargo/bin",
+                "/usr/bin",
+                "/bin",
+                "/usr/sbin",
+                "/sbin",
+            ]
+            current_path = process_env.get("PATH", "")
+            # Prepend extra paths to ensure tools are found
+            new_paths = [p for p in extra_paths if os.path.isdir(p) and p not in current_path]
+            if new_paths:
+                process_env["PATH"] = ":".join(new_paths) + ":" + current_path
+
             process_env.update(self.env)
 
             # Start the process
@@ -212,14 +236,84 @@ class MCPServerConnection:
 
 
 class MCPManager:
-    """Manages multiple MCP server connections"""
+    """Manages multiple MCP server connections with lazy loading"""
 
     def __init__(self, config_path: str = None):
-        self.servers: Dict[str, MCPServerConnection] = {}
+        self.servers: Dict[str, MCPServerConnection] = {}  # Running servers
+        self.server_configs: Dict[str, Dict] = {}  # Configured servers (not yet started)
         self.config_path = config_path or os.path.expanduser("~/.springo/mcp_servers.json")
+        self._config_loaded = False
+        # Tool cache for lazy loading placeholders
+        self._tools_cache_path = os.path.expanduser("~/.springo/mcp_tools_cache.json")
+        self._tools_cache: Dict[str, List[Dict]] = {}  # server_name -> list of tool definitions
+        self._load_tools_cache()
 
-    def load_config(self) -> bool:
-        """Load MCP server configuration from file"""
+    def _load_tools_cache(self) -> None:
+        """Load cached tool definitions from file and register as deferred tools"""
+        try:
+            if os.path.exists(self._tools_cache_path):
+                with open(self._tools_cache_path, 'r') as f:
+                    self._tools_cache = json.load(f)
+                logger.info(f"Loaded tool cache for {len(self._tools_cache)} servers")
+                # Register cached tools as deferred in tool registry
+                self._register_cached_tools_as_deferred()
+        except Exception as e:
+            logger.warning(f"Failed to load tool cache: {e}")
+            self._tools_cache = {}
+
+    def _register_cached_tools_as_deferred(self) -> None:
+        """Register cached tools as deferred in tool registry for lazy loading"""
+        try:
+            from tool_registry import get_tool_registry
+            registry = get_tool_registry()
+
+            total_tools = 0
+            for server_name, tools in self._tools_cache.items():
+                for tool in tools:
+                    tool_name = tool.get('name', '')
+                    description = tool.get('description', '')
+                    if tool_name:
+                        registry.register_deferred(
+                            name=tool_name,
+                            description=description,
+                            server_name=server_name
+                        )
+                        total_tools += 1
+
+            if total_tools > 0:
+                logger.info(f"Registered {total_tools} cached tools as deferred")
+        except Exception as e:
+            logger.warning(f"Failed to register cached tools as deferred: {e}")
+
+    def _save_tools_cache(self) -> None:
+        """Save tool definitions to cache file"""
+        try:
+            os.makedirs(os.path.dirname(self._tools_cache_path), exist_ok=True)
+            with open(self._tools_cache_path, 'w') as f:
+                json.dump(self._tools_cache, f, indent=2)
+            logger.debug(f"Saved tool cache for {len(self._tools_cache)} servers")
+        except Exception as e:
+            logger.warning(f"Failed to save tool cache: {e}")
+
+    def cache_server_tools(self, server_name: str, tools: List[Dict]) -> None:
+        """Cache tool definitions for a server"""
+        if tools:
+            self._tools_cache[server_name] = tools
+            self._save_tools_cache()
+
+    def get_cached_tools(self, server_name: str = None) -> Dict[str, List[Dict]]:
+        """Get cached tools for a server or all servers"""
+        if server_name:
+            return {server_name: self._tools_cache.get(server_name, [])}
+        return self._tools_cache.copy()
+
+    def load_config(self, lazy: bool = True) -> bool:
+        """Load MCP server configuration from file.
+
+        Args:
+            lazy: If True, only load config without starting servers (default).
+                  If False, start all servers immediately (parallel startup).
+        """
         if not os.path.exists(self.config_path):
             # Create default config
             self._create_default_config()
@@ -229,25 +323,150 @@ class MCPManager:
             with open(self.config_path, 'r') as f:
                 config = json.load(f)
 
+            # Store all server configurations
+            servers_to_start = []
             for server_config in config.get("servers", []):
                 name = server_config.get("name")
+                if not name:
+                    continue
+
                 # Skip disabled servers
                 if not server_config.get("enabled", True):
                     logger.info(f"Skipping disabled MCP server: {name}")
+                    # Still store config for UI display
+                    self.server_configs[name] = {**server_config, "status": "disabled"}
                     continue
-                if name and name not in self.servers:
-                    self.add_server(
-                        name=name,
-                        command=server_config.get("command"),
-                        args=server_config.get("args", []),
-                        env=server_config.get("env", {})
-                    )
+
+                # Store config for lazy loading
+                self.server_configs[name] = {**server_config, "status": "configured"}
+
+                if not lazy and name not in self.servers:
+                    servers_to_start.append(server_config)
+
+            self._config_loaded = True
+
+            # Start servers in parallel if not lazy
+            if not lazy and servers_to_start:
+                self._start_servers_parallel(servers_to_start)
 
             return True
 
         except Exception as e:
             logger.error(f"Failed to load MCP config: {e}")
             return False
+
+    def _start_servers_parallel(self, servers_to_start: List[Dict]) -> None:
+        """Start multiple servers in parallel"""
+        import concurrent.futures
+
+        def start_server(server_config):
+            name = server_config.get("name")
+            try:
+                server = MCPServerConnection(
+                    name=name,
+                    command=server_config.get("command"),
+                    args=server_config.get("args", []),
+                    env=server_config.get("env", {})
+                )
+                if server.start():
+                    return (name, server, None)
+                else:
+                    return (name, None, "Failed to start")
+            except Exception as e:
+                return (name, None, str(e))
+
+        # Use ThreadPoolExecutor for parallel startup
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(servers_to_start))) as executor:
+            futures = {executor.submit(start_server, cfg): cfg for cfg in servers_to_start}
+
+            for future in concurrent.futures.as_completed(futures):
+                name, server, error = future.result()
+                if server:
+                    self.servers[name] = server
+                    if name in self.server_configs:
+                        self.server_configs[name]["status"] = "running"
+                    # Cache discovered tools for future lazy loading
+                    if server.tools:
+                        self.cache_server_tools(name, server.get_tool_definitions())
+                    logger.info(f"Started MCP server: {name} with {len(server.tools)} tools")
+                else:
+                    if name in self.server_configs:
+                        self.server_configs[name]["status"] = "error"
+                        self.server_configs[name]["error"] = error
+                    logger.error(f"Failed to start MCP server {name}: {error}")
+
+    def ensure_server_started(self, server_name: str) -> bool:
+        """Ensure a specific server is started (lazy loading).
+
+        Returns True if server is running, False otherwise.
+        """
+        # Already running
+        if server_name in self.servers:
+            return True
+
+        # Load config if not loaded
+        if not self._config_loaded:
+            self.load_config(lazy=True)
+
+        # Check if server is configured
+        if server_name not in self.server_configs:
+            logger.warning(f"Server {server_name} not configured")
+            return False
+
+        config = self.server_configs[server_name]
+
+        # Skip disabled servers
+        if config.get("status") == "disabled":
+            logger.warning(f"Server {server_name} is disabled")
+            return False
+
+        # Start the server
+        logger.info(f"Lazy loading MCP server: {server_name}")
+        try:
+            server = MCPServerConnection(
+                name=server_name,
+                command=config.get("command"),
+                args=config.get("args", []),
+                env=config.get("env", {})
+            )
+            if server.start():
+                self.servers[server_name] = server
+                self.server_configs[server_name]["status"] = "running"
+                # Cache discovered tools for future lazy loading
+                if server.tools:
+                    self.cache_server_tools(server_name, server.get_tool_definitions())
+                logger.info(f"Lazy-loaded MCP server: {server_name} with {len(server.tools)} tools")
+                return True
+            else:
+                self.server_configs[server_name]["status"] = "error"
+                return False
+        except Exception as e:
+            logger.error(f"Failed to lazy-load MCP server {server_name}: {e}")
+            self.server_configs[server_name]["status"] = "error"
+            self.server_configs[server_name]["error"] = str(e)
+            return False
+
+    def get_configured_servers(self) -> List[Dict]:
+        """Get all configured servers with their status"""
+        if not self._config_loaded:
+            self.load_config(lazy=True)
+
+        result = []
+        for name, config in self.server_configs.items():
+            server_info = {
+                "name": name,
+                "command": config.get("command", ""),
+                "args": config.get("args", []),
+                "description": config.get("description", ""),
+                "enabled": config.get("enabled", True),
+                "status": config.get("status", "configured"),
+                "running": name in self.servers,
+                "tools": len(self.servers[name].tools) if name in self.servers else 0
+            }
+            if "error" in config:
+                server_info["error"] = config["error"]
+            result.append(server_info)
+        return result
 
     def _create_default_config(self):
         """Create default configuration file"""
@@ -279,7 +498,7 @@ class MCPManager:
 
         logger.info(f"Created default MCP config at {self.config_path}")
 
-    def add_server(self, name: str, command: str, args: List[str] = None, env: Dict[str, str] = None) -> bool:
+    def add_server(self, name: str, command: str, args: List[str] = None, env: Dict[str, str] = None, description: str = "") -> bool:
         """Add and start an MCP server"""
         if name in self.servers:
             logger.warning(f"Server {name} already exists")
@@ -288,6 +507,16 @@ class MCPManager:
         server = MCPServerConnection(name, command, args, env)
         if server.start():
             self.servers[name] = server
+            # Also update server_configs for UI display
+            self.server_configs[name] = {
+                "name": name,
+                "command": command,
+                "args": args or [],
+                "env": env or {},
+                "description": description,
+                "enabled": True,
+                "status": "running"
+            }
             logger.info(f"Started MCP server: {name}")
             return True
         else:
@@ -299,6 +528,9 @@ class MCPManager:
         if name in self.servers:
             self.servers[name].stop()
             del self.servers[name]
+        # Also remove from server_configs
+        if name in self.server_configs:
+            del self.server_configs[name]
 
     def get_all_tools(self) -> List[Dict[str, Any]]:
         """Get all tool definitions from all servers"""
@@ -375,16 +607,46 @@ def get_mcp_manager() -> MCPManager:
     return _mcp_manager
 
 
-def initialize_mcp_servers() -> bool:
-    """Initialize MCP servers from configuration and register tools as deferred"""
-    manager = get_mcp_manager()
-    success = manager.load_config()
+def initialize_mcp_servers(lazy: bool = True) -> bool:
+    """Initialize MCP servers from configuration.
 
-    # Register all discovered tools as deferred (lazy loading)
-    if success:
+    Args:
+        lazy: If True (default), only load config without starting servers.
+              Servers will be started on first tool use or explicit start.
+              If False, start all servers immediately with parallel startup.
+    """
+    manager = get_mcp_manager()
+    success = manager.load_config(lazy=lazy)
+
+    # Register tools as deferred only if servers were started
+    if success and not lazy:
         manager.register_tools_as_deferred()
 
     return success
+
+
+def start_all_mcp_servers() -> bool:
+    """Start all configured MCP servers (parallel startup).
+
+    Call this when MCP tools are first needed.
+    """
+    manager = get_mcp_manager()
+
+    # Ensure config is loaded
+    if not manager._config_loaded:
+        manager.load_config(lazy=True)
+
+    # Get servers that need to be started
+    servers_to_start = []
+    for name, config in manager.server_configs.items():
+        if name not in manager.servers and config.get("status") != "disabled":
+            servers_to_start.append(config)
+
+    if servers_to_start:
+        manager._start_servers_parallel(servers_to_start)
+        manager.register_tools_as_deferred()
+
+    return len(manager.servers) > 0
 
 
 def get_mcp_tools() -> List[Dict[str, Any]]:

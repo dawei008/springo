@@ -44,6 +44,7 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 
 | Task | Best Tool | Avoid |
 |------|-----------|-------|
+| Check current time/date | `execute_command` with `date` | guessing the date |
 | Find files by pattern | `glob` | bash find/ls |
 | Search file content | `grep` | bash grep/rg |
 | Read single file | `read_file` | bash cat |
@@ -57,12 +58,13 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 
 ## Best Practices
 
-1. **Use parallel tool calls** when operations are independent
-2. **Prefer specialized tools** over bash commands
-3. **Background tasks** for long operations (use run_in_background=true)
-4. **Use edit for modifications**, write_file for new files
-5. **Reduce round trips** - chain related commands with &&
-6. **Avoid truncation** - keep content under 500 lines per file
+1. **Check current time first** when tasks involve dates, deadlines, or searching for "latest/recent" content - use `execute_command` with `date +"%Y-%m-%d"` or `date +"%Y"`
+2. **Use parallel tool calls** when operations are independent
+3. **Prefer specialized tools** over bash commands
+4. **Background tasks** for long operations (use run_in_background=true)
+5. **Use edit for modifications**, write_file for new files
+6. **Reduce round trips** - chain related commands with &&
+7. **Avoid truncation** - keep content under 500 lines per file
 """
 
 

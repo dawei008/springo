@@ -33,6 +33,12 @@
       "renderer/**/*",
       "assets/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "../dist/springo-backend",
+        "to": "backend/springo-backend"
+      }
+    ],
     "directories": {
       "output": "dist"
     }

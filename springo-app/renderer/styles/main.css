@@ -554,6 +554,12 @@
             font-weight: 500;
         }
 
+        .message-time {
+            font-size: 11px;
+            color: var(--text-tertiary, #888);
+            margin-left: auto;
+        }
+
         .message-content {
             padding-left: 36px;
             line-height: 1.6;
@@ -3151,3 +3157,37 @@
             border: none;
             color: white;
         }
+
+/* ============================================
+   Clickable URLs and File Paths
+   ============================================ */
+
+.clickable-url,
+.clickable-path {
+    color: var(--accent);
+    text-decoration: none;
+    cursor: pointer;
+    border-bottom: 1px dotted var(--accent);
+    transition: all 0.15s ease;
+}
+
+.clickable-url:hover,
+.clickable-path:hover {
+    color: var(--accent-hover, var(--accent));
+    border-bottom-style: solid;
+    background-color: rgba(var(--accent-rgb, 59, 130, 246), 0.1);
+    border-radius: 2px;
+    padding: 0 2px;
+    margin: 0 -2px;
+}
+
+.clickable-path {
+    font-family: 'SF Mono', 'Monaco', 'Menlo', monospace;
+    font-size: 0.95em;
+}
+
+/* Dark theme adjustments */
+[data-theme="dark"] .clickable-url:hover,
+[data-theme="dark"] .clickable-path:hover {
+    background-color: rgba(96, 165, 250, 0.15);
+}

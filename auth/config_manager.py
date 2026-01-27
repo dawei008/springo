@@ -364,59 +364,84 @@ AWS_DEFAULT_REGION={region}
         return self.validate_credentials()
 
     def get_status(self) -> Dict[str, Any]:
-        """获取当前认证状态"""
+        """获取当前认证状态 - 自动检测可用凭证
+
+        检测顺序：
+        1. 环境变量 (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
+        2. AWS Profile (~/.aws/credentials)
+        3. .env 文件 (~/.springo/.env)
+        """
         status = {
-            "method": self._config.method.value,
+            "method": None,
             "region": self._config.region,
             "configured": False,
             "connected": False
         }
 
-        if self._config.method == AuthMethod.AWS_PROFILE:
-            status["profile_name"] = self._config.profile_name
-            status["configured"] = bool(self._config.profile_name)
-
-        elif self._config.method == AuthMethod.MANUAL_KEYS:
-            status["access_key_id"] = self._config.access_key_id[:8] + "***" if self._config.access_key_id else None
-            status["configured"] = bool(self._config.access_key_id and self._config.secret_access_key)
-
-        elif self._config.method == AuthMethod.SSO:
-            status["sso_start_url"] = self._config.sso_start_url
-            status["sso_account_id"] = self._config.sso_account_id
-            status["sso_role_name"] = self._config.sso_role_name
-            status["configured"] = bool(self._config.sso_access_token)
-
-            if self._config.sso_token_expiry:
-                status["token_expires_at"] = self._config.sso_token_expiry
-                status["token_valid"] = time.time() < self._config.sso_token_expiry
-
-        elif self._config.method == AuthMethod.ENV_VARS:
-            # 检查环境变量是否设置
-            has_key = bool(os.environ.get('AWS_ACCESS_KEY_ID'))
-            has_secret = bool(os.environ.get('AWS_SECRET_ACCESS_KEY'))
-            status["env_vars_set"] = {"AWS_ACCESS_KEY_ID": has_key, "AWS_SECRET_ACCESS_KEY": has_secret}
-            status["configured"] = has_key and has_secret
-
-        elif self._config.method == AuthMethod.ENV_FILE:
-            # 检查 .env 文件
-            env_creds = self.get_env_file_credentials()
-            status["access_key_id"] = env_creds.get("access_key_id")
-            status["region"] = env_creds.get("region") or self._config.region
-            status["env_file_exists"] = self.ENV_FILE.exists()
-            status["configured"] = self.ENV_FILE.exists()
-
-        # 验证连接
-        if status["configured"]:
-            validation = self.validate_credentials()
-            status["connected"] = validation.get("valid", False)
-            if validation.get("valid"):
+        # 1. 首先检查环境变量
+        env_key = os.environ.get('AWS_ACCESS_KEY_ID')
+        env_secret = os.environ.get('AWS_SECRET_ACCESS_KEY')
+        if env_key and env_secret:
+            status["method"] = "env_vars"
+            status["configured"] = True
+            # 验证连接
+            try:
+                boto_config = Config(region_name=self._config.region)
+                sts = boto3.client('sts', config=boto_config)
+                identity = sts.get_caller_identity()
+                status["connected"] = True
                 status["identity"] = {
-                    "account": validation.get("account"),
-                    "arn": validation.get("arn")
+                    "account": identity['Account'],
+                    "arn": identity['Arn']
                 }
-            else:
-                status["error"] = validation.get("error")
+                return status
+            except Exception as e:
+                status["error"] = str(e)
+                # 继续尝试其他方法
 
+        # 2. 检查 AWS Profile (~/.aws/credentials)
+        aws_creds_file = Path.home() / '.aws' / 'credentials'
+        if aws_creds_file.exists():
+            try:
+                boto_config = Config(region_name=self._config.region)
+                session = boto3.Session(profile_name='default')
+                sts = session.client('sts', config=boto_config)
+                identity = sts.get_caller_identity()
+                status["method"] = "aws_profile"
+                status["profile_name"] = "default"
+                status["configured"] = True
+                status["connected"] = True
+                status["identity"] = {
+                    "account": identity['Account'],
+                    "arn": identity['Arn']
+                }
+                return status
+            except Exception as e:
+                logger.debug(f"AWS Profile auth failed: {e}")
+                # 继续尝试其他方法
+
+        # 3. 检查 .env 文件
+        if self.ENV_FILE.exists():
+            self.load_env_file()
+            env_key = os.environ.get('AWS_ACCESS_KEY_ID')
+            env_secret = os.environ.get('AWS_SECRET_ACCESS_KEY')
+            if env_key and env_secret:
+                status["method"] = "env_file"
+                status["configured"] = True
+                try:
+                    boto_config = Config(region_name=self._config.region)
+                    sts = boto3.client('sts', config=boto_config)
+                    identity = sts.get_caller_identity()
+                    status["connected"] = True
+                    status["identity"] = {
+                        "account": identity['Account'],
+                        "arn": identity['Arn']
+                    }
+                    return status
+                except Exception as e:
+                    status["error"] = str(e)
+
+        # 没有找到可用凭证
         return status
 
     # ==================== SSO 相关方法 ====================

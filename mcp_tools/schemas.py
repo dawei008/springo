@@ -257,7 +257,13 @@ tool_search(query="strands long term memory", auto_activate=true)
             "type": "object",
             "properties": {
                 "skill_name": {"type": "string", "description": "The name of the skill"},
-                "user_request": {"type": "string", "description": "The user's original request"}
+                "user_request": {"type": "string", "description": "The user's original request"},
+                "inject_mode": {
+                    "type": "string",
+                    "enum": ["system", "result"],
+                    "default": "system",
+                    "description": "How to inject skill: 'system' (Claude Code style, inject into system prompt) or 'result' (return in tool_result)"
+                }
             },
             "required": ["skill_name"]
         }

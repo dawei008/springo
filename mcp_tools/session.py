@@ -13,7 +13,8 @@ _session_state: Dict[str, Any] = {
     "pending_plan": None,
     "pending_question": None,
     "context_summary": None,
-    "background_agents": {}
+    "background_agents": {},
+    "active_skill": None  # Claude Code style: store activated skill for injection
 }
 
 
@@ -32,7 +33,8 @@ def reset_session_state():
         "pending_plan": None,
         "pending_question": None,
         "context_summary": None,
-        "background_agents": {}
+        "background_agents": {},
+        "active_skill": None
     }
 
 
@@ -92,3 +94,33 @@ def remove_background_agent(agent_id: str):
     """Remove a background agent"""
     if agent_id in _session_state["background_agents"]:
         del _session_state["background_agents"][agent_id]
+
+
+# ==================== Active Skill Management (Claude Code Style) ====================
+
+def get_active_skill() -> Dict[str, Any]:
+    """Get currently activated skill for system prompt injection"""
+    return _session_state.get("active_skill")
+
+
+def set_active_skill(skill_info: Dict[str, Any]):
+    """Set active skill - will be injected into next system prompt
+
+    skill_info should contain:
+    - name: skill name
+    - instructions: full skill instructions
+    - user_request: original user request (optional)
+    """
+    _session_state["active_skill"] = skill_info
+
+
+def clear_active_skill():
+    """Clear active skill after it has been injected"""
+    _session_state["active_skill"] = None
+
+
+def consume_active_skill() -> Dict[str, Any]:
+    """Get and clear active skill (one-time consumption for injection)"""
+    skill = _session_state.get("active_skill")
+    _session_state["active_skill"] = None
+    return skill

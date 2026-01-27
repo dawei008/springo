@@ -45,15 +45,23 @@ process.stderr?.on?.('error', (err) => {
 // Disable Electron's default error dialog for EPIPE
 // This will be set after app is ready
 
-// Enable remote debugging for Playwright testing (always enabled for E2E testing)
-const DEBUG_PORT = process.env.ELECTRON_DEBUG_PORT || '9222';
-app.commandLine.appendSwitch('remote-debugging-port', DEBUG_PORT);
+// Enable remote debugging for development/testing only (disabled in packaged app)
+const isDev = !app.isPackaged;
+const DEBUG_PORT = process.env.ELECTRON_DEBUG_PORT || (isDev ? '9222' : null);
+if (DEBUG_PORT) {
+    app.commandLine.appendSwitch('remote-debugging-port', DEBUG_PORT);
+}
 
 let mainWindow;
 let serverProcess = null;
 
 // 服务器配置
 const SERVER_URL = 'http://127.0.0.1:8080';
+// In development: use python3 with script
+// In packaged app: use bundled executable
+const SERVER_EXECUTABLE = app.isPackaged
+    ? path.join(process.resourcesPath, 'backend', 'springo-backend')
+    : null;
 const SERVER_SCRIPT = path.join(__dirname, '..', 'full_proxy_server.py');
 
 function createWindow() {
@@ -209,10 +217,21 @@ function startServer() {
             .catch(() => {
                 // 服务器未运行，启动它
                 console.log('Starting server...');
-                serverProcess = spawn('python3', [SERVER_SCRIPT, '--port', '8080'], {
-                    cwd: path.dirname(SERVER_SCRIPT),
-                    stdio: ['ignore', 'pipe', 'pipe']
-                });
+
+                // Use bundled executable in packaged app, python3 in development
+                if (SERVER_EXECUTABLE) {
+                    console.log('Using bundled executable:', SERVER_EXECUTABLE);
+                    serverProcess = spawn(SERVER_EXECUTABLE, ['--port', '8080'], {
+                        cwd: path.dirname(SERVER_EXECUTABLE),
+                        stdio: ['ignore', 'pipe', 'pipe']
+                    });
+                } else {
+                    console.log('Using python3 with script:', SERVER_SCRIPT);
+                    serverProcess = spawn('python3', [SERVER_SCRIPT, '--port', '8080'], {
+                        cwd: path.dirname(SERVER_SCRIPT),
+                        stdio: ['ignore', 'pipe', 'pipe']
+                    });
+                }
 
                 serverProcess.stdout.on('data', (data) => {
                     console.log(`Server: ${data}`);
@@ -236,12 +255,13 @@ function startServer() {
                         })
                         .catch(() => {
                             attempts++;
-                            if (attempts > 30) {
+                            // Wait up to 60 seconds (MCP servers can take 20+ seconds to start)
+                            if (attempts > 60) {
                                 clearInterval(checkServer);
                                 reject(new Error('Server failed to start'));
                             }
                         });
-                }, 500);
+                }, 1000);
             });
     });
 }
@@ -279,7 +299,12 @@ ipcMain.handle('open-folder', async (event, folderPath) => {
 
 // Open file/folder with system default application
 ipcMain.handle('open-path', async (event, filePath) => {
-    return shell.openPath(filePath);
+    // Expand ~ to home directory
+    let expandedPath = filePath;
+    if (filePath.startsWith('~/')) {
+        expandedPath = path.join(require('os').homedir(), filePath.slice(2));
+    }
+    return shell.openPath(expandedPath);
 });
 
 // Open URL in default browser (new tab in Chrome)

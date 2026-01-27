@@ -8,6 +8,7 @@ import logging
 from typing import Any, Dict, List
 
 from .schemas import TOOL_DEFINITIONS
+
 from .handlers import (
     # File tools
     read_file, write_file, list_directory, search_files,
@@ -109,19 +110,32 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
     if "__" in tool_name:
         try:
             from tool_registry import get_tool_registry
-            from mcp_client import call_mcp_tool
+            from mcp_client import call_mcp_tool, get_mcp_manager
 
             registry = get_tool_registry()
+            manager = get_mcp_manager()
 
-            # Check if tool is active (lazy loading check)
+            # Extract server name from tool name
+            server_name = tool_name.split("__")[0]
+
+            # Auto-activate: ensure server is started and tool is registered
             if not registry.is_active(tool_name):
-                if registry.is_deferred(tool_name):
-                    return {
-                        "error": f"Tool '{tool_name}' is deferred and must be activated first. "
-                                 f"Use tool_search with query 'select:{tool_name}' to activate it."
-                    }
-                else:
-                    return {"error": f"Unknown MCP tool: {tool_name}"}
+                # Start the server if not running (lazy loading)
+                if server_name not in manager.servers:
+                    if not manager.ensure_server_started(server_name):
+                        return {"error": f"Failed to start MCP server: {server_name}"}
+
+                # Register/activate the tool from the running server
+                if server_name in manager.servers:
+                    server = manager.servers[server_name]
+                    for tool_def in server.get_tool_definitions():
+                        if tool_def.get("name") == tool_name:
+                            registry.activate(tool_name, tool_def)
+                            break
+
+                # Final check
+                if not registry.is_active(tool_name):
+                    return {"error": f"Tool '{tool_name}' not found on server {server_name}"}
 
             result = call_mcp_tool(tool_name, tool_input)
             return result
@@ -190,23 +204,77 @@ Call this tool with the skill_name and the user's original request."""
                 tool["description"] = "Execute a skill (skill loader not installed)"
                 break
 
-    # Add only ACTIVE MCP tools (lazy loading pattern)
+    # Add MCP tools (lazy loading pattern with caching)
     try:
         from tool_registry import get_tool_registry
+        from mcp_client import get_mcp_manager
 
         registry = get_tool_registry()
+        manager = get_mcp_manager()
 
+        # Get active tools (already loaded from running servers)
         active_mcp_tools = registry.get_active_tools()
+        active_tool_names = {t['name'] for t in active_mcp_tools} if active_mcp_tools else set()
+
         if active_mcp_tools:
             tools.extend(active_mcp_tools)
 
-        # Update tool_search description with deferred tools list
+        # Add cached MCP tool placeholders for enabled servers (lazy loading)
+        # These allow Claude to call MCP tools directly without needing to search first
+        configured_servers = manager.get_configured_servers()
+        enabled_server_names = {
+            s['name'] for s in configured_servers
+            if s.get('enabled', True) and s.get('status') != 'disabled'
+        }
+
+        # Get cached tools from previous server discoveries
+        cached_tools = manager.get_cached_tools()
+
+        for server_name, server_tools in cached_tools.items():
+            if server_name in enabled_server_names:
+                for tool_def in server_tools:
+                    # Don't add if already active (server is running and tool is loaded)
+                    if tool_def['name'] not in active_tool_names:
+                        # Add note that this tool will auto-activate
+                        placeholder_tool = copy.deepcopy(tool_def)
+                        if "(Auto-loads" not in placeholder_tool.get('description', ''):
+                            placeholder_tool['description'] = placeholder_tool.get('description', '') + " (Auto-loads on first use)"
+                        tools.append(placeholder_tool)
+                        active_tool_names.add(tool_def['name'])  # Prevent duplicates
+
+        # Also list all available servers in tool_search for discovery of other tools
         deferred = registry.get_deferred_tools()
+        enabled_servers = [s for s in configured_servers if s.get('enabled', True) and s.get('status') != 'disabled']
+
+        mcp_info_parts = []
+
         if deferred:
-            deferred_list = "\n".join([f"- {t['name']}" for t in deferred])
+            deferred_list = "\n".join([f"- {t['name']}" for t in deferred[:30]])
+            mcp_info_parts.append(f"**Activated MCP tools:**\n{deferred_list}")
+
+        if enabled_servers:
+            server_list = []
+            for s in enabled_servers:
+                name = s['name']
+                desc = s.get('description', '')
+                running = s.get('running', False)
+                tools_count = s.get('tools', 0)
+                cached_count = len(cached_tools.get(name, []))
+                if running:
+                    status = f"({tools_count} tools)"
+                elif cached_count > 0:
+                    status = f"({cached_count} cached tools, auto-loads)"
+                else:
+                    status = "(not loaded yet)"
+                server_list.append(f"- {name}: {desc} {status}")
+
+            mcp_info_parts.append(f"**Available MCP servers:**\n" + "\n".join(server_list))
+            mcp_info_parts.append("Use tool_search to discover more tools from these servers.")
+
+        if mcp_info_parts:
             for tool in tools:
                 if tool["name"] == "tool_search":
-                    tool["description"] += f"\n\n**Available deferred tools (must be loaded before use):**\n{deferred_list}"
+                    tool["description"] += "\n\n" + "\n\n".join(mcp_info_parts)
                     break
 
     except Exception as e:

@@ -92,14 +92,35 @@ def messages_auto_api():
         original_model = anthropic_request.get("model", "claude-3-5-sonnet-20241022")
         bedrock_client = get_bedrock_client()
 
+        # Get compact model from request (default: Haiku 4.5 for cost efficiency)
+        compact_model = anthropic_request.get("compact_model", "claude-haiku-4-5-20251001")
+
         def handle_auto_streaming():
-            """Handle streaming with automatic tool execution"""
+            """Handle streaming with automatic tool execution
+
+            Claude Code 风格：基于 context 窗口自动 compact，而非固定迭代次数
+            """
+            from context_manager import get_context_manager
+            ctx_manager = get_context_manager()
+
             messages = list(bedrock_body.get("messages", []))
-            max_iterations = 10
+            # Claude Code 风格：基于 context 窗口，1000 仅作为安全上限
+            max_iterations = 1000
             iteration = 0
 
             while iteration < max_iterations:
                 iteration += 1
+
+                # Context 检查和自动 compact
+                if ctx_manager.should_summarize(messages):
+                    logger.info(f"Context approaching limit, compacting with {compact_model}... (iteration {iteration})")
+                    yield f"event: context_compact\ndata: {json.dumps({'type': 'context_compact', 'reason': 'approaching_limit', 'model': compact_model})}\n\n"
+                    try:
+                        messages = ctx_manager.summarize_messages(messages, model=compact_model)
+                        logger.info(f"Context compacted, now {len(messages)} messages")
+                    except Exception as e:
+                        logger.warning(f"Context compact failed: {e}, continuing anyway")
+
                 current_body = bedrock_body.copy()
                 current_body["messages"] = messages
 
@@ -193,6 +214,9 @@ def messages_auto_api():
 
                         # Send tool result event
                         yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': tu['id'], 'tool_name': tu['name'], 'result': result})}\n\n"
+
+                    # Send tool execution complete event
+                    yield f"event: tool_execution_complete\ndata: {json.dumps({'type': 'tool_execution_complete', 'count': len(tool_results)})}\n\n"
 
                     messages.append({"role": "user", "content": tool_results})
                 else:

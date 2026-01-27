@@ -53,10 +53,12 @@ def get_working_dir() -> str:
 def resolve_path(path: str = None, default_to_working_dir: bool = True) -> str:
     """Resolve path, using working directory as default if set"""
     if path:
+        # First expand ~ to handle home directory paths
+        expanded_path = os.path.expanduser(path)
         # If path is relative and working dir is set, resolve relative to working dir
-        if not os.path.isabs(path) and _working_dir:
-            return os.path.abspath(os.path.join(_working_dir, path))
-        return os.path.abspath(os.path.expanduser(path))
+        if not os.path.isabs(expanded_path) and _working_dir:
+            return os.path.abspath(os.path.join(_working_dir, expanded_path))
+        return os.path.abspath(expanded_path)
     elif default_to_working_dir and _working_dir:
         return _working_dir
     else:
@@ -2945,7 +2947,7 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
     Search for and optionally activate deferred tools.
 
     With auto_activate=True (default), automatically activates the best matching tool,
-    saving one API round-trip compared to search-then-select pattern.
+    starting the MCP server if needed.
     """
     try:
         from tool_registry import get_tool_registry
@@ -2954,9 +2956,9 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
         registry = get_tool_registry()
         manager = get_mcp_manager()
 
-        # Helper function to activate a tool by name
-        def activate_tool(tool_name: str) -> Dict[str, Any]:
-            """Activate a deferred tool and return its info"""
+        # Helper function to activate a tool by starting server if needed
+        def activate_tool_with_server(tool_name: str) -> Dict[str, Any]:
+            """Activate a tool by starting its server if needed"""
             if registry.is_active(tool_name):
                 return {
                     "status": "already_active",
@@ -2964,39 +2966,37 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
                     "message": f"Tool '{tool_name}' is already active and ready to use."
                 }
 
-            if not registry.is_deferred(tool_name):
-                return {
-                    "status": "not_found",
-                    "message": f"Tool '{tool_name}' not found in registry."
-                }
+            # Extract server name
+            if "__" not in tool_name:
+                return {"status": "error", "message": f"Invalid tool name format: {tool_name}"}
 
-            # Get the full definition from MCP manager
-            if "__" in tool_name:
-                server_name = tool_name.split("__")[0]
+            server_name = tool_name.split("__")[0]
 
-                if server_name in manager.servers:
-                    server = manager.servers[server_name]
-                    # Find the tool definition
-                    for tool_def in server.get_tool_definitions():
-                        if tool_def["name"] == tool_name:
-                            registry.activate(tool_name, tool_def)
-                            return {
-                                "status": "activated",
-                                "tool": tool_name,
-                                "description": tool_def.get("description", "")[:500],
-                                "input_schema": tool_def.get("input_schema", {}),
-                                "message": f"Tool '{tool_name}' is now ACTIVE. Call it directly with the parameters shown in input_schema."
-                            }
+            # Start server if not running (lazy loading)
+            if server_name not in manager.servers:
+                if not manager.ensure_server_started(server_name):
+                    return {"status": "error", "message": f"Failed to start MCP server: {server_name}"}
 
-            return {
-                "status": "error",
-                "message": f"Could not activate tool '{tool_name}'. Server may not be running."
-            }
+            # Get tool definition from running server
+            if server_name in manager.servers:
+                server = manager.servers[server_name]
+                for tool_def in server.get_tool_definitions():
+                    if tool_def.get("name") == tool_name:
+                        registry.activate(tool_name, tool_def)
+                        return {
+                            "status": "activated",
+                            "tool": tool_name,
+                            "description": tool_def.get("description", "")[:500],
+                            "input_schema": tool_def.get("input_schema", {}),
+                            "message": f"Tool '{tool_name}' is now ACTIVE. Call it directly."
+                        }
+
+            return {"status": "error", "message": f"Tool '{tool_name}' not found on server {server_name}"}
 
         # Handle direct selection with activation
         if query.startswith("select:"):
             tool_name = query[7:].strip()
-            return activate_tool(tool_name)
+            return activate_tool_with_server(tool_name)
 
         # Keyword search
         results = registry.search(query, max_results)
@@ -3006,26 +3006,35 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
             best_match = results[0]
             if best_match.get("status") == "deferred" and best_match.get("score", 0) >= 0.3:
                 tool_name = best_match["name"]
-                activation_result = activate_tool(tool_name)
+                activation_result = activate_tool_with_server(tool_name)
 
-                # Return combined result with search context
                 return {
                     "status": "auto_activated",
                     "query": query,
                     "activated_tool": activation_result,
-                    "other_matches": results[1:5],  # Show other options
-                    "message": f"Auto-activated best match: '{tool_name}'. You can now call it directly. Other matches shown in 'other_matches' if needed."
+                    "other_matches": results[1:5],
+                    "message": f"Auto-activated best match: '{tool_name}'. You can now call it directly."
                 }
 
-        # No auto-activation (either disabled or no good matches)
-        deferred = registry.get_deferred_tools()
+        # No results found - provide helpful message
+        if not results:
+            configured = manager.get_configured_servers()
+            enabled = [s['name'] for s in configured if s.get('enabled', True)]
+            return {
+                "status": "no_results",
+                "query": query,
+                "available_servers": enabled,
+                "message": f"No matching tools found. Available MCP servers: {', '.join(enabled)}. Try server__toolname format."
+            }
 
+        # Results found but no auto-activation
+        deferred = registry.get_deferred_tools()
         return {
             "status": "search_results",
             "query": query,
             "results": results,
             "total_deferred": len(deferred),
-            "message": "Search complete. Use auto_activate=true next time for faster workflow, or call tool_search with 'select:<tool_name>' to activate a specific tool."
+            "message": "Search complete. Use select:<tool_name> to activate a specific tool."
         }
 
     except Exception as e:
@@ -3107,20 +3116,32 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
     if "__" in tool_name:
         try:
             from tool_registry import get_tool_registry
-            from mcp_client import call_mcp_tool
+            from mcp_client import call_mcp_tool, get_mcp_manager
 
             registry = get_tool_registry()
+            manager = get_mcp_manager()
 
-            # Check if tool is active (lazy loading check)
+            # Extract server name from tool name
+            server_name = tool_name.split("__")[0]
+
+            # Auto-activate: ensure server is started and tool is registered
             if not registry.is_active(tool_name):
-                # Check if it's deferred
-                if registry.is_deferred(tool_name):
-                    return {
-                        "error": f"Tool '{tool_name}' is deferred and must be activated first. "
-                                 f"Use tool_search with query 'select:{tool_name}' to activate it."
-                    }
-                else:
-                    return {"error": f"Unknown MCP tool: {tool_name}"}
+                # Start the server if not running (lazy loading)
+                if server_name not in manager.servers:
+                    if not manager.ensure_server_started(server_name):
+                        return {"error": f"Failed to start MCP server: {server_name}"}
+
+                # Register/activate the tool from the running server
+                if server_name in manager.servers:
+                    server = manager.servers[server_name]
+                    for tool_def in server.get_tool_definitions():
+                        if tool_def.get("name") == tool_name:
+                            registry.activate(tool_name, tool_def)
+                            break
+
+                # Final check
+                if not registry.is_active(tool_name):
+                    return {"error": f"Tool '{tool_name}' not found on server {server_name}"}
 
             result = call_mcp_tool(tool_name, tool_input)
             return result
@@ -3202,24 +3223,77 @@ The tool will return detailed instructions for completing the task."""
                 tool["description"] = "Execute a skill (skill loader not installed)"
                 break
 
-    # Add only ACTIVE MCP tools (lazy loading pattern)
+    # Add MCP tools (lazy loading pattern with caching)
     try:
         from tool_registry import get_tool_registry
+        from mcp_client import get_mcp_manager
 
         registry = get_tool_registry()
+        manager = get_mcp_manager()
 
-        # Get active tools
+        # Get active tools (already loaded from running servers)
         active_mcp_tools = registry.get_active_tools()
+        active_tool_names = {t['name'] for t in active_mcp_tools} if active_mcp_tools else set()
+
         if active_mcp_tools:
             tools.extend(active_mcp_tools)
 
-        # Update tool_search description with deferred tools list
+        # Add cached MCP tool placeholders for enabled servers (lazy loading)
+        # These allow Claude to call MCP tools directly without needing to search first
+        configured_servers = manager.get_configured_servers()
+        enabled_server_names = {
+            s['name'] for s in configured_servers
+            if s.get('enabled', True) and s.get('status') != 'disabled'
+        }
+
+        # Get cached tools from previous server discoveries
+        cached_tools = manager.get_cached_tools()
+
+        for server_name, server_tools in cached_tools.items():
+            if server_name in enabled_server_names:
+                for tool_def in server_tools:
+                    # Don't add if already active (server is running and tool is loaded)
+                    if tool_def['name'] not in active_tool_names:
+                        # Add note that this tool will auto-activate
+                        placeholder_tool = copy.deepcopy(tool_def)
+                        if "(Auto-loads" not in placeholder_tool.get('description', ''):
+                            placeholder_tool['description'] = placeholder_tool.get('description', '') + " (Auto-loads on first use)"
+                        tools.append(placeholder_tool)
+                        active_tool_names.add(tool_def['name'])  # Prevent duplicates
+
+        # Also list all available servers in tool_search for discovery of other tools
         deferred = registry.get_deferred_tools()
+        enabled_servers = [s for s in configured_servers if s.get('enabled', True) and s.get('status') != 'disabled']
+
+        mcp_info_parts = []
+
         if deferred:
-            deferred_list = "\n".join([f"- {t['name']}" for t in deferred])
+            deferred_list = "\n".join([f"- {t['name']}" for t in deferred[:30]])
+            mcp_info_parts.append(f"**Activated MCP tools:**\n{deferred_list}")
+
+        if enabled_servers:
+            server_list = []
+            for s in enabled_servers:
+                name = s['name']
+                desc = s.get('description', '')
+                running = s.get('running', False)
+                tools_count = s.get('tools', 0)
+                cached_count = len(cached_tools.get(name, []))
+                if running:
+                    status = f"({tools_count} tools)"
+                elif cached_count > 0:
+                    status = f"({cached_count} cached tools, auto-loads)"
+                else:
+                    status = "(not loaded yet)"
+                server_list.append(f"- {name}: {desc} {status}")
+
+            mcp_info_parts.append(f"**Available MCP servers:**\n" + "\n".join(server_list))
+            mcp_info_parts.append("Use tool_search to discover more tools from these servers.")
+
+        if mcp_info_parts:
             for tool in tools:
                 if tool["name"] == "tool_search":
-                    tool["description"] += f"\n\n**Available deferred tools (must be loaded before use):**\n{deferred_list}"
+                    tool["description"] += "\n\n" + "\n\n".join(mcp_info_parts)
                     break
 
     except Exception as e:

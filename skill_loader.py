@@ -36,8 +36,8 @@ class SkillLoader:
 
     def __init__(self, skills_dir: str = None):
         if skills_dir is None:
-            # Default to skills directory relative to this file
-            skills_dir = os.path.join(os.path.dirname(__file__), "skills")
+            # Default to ~/.springo/skills/ (user config directory)
+            skills_dir = os.path.expanduser("~/.springo/skills")
         self.skills_dir = Path(skills_dir)
         self.skills: Dict[str, Skill] = {}
         self._load_all_skills()
@@ -75,11 +75,25 @@ class SkillLoader:
             name = frontmatter.get('name', skill_path.name)
             description = frontmatter.get('description', '')
 
+            # Inject skill path into instructions using ~/.springo format for portability
+            # This allows skill instructions to reference resources with correct paths
+            skill_path_resolved = str(skill_path.resolve())
+            # Use ~/.springo format instead of expanded home directory
+            skill_path_str = f"~/.springo/skills/{skill_path.name}"
+            enhanced_instructions = f"""**Skill Location**: `{skill_path_str}`
+
+When referencing files in this skill (scripts, templates, etc.), use the path above.
+For example: `{skill_path_str}/html2pptx.md` or `{skill_path_str}/scripts/convert.py`
+
+---
+
+{instructions}"""
+
             skill = Skill(
                 name=name,
                 description=description,
-                instructions=instructions,
-                path=str(skill_path)
+                instructions=enhanced_instructions,
+                path=skill_path_resolved  # Store resolved path for internal use
             )
 
             # Load additional resources (scripts, templates, etc.)
