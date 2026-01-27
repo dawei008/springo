@@ -269,7 +269,7 @@
         // Working folders state
         let workingFolders = JSON.parse(localStorage.getItem('workingFolders') || '[]');
         let currentWorkingDir = localStorage.getItem('currentWorkingDir') || ''; // 当前选中的工作目录
-        let defaultWorkingFolder = localStorage.getItem('defaultWorkingFolder') || ''; // 默认工作目录，新建会话时自动使用
+        let defaultWorkingFolder = localStorage.getItem('defaultWorkingFolder') || '~/Downloads'; // 默认工作目录，新建会话时自动使用
 
 
         // Skills state
@@ -316,6 +316,10 @@
             }
 
             loadSettings();
+
+            // Ensure default working folder is in workspace list
+            ensureDefaultFolderInWorkspace();
+
             renderWorkingFolders();
 
             // Load conversations from backend JSONL storage
@@ -1223,10 +1227,15 @@
             try {
                 // If no workingDir and should prompt, check for default folder first
                 if (!workingDir && promptForDir) {
-                    // Use default folder if set and exists in workingFolders
-                    if (defaultWorkingFolder && workingFolders.includes(defaultWorkingFolder)) {
+                    // Use default folder if set (no longer requires it to be in workingFolders)
+                    if (defaultWorkingFolder) {
                         workingDir = defaultWorkingFolder;
                         console.log('Using default folder:', workingDir);
+                        // Ensure it's in workspace and set as active
+                        ensureDefaultFolderInWorkspace();
+                        currentWorkingDir = workingDir;
+                        localStorage.setItem('currentWorkingDir', workingDir);
+                        renderWorkingFolders();
                     } else if (workingFolders.length > 0) {
                         // Has workspace folders but no default - show selector dialog
                         console.log('No default folder, showing workspace selector');
@@ -3822,6 +3831,8 @@ Be concise and helpful in your responses.` : '';
         // Settings
         function openSettings() {
             document.getElementById('settings-modal').classList.add('active');
+            // Load default working directory
+            document.getElementById('settings-default-workdir').value = defaultWorkingFolder || '~/Downloads';
             document.getElementById('settings-model').value = settings.model || 'claude-sonnet-4-5-20250929';
             document.getElementById('settings-max-tokens').value = settings.maxTokens || 16384;
             document.getElementById('settings-temperature').value = settings.temperature || 0.7;
@@ -3837,6 +3848,16 @@ Be concise and helpful in your responses.` : '';
 
         function closeSettings() {
             document.getElementById('settings-modal').classList.remove('active');
+            // Save default working directory
+            const newDefaultWorkdir = document.getElementById('settings-default-workdir').value.trim();
+            if (newDefaultWorkdir && newDefaultWorkdir !== defaultWorkingFolder) {
+                defaultWorkingFolder = newDefaultWorkdir;
+                localStorage.setItem('defaultWorkingFolder', defaultWorkingFolder);
+                console.log('Default working directory updated to:', defaultWorkingFolder);
+                // Add to workspace if not already there
+                ensureDefaultFolderInWorkspace();
+                renderWorkingFolders();
+            }
             settings.model = document.getElementById('settings-model').value;
             settings.maxTokens = document.getElementById('settings-max-tokens').value;
             settings.temperature = document.getElementById('settings-temperature').value;
@@ -4203,6 +4224,27 @@ Be concise and helpful in your responses.` : '';
         function renderToolExecutionSidebar() {}
         function clearToolExecutions() {}
 
+        // Ensure default working folder is in workspace list
+        function ensureDefaultFolderInWorkspace() {
+            if (!defaultWorkingFolder) return;
+
+            // Check if the default folder (or its expanded version) is already in workspace
+            const isInWorkspace = workingFolders.some(f => {
+                // Direct match
+                if (f === defaultWorkingFolder) return true;
+                // Check if one is ~ version and other is expanded
+                const fNorm = f.startsWith('~/') ? f : f;
+                const defNorm = defaultWorkingFolder.startsWith('~/') ? defaultWorkingFolder : defaultWorkingFolder;
+                return fNorm === defNorm;
+            });
+
+            if (!isInWorkspace) {
+                workingFolders.unshift(defaultWorkingFolder); // Add to beginning
+                localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+                console.log('Added default working folder to workspace:', defaultWorkingFolder);
+            }
+        }
+
         // ========== Workspace Functions ==========
 
         function renderWorkingFolders() {
@@ -4257,16 +4299,11 @@ Be concise and helpful in your responses.` : '';
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
                         </svg>
                         <span class="folder-name" title="${folder}">${name}</span>
-                        <button class="set-default-btn" onclick="setDefaultFolder('${escapedFolder}', event)" title="${isDefault ? 'Default folder for new chats' : 'Set as default for new chats'}">
-                            <svg width="12" height="12" fill="${isDefault ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-                            </svg>
-                        </button>
-                        <button class="remove-folder" onclick="removeWorkingFolder(${index}, event)" title="Remove folder">
+                        ${isDefault ? '' : `<button class="remove-folder" onclick="removeWorkingFolder(${index}, event)" title="Remove folder">
                             <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2">
                                 <path d="M2 2l8 8M10 2l-8 8"/>
                             </svg>
-                        </button>
+                        </button>`}
                     </div>
                 `;
             }).join('');
@@ -4316,6 +4353,27 @@ Be concise and helpful in your responses.` : '';
                 console.log('Default folder set to:', folder);
             }
             renderWorkingFolders();
+        }
+
+        // Browse for default working directory (Settings dialog)
+        async function browseDefaultWorkdir() {
+            if (window.electronAPI?.selectFolder) {
+                const folders = await window.electronAPI.selectFolder();
+                if (folders && folders.length > 0) {
+                    const folder = folders[0];
+                    document.getElementById('settings-default-workdir').value = folder;
+                    // Also update the variable and localStorage immediately
+                    defaultWorkingFolder = folder;
+                    localStorage.setItem('defaultWorkingFolder', folder);
+                    console.log('Default working directory selected:', folder);
+                    // Add to workspace if not already there
+                    ensureDefaultFolderInWorkspace();
+                    renderWorkingFolders();
+                }
+            } else {
+                // Fallback: use the text input directly
+                alert('Folder selection not available. Please enter the path manually.');
+            }
         }
 
         // 工作目录选择器变更处理

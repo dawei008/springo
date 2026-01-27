@@ -283,6 +283,23 @@
                 </button>
             </div>
             <div class="modal-body">
+                <!-- Default Working Directory Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Default Working Directory</h3>
+                <div class="setting-group">
+                    <label>Path</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="settings-default-workdir" placeholder="~/Downloads" style="flex: 1;">
+                        <button onclick="browseDefaultWorkdir()" class="browse-btn">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="hint">Default folder for new chats. Use absolute path (e.g., ~/Downloads)</div>
+                </div>
+
+                <div class="setting-divider"></div>
+
                 <!-- AWS Credentials Section -->
                 <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AWS Credentials</h3>
                 <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
@@ -291,7 +308,7 @@
                 </div>
                 <div class="setting-group">
                     <label>Access Key ID</label>
-                    <input type="text" id="settings-aws-access-key" placeholder="AKIA...">
+                    <input type="text" id="settings-aws-access-key" placeholder="Enter your access key">
                 </div>
                 <div class="setting-group">
                     <label>Secret Access Key</label>

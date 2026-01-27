@@ -1530,11 +1530,13 @@ def working_dir_config():
         try:
             data = request.get_json()
             working_dir = data.get('working_dir', '')
-            if working_dir and os.path.isdir(working_dir):
-                set_working_dir(working_dir)
-                logger.info(f"Working directory updated: {working_dir}")
+            # Expand ~ to user's home directory before validation
+            expanded_dir = os.path.expanduser(working_dir) if working_dir else ''
+            if expanded_dir and os.path.isdir(expanded_dir):
+                set_working_dir(working_dir)  # set_working_dir will expand again, that's fine
+                logger.info(f"Working directory updated: {expanded_dir}")
                 return Response(
-                    json.dumps({"success": True, "working_dir": working_dir}),
+                    json.dumps({"success": True, "working_dir": expanded_dir}),
                     mimetype='application/json'
                 )
             else:

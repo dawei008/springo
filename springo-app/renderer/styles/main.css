@@ -1388,6 +1388,25 @@
             background: var(--bg-secondary);
         }
 
+        /* Browse button (folder icon style) */
+        .browse-btn {
+            padding: 8px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+        }
+        .browse-btn:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            border-color: var(--text-tertiary);
+        }
+
         /* Status Bar */
         .status-bar {
             padding: 6px 16px;
@@ -2539,7 +2558,7 @@
         }
 
         .folder-item.active .status-dot {
-            background: var(--accent);
+            background: #3b82f6; /* Blue for active folder */
         }
 
         .folder-item.active .folder-name {
@@ -2650,6 +2669,10 @@
         .folder-item.default .set-default-btn {
             opacity: 1;
             color: var(--accent);
+        }
+
+        .folder-item.default .status-dot {
+            background: #f59e0b !important; /* Yellow/amber for default folder */
         }
 
         /* File Browser Panel (macOS Finder style) */
