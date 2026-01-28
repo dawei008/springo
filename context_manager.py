@@ -21,6 +21,15 @@ try:
 except ImportError:
     HAS_TIKTOKEN = False
 
+# Optional memory sync import
+try:
+    from memory_sync import get_sync_manager, init_memory_sync
+    HAS_MEMORY_SYNC = True
+except ImportError:
+    HAS_MEMORY_SYNC = False
+    get_sync_manager = lambda: None
+    init_memory_sync = lambda *args, **kwargs: False
+
 
 class ContextManager:
     """
@@ -61,6 +70,14 @@ class ContextManager:
         # OPTIMIZATION 2: Token count cache (message hash -> token count)
         self._token_cache: Dict[str, int] = {}
         self._token_cache_max_size = 1000  # Limit cache size
+
+        # Initialize memory sync (async upload to AgentCore Memory)
+        self._memory_sync_enabled = False
+        if HAS_MEMORY_SYNC:
+            try:
+                self._memory_sync_enabled = init_memory_sync()
+            except Exception as e:
+                print(f"[ContextManager] Memory sync init failed: {e}")
 
     # ========== Token Counting ==========
 
@@ -449,6 +466,13 @@ class ContextManager:
         with open(session_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
+        # Async upload to AgentCore Memory (non-blocking)
+        if self._memory_sync_enabled:
+            sync_mgr = get_sync_manager()
+            if sync_mgr:
+                actor = "assistant" if message.get("role") == "assistant" else "user"
+                sync_mgr.queue_message(session_id, message, actor)
+
     def save_messages(self, session_id: str, messages: List[Dict[str, Any]]):
         """Save multiple messages to the session JSONL file (append mode)"""
         session_dir = self.get_session_dir(session_id)
@@ -461,6 +485,12 @@ class ContextManager:
                     "message": message
                 }
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        # Async upload to AgentCore Memory (non-blocking)
+        if self._memory_sync_enabled:
+            sync_mgr = get_sync_manager()
+            if sync_mgr:
+                sync_mgr.queue_conversation(session_id, messages)
 
     def save_session_complete(self, session_id: str, messages: List[Dict[str, Any]], metadata: Dict[str, Any] = None):
         """Save complete session to JSONL file (overwrite mode, like Claude Code)
