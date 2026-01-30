@@ -67,10 +67,17 @@ class AuthConfig:
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> 'AuthConfig':
-        """从字典创建"""
-        if 'method' in d:
-            d['method'] = AuthMethod(d['method'])
-        return cls(**d)
+        """从字典创建（忽略未知字段如 memory 等）"""
+        # 只保留 AuthConfig 定义的字段
+        valid_fields = {
+            'method', 'profile_name', 'access_key_id', 'secret_access_key',
+            'session_token', 'region', 'sso_start_url', 'sso_region',
+            'sso_account_id', 'sso_role_name', 'sso_access_token', 'sso_token_expiry'
+        }
+        filtered = {k: v for k, v in d.items() if k in valid_fields}
+        if 'method' in filtered:
+            filtered['method'] = AuthMethod(filtered['method'])
+        return cls(**filtered)
 
 
 class AuthConfigManager:

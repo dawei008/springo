@@ -1094,18 +1094,47 @@
             display: flex;
         }
 
-        .model-selector {
+        .memory-sync-status {
             font-size: 12px;
             color: var(--text-tertiary);
-            text-align: center;
+            text-align: right;
             margin-top: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 6px;
+            cursor: pointer;
         }
 
-        .model-selector select {
-            background: none;
-            border: none;
+        .memory-sync-status:hover {
             color: var(--text-secondary);
-            cursor: pointer;
+        }
+
+        .sync-icon {
+            font-size: 10px;
+            transition: color 0.3s ease;
+        }
+
+        .sync-icon.synced {
+            color: #27ae60;
+        }
+
+        .sync-icon.syncing {
+            color: #f39c12;
+            animation: pulse 1.5s infinite;
+        }
+
+        .sync-icon.error {
+            color: #e74c3c;
+        }
+
+        .sync-icon.disabled {
+            color: #95a5a6;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
         }
 
         /* Settings Modal */

@@ -317,6 +317,9 @@
 
             loadSettings();
 
+            // Start Memory sync status updates
+            startMemorySyncStatusUpdates();
+
             // Ensure default working folder is in workspace list
             ensureDefaultFolderInWorkspace();
 
@@ -3122,7 +3125,7 @@
             const abortController = resetAbortController(convId);
             const abortSignal = abortController.signal;
 
-            const model = document.getElementById('model-select').value;
+            const model = settings.model || 'claude-opus-4-5-20251101';  // Fixed to Opus 4.5
             const maxTokens = parseInt(settings.maxTokens || 16384);
             const temperature = parseFloat(settings.temperature || 0.7);
 
@@ -3841,6 +3844,8 @@ Be concise and helpful in your responses.` : '';
             document.getElementById('settings-compact-model').value = settings.compactModel || 'claude-haiku-4-5-20251001';
             // Load AWS credentials settings
             loadAwsSettings();
+            // Load Memory settings
+            loadMemorySettings();
             // Load Skills and MCP servers lists
             loadSkillsList();
             loadMcpServersList();
@@ -3863,18 +3868,18 @@ Be concise and helpful in your responses.` : '';
             settings.temperature = document.getElementById('settings-temperature').value;
             settings.compactModel = document.getElementById('settings-compact-model').value;
             localStorage.setItem('settings', JSON.stringify(settings));
-            document.getElementById('model-select').value = settings.model;
+            // Model select was removed - model is fixed to Opus 4.5
             // Save AWS credentials
             saveAwsSettings();
+            // Save Memory settings
+            saveMemorySettings();
         }
 
         function loadSettings() {
             // Migrate old model settings to 4.5 defaults
             migrateSettings();
 
-            if (settings.model) {
-                document.getElementById('model-select').value = settings.model;
-            }
+            // Model select was removed - model is fixed to Opus 4.5
             // Always use light theme by default
             setTheme('light');
         }
@@ -3904,7 +3909,7 @@ Be concise and helpful in your responses.` : '';
         }
 
         function saveSettings() {
-            settings.model = document.getElementById('model-select').value;
+            // Model is fixed to Opus 4.5, no need to save from selector
             localStorage.setItem('settings', JSON.stringify(settings));
         }
 
@@ -3988,6 +3993,155 @@ Be concise and helpful in your responses.` : '';
                 btn.disabled = false;
                 btn.textContent = 'Test Connection';
             }
+        }
+
+        // ==================== Memory Settings ====================
+
+        async function loadMemorySettings() {
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/memory`);
+                const data = await res.json();
+
+                document.getElementById('settings-memory-enabled').checked = data.memory_enabled !== false;
+                document.getElementById('settings-memory-id').value = data.memory_id || '';
+                document.getElementById('settings-memory-region').value = data.memory_region || 'us-west-2';
+
+                // Show status
+                const statusEl = document.getElementById('memory-connection-status');
+                if (data.memory_id && data.memory_enabled) {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Configured</span>';
+                } else if (!data.memory_enabled) {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Disabled</span>';
+                } else {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not configured</span>';
+                }
+            } catch (e) {
+                console.log('Failed to load Memory settings:', e);
+                document.getElementById('memory-connection-status').innerHTML = '';
+            }
+        }
+
+        async function saveMemorySettings() {
+            const enabled = document.getElementById('settings-memory-enabled').checked;
+            const memoryId = document.getElementById('settings-memory-id').value.trim();
+            const region = document.getElementById('settings-memory-region').value;
+
+            try {
+                await fetch(`${BASE_URL}/v1/config/memory`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        memory_enabled: enabled,
+                        memory_id: memoryId,
+                        memory_region: region
+                    })
+                });
+                console.log('Memory settings saved');
+            } catch (e) {
+                console.error('Failed to save Memory settings:', e);
+            }
+        }
+
+        async function testMemoryConnection() {
+            const btn = document.getElementById('test-memory-btn');
+            const statusEl = document.getElementById('memory-connection-status');
+
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+            statusEl.innerHTML = '';
+
+            // Save settings first
+            await saveMemorySettings();
+
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/memory/test`);
+                const data = await res.json();
+
+                if (data.success) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ Connected</span>`;
+                } else {
+                    statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
+                }
+            } catch (e) {
+                statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Test Connection';
+            }
+        }
+
+        // ==================== Memory Sync Status ====================
+        let memorySyncStatusInterval = null;
+
+        async function updateMemorySyncStatus() {
+            const iconEl = document.getElementById('sync-icon');
+            const textEl = document.getElementById('sync-text');
+
+            console.log('[Memory] Updating sync status, elements:', !!iconEl, !!textEl);
+
+            if (!iconEl || !textEl) {
+                console.log('[Memory] Elements not found, skipping');
+                return;
+            }
+
+            try {
+                const res = await fetch(`${BASE_URL}/v1/memory/status`);
+                const data = await res.json();
+                console.log('[Memory] Status response:', data);
+
+                // Update icon class
+                iconEl.className = 'sync-icon';
+
+                switch (data.status) {
+                    case 'synced':
+                        iconEl.classList.add('synced');
+                        textEl.textContent = `Synced: ${data.sessions_synced} sessions`;
+                        break;
+                    case 'syncing':
+                        iconEl.classList.add('syncing');
+                        textEl.textContent = `Syncing... (${data.pending} pending)`;
+                        break;
+                    case 'disabled':
+                        iconEl.classList.add('disabled');
+                        textEl.textContent = 'Memory: off';
+                        break;
+                    case 'not_running':
+                        iconEl.classList.add('disabled');
+                        textEl.textContent = 'Memory: stopped';
+                        break;
+                    case 'error':
+                        iconEl.classList.add('error');
+                        textEl.textContent = 'Memory: error';
+                        break;
+                    default:
+                        iconEl.classList.add('disabled');
+                        textEl.textContent = 'Memory: --';
+                }
+
+                // Add tooltip with details
+                document.getElementById('memory-sync-status').title =
+                    `AgentCore Memory Sync\n` +
+                    `Memory ID: ${data.memory_id || 'N/A'}\n` +
+                    `Region: ${data.region || 'N/A'}\n` +
+                    `Sessions: ${data.sessions_synced || 0}\n` +
+                    `Total Events: ${data.total_events || 0}`;
+
+            } catch (e) {
+                console.error('[Memory] Error fetching status:', e);
+                iconEl.className = 'sync-icon error';
+                textEl.textContent = 'Memory: offline';
+            }
+        }
+
+        function startMemorySyncStatusUpdates() {
+            console.log('[Memory] Starting sync status updates');
+            // Update immediately
+            updateMemorySyncStatus();
+            // Then update every 10 seconds
+            if (memorySyncStatusInterval) {
+                clearInterval(memorySyncStatusInterval);
+            }
+            memorySyncStatusInterval = setInterval(updateMemorySyncStatus, 10000);
         }
 
         // ==================== Skills Management ====================

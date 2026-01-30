@@ -247,12 +247,9 @@
                         </svg>
                     </button>
                 </div>
-                <div class="model-selector">
-                    Using <select id="model-select" onchange="saveSettings()">
-                        <option value="claude-opus-4-5-20251101" selected>Claude Opus 4.5 (Recommended)</option>
-                        <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
-                        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-                    </select>
+                <div class="memory-sync-status" id="memory-sync-status" title="AgentCore Memory Sync Status">
+                    <span class="sync-icon" id="sync-icon">●</span>
+                    <span id="sync-text">Memory: checking...</span>
                 </div>
             </div>
         </div>
@@ -318,6 +315,38 @@
                 <div class="setting-group" style="margin-top: 12px;">
                     <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
                     <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                </div>
+
+                <div class="setting-divider"></div>
+
+                <!-- AgentCore Memory Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
+                <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
+                    Sync conversations to AWS Bedrock AgentCore Memory for persistent storage.
+                </div>
+                <div class="setting-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
+                        Enable Memory Sync
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label>Memory ID</label>
+                    <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
+                </div>
+                <div class="setting-group">
+                    <label>Memory Region</label>
+                    <select id="settings-memory-region">
+                        <option value="us-west-2">us-west-2 (Oregon)</option>
+                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                    </select>
+                </div>
+                <div class="hint">Memory ID can be created via AgentCore CLI or API</div>
+                <div class="setting-group" style="margin-top: 12px;">
+                    <button onclick="testMemoryConnection()" id="test-memory-btn">Test Connection</button>
+                    <span id="memory-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
                 </div>
 
                 <div class="setting-divider"></div>

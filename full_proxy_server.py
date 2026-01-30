@@ -50,6 +50,9 @@ from skill_loader import get_skill_loader
 # 错误处理模块
 from error_handler import format_error_response, get_user_friendly_message, should_retry, get_http_status
 
+# Memory 同步模块
+from memory_sync import init_memory_sync, shutdown_memory_sync
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
@@ -1518,6 +1521,171 @@ def aws_test_connection():
         )
 
 
+@app.route('/v1/config/memory', methods=['GET', 'POST'])
+def memory_config():
+    """获取或设置 AgentCore Memory 配置"""
+    from memory_sync import load_memory_config, save_memory_config, get_memory_config
+
+    if request.method == 'GET':
+        config = get_memory_config()
+        return Response(
+            json.dumps(config),
+            mimetype='application/json'
+        )
+    else:
+        try:
+            data = request.get_json()
+            new_config = {
+                "memory_id": data.get('memory_id', ''),
+                "memory_region": data.get('memory_region', 'us-west-2'),
+                "memory_enabled": data.get('memory_enabled', True)
+            }
+            if save_memory_config(new_config):
+                logger.info(f"Memory config updated: {new_config.get('memory_id')}")
+                return Response(
+                    json.dumps({"success": True}),
+                    mimetype='application/json'
+                )
+            else:
+                return Response(
+                    json.dumps({"error": "Failed to save config"}),
+                    status=500,
+                    mimetype='application/json'
+                )
+        except Exception as e:
+            logger.error(f"Memory config error: {e}")
+            return Response(
+                json.dumps({"error": str(e)}),
+                status=500,
+                mimetype='application/json'
+            )
+
+
+@app.route('/v1/config/memory/test', methods=['GET'])
+def memory_test_connection():
+    """测试 AgentCore Memory 连接"""
+    from memory_sync import get_memory_config
+
+    try:
+        config = get_memory_config()
+        if not config.get('memory_id'):
+            return Response(
+                json.dumps({"success": False, "error": "Memory ID not configured"}),
+                mimetype='application/json'
+            )
+
+        if not config.get('memory_enabled'):
+            return Response(
+                json.dumps({"success": False, "error": "Memory sync is disabled"}),
+                mimetype='application/json'
+            )
+
+        # Try to connect to AgentCore Memory using data plane API
+        import boto3
+        client = boto3.client('bedrock-agentcore', region_name=config['memory_region'])
+
+        # Use list_actors to verify connection - only requires memoryId
+        response = client.list_actors(
+            memoryId=config['memory_id'],
+            maxResults=1
+        )
+
+        return Response(
+            json.dumps({
+                "success": True,
+                "memory_id": config['memory_id'],
+                "region": config['memory_region']
+            }),
+            mimetype='application/json'
+        )
+    except Exception as e:
+        error_msg = str(e)
+        # Check for specific error types
+        if 'ResourceNotFoundException' in error_msg:
+            error_msg = f"Memory '{config.get('memory_id')}' not found"
+        elif 'AccessDeniedException' in error_msg:
+            error_msg = "Access denied - check IAM permissions"
+
+        logger.error(f"Memory test error: {e}")
+        return Response(
+            json.dumps({"success": False, "error": error_msg}),
+            mimetype='application/json'
+        )
+
+
+@app.route('/v1/memory/status', methods=['GET'])
+def memory_sync_status():
+    """获取 AgentCore Memory 同步状态"""
+    from memory_sync import get_memory_config, get_sync_manager
+    import os
+    import json as json_module
+
+    try:
+        config = get_memory_config()
+        sync_manager = get_sync_manager()
+
+        # Base status
+        status = {
+            "enabled": config.get('memory_enabled', False),
+            "memory_id": config.get('memory_id', ''),
+            "region": config.get('memory_region', 'us-west-2'),
+            "running": sync_manager is not None,
+            "sessions_synced": 0,
+            "total_events": 0,
+            "pending": 0
+        }
+
+        if not config.get('memory_enabled') or not config.get('memory_id'):
+            status["status"] = "disabled"
+            return Response(json.dumps(status), mimetype='application/json')
+
+        if sync_manager is None:
+            status["status"] = "not_running"
+            return Response(json.dumps(status), mimetype='application/json')
+
+        # Count synced sessions and events
+        sessions_dir = os.path.expanduser("~/.springo/sessions")
+        if os.path.exists(sessions_dir):
+            synced_sessions = 0
+            total_synced = 0
+
+            for session_id in os.listdir(sessions_dir):
+                sync_file = os.path.join(sessions_dir, session_id, ".sync_state.json")
+                if os.path.exists(sync_file):
+                    try:
+                        with open(sync_file, 'r') as f:
+                            state = json_module.load(f)
+                            if state.get("last_synced_index", -1) >= 0:
+                                synced_sessions += 1
+                                total_synced += state.get("total_synced", 0)
+                    except Exception:
+                        pass
+
+            status["sessions_synced"] = synced_sessions
+            status["total_events"] = total_synced
+
+        # Check queue size (approximate pending count)
+        try:
+            status["pending"] = sync_manager.upload_queue.qsize()
+        except Exception:
+            pass
+
+        # Determine status
+        if status["pending"] > 0:
+            status["status"] = "syncing"
+        else:
+            status["status"] = "synced"
+
+        return Response(json.dumps(status), mimetype='application/json')
+
+    except Exception as e:
+        logger.error(f"Memory status error: {e}")
+        return Response(
+            json.dumps({"status": "error", "error": str(e)}),
+            mimetype='application/json'
+        )
+
+
 @app.route('/v1/config/working-dir', methods=['GET', 'POST'])
 def working_dir_config():
     """获取或设置当前工作目录"""
@@ -1836,5 +2004,18 @@ if __name__ == '__main__':
                 logger.info(f"Pre-activated tools: {activated}")
     except Exception as e:
         logger.warning(f"MCP auto-init failed: {e}")
+
+    # 初始化 AgentCore Memory 同步
+    try:
+        if init_memory_sync():
+            print("    ✓ AgentCore Memory 同步已启动")
+        else:
+            print("    - AgentCore Memory 同步未启用 (检查配置)")
+    except Exception as e:
+        logger.warning(f"Memory sync init failed: {e}")
+
+    # 注册退出处理
+    import atexit
+    atexit.register(shutdown_memory_sync)
 
     app.run(host=args.host, port=port, debug=debug_mode, threaded=True, ssl_context=ssl_context)

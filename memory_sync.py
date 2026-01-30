@@ -5,6 +5,18 @@ AgentCore Memory Sync Module for Springo
 - 本地优先：消息先存本地 JSONL，确保不丢失
 - 异步上传：后台线程批量上传到 AgentCore Memory
 - 失败重试：上传失败自动重试，记录状态
+
+配置项（~/.springo/config.json 中的 memory 节）：
+- memory_id: Memory ID
+- memory_region: Memory 所在区域
+- memory_enabled: 是否启用 memory sync (默认 true)
+- batch_size: 批量上传大小 (默认 5)
+- batch_timeout: 批量超时秒数 (默认 30)
+
+环境变量（优先级高于配置文件）：
+- SPRINGO_MEMORY_ID
+- SPRINGO_MEMORY_REGION
+- SPRINGO_MEMORY_ENABLED
 """
 
 import os
@@ -19,15 +31,107 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
-# AgentCore Memory 配置
-MEMORY_ID = "springo_memory-b6trnrDLSN"
-MEMORY_REGION = "us-west-2"
+# 配置文件路径
+CONFIG_DIR = os.path.expanduser("~/.springo")
+CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+SESSIONS_DIR = os.path.join(CONFIG_DIR, "sessions")
 
-# 同步配置
-BATCH_SIZE = 5  # 每批上传消息数
-BATCH_TIMEOUT = 30  # 批量超时秒数
-MAX_RETRIES = 3  # 最大重试次数
-RETRY_DELAY = 5  # 重试延迟秒数
+# 默认配置
+DEFAULT_MEMORY_CONFIG = {
+    "memory_id": "",  # 必须配置
+    "memory_region": "us-west-2",
+    "memory_enabled": True,
+    "batch_size": 5,
+    "batch_timeout": 30,
+    "max_retries": 3,
+    "retry_delay": 5,
+    "sync_check_delay": 2
+}
+
+# 同步状态文件名
+SYNC_STATE_FILE = ".sync_state.json"
+
+
+def load_memory_config() -> Dict[str, Any]:
+    """
+    加载 Memory 配置
+    优先级：环境变量 > 配置文件 > 默认值
+    """
+    config = DEFAULT_MEMORY_CONFIG.copy()
+
+    # 1. 从配置文件读取
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+                memory_config = file_config.get("memory", {})
+                config.update(memory_config)
+        except Exception as e:
+            logger.warning(f"Failed to load config file: {e}")
+
+    # 2. 环境变量覆盖
+    env_mappings = {
+        "SPRINGO_MEMORY_ID": "memory_id",
+        "SPRINGO_MEMORY_REGION": "memory_region",
+        "SPRINGO_MEMORY_ENABLED": "memory_enabled",
+        "SPRINGO_MEMORY_BATCH_SIZE": "batch_size",
+        "SPRINGO_MEMORY_BATCH_TIMEOUT": "batch_timeout"
+    }
+
+    for env_key, config_key in env_mappings.items():
+        env_value = os.environ.get(env_key)
+        if env_value is not None:
+            # 类型转换
+            if config_key == "memory_enabled":
+                config[config_key] = env_value.lower() in ("true", "1", "yes")
+            elif config_key in ("batch_size", "batch_timeout"):
+                try:
+                    config[config_key] = int(env_value)
+                except ValueError:
+                    pass
+            else:
+                config[config_key] = env_value
+
+    return config
+
+
+def save_memory_config(memory_config: Dict[str, Any]) -> bool:
+    """保存 Memory 配置到配置文件"""
+    try:
+        # 读取现有配置
+        file_config = {}
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+
+        # 更新 memory 节
+        file_config["memory"] = memory_config
+
+        # 确保目录存在
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+
+        # 写入配置
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(file_config, ensure_ascii=False, fp=f, indent=2)
+
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save memory config: {e}")
+        return False
+
+
+# 加载配置
+_config = load_memory_config()
+
+# 导出配置常量（供其他模块使用）
+MEMORY_ID = _config["memory_id"]
+MEMORY_REGION = _config["memory_region"]
+MEMORY_ENABLED = _config["memory_enabled"]
+BATCH_SIZE = _config["batch_size"]
+BATCH_TIMEOUT = _config["batch_timeout"]
+MAX_RETRIES = _config["max_retries"]
+RETRY_DELAY = _config["retry_delay"]
+SYNC_CHECK_DELAY = _config["sync_check_delay"]
 
 
 class MemorySyncManager:
@@ -38,11 +142,13 @@ class MemorySyncManager:
         self.region = region
         self.upload_queue: Queue = Queue()
         self.worker_thread: Optional[threading.Thread] = None
+        self.sync_check_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._batch: List[Dict] = []
         self._batch_start_time: float = 0
         self._initialized = False
         self._memory_client = None
+        self._sync_check_done = False
 
     def initialize(self) -> bool:
         """初始化 Memory 客户端"""
@@ -74,6 +180,12 @@ class MemorySyncManager:
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
         logger.info("Memory sync worker started")
+
+        # 启动异步同步检查线程
+        self.sync_check_thread = threading.Thread(target=self._sync_check_worker, daemon=True)
+        self.sync_check_thread.start()
+        logger.info("Sync check worker started")
+
         return True
 
     def stop(self):
@@ -84,7 +196,7 @@ class MemorySyncManager:
             logger.info("Memory sync worker stopped")
 
     def queue_message(self, session_id: str, message: Dict[str, Any],
-                      actor: str = "user") -> bool:
+                      actor: str = "user", message_index: int = -1) -> bool:
         """
         将消息加入上传队列（非阻塞）
 
@@ -92,6 +204,7 @@ class MemorySyncManager:
             session_id: 会话 ID
             message: 消息内容 {"role": "user/assistant", "content": ...}
             actor: 消息发送者标识
+            message_index: 消息在本地文件中的索引（用于同步状态跟踪）
 
         Returns:
             是否成功加入队列
@@ -105,10 +218,11 @@ class MemorySyncManager:
                 "message": message,
                 "actor": actor,
                 "timestamp": datetime.utcnow().isoformat(),
-                "event_id": self._generate_event_id(session_id, message)
+                "event_id": self._generate_event_id(session_id, message),
+                "message_index": message_index  # 用于上传成功后更新同步状态
             }
             self.upload_queue.put(event_data)
-            logger.debug(f"Queued message for session {session_id}")
+            logger.debug(f"Queued message for session {session_id}, index={message_index}")
             return True
         except Exception as e:
             logger.error(f"Failed to queue message: {e}")
@@ -183,6 +297,8 @@ class MemorySyncManager:
             try:
                 self._do_upload(batch_to_upload)
                 logger.info(f"Uploaded {len(batch_to_upload)} events to AgentCore Memory")
+                # 上传成功后更新同步状态
+                self._update_sync_state_after_upload(batch_to_upload)
                 return
             except Exception as e:
                 logger.warning(f"Upload attempt {attempt + 1} failed: {e}")
@@ -210,7 +326,7 @@ class MemorySyncManager:
         for session_id, items in sessions.items():
             # 构建 messages 列表: List[Tuple[str, str]] (text, role)
             messages = []
-            actor_id = "user"  # 默认 actor
+            actor_id = "springo"  # 固定使用 "springo" 作为 actor ID
 
             for item in items:
                 message = item["message"]
@@ -225,10 +341,6 @@ class MemorySyncManager:
                 content = self._extract_content(message.get("content", ""))
                 if content:
                     messages.append((content, role))
-
-                # 使用第一个 actor
-                if item.get("actor"):
-                    actor_id = item["actor"]
 
             if messages:
                 # 调用 boto3 create_event API
@@ -292,8 +404,217 @@ class MemorySyncManager:
             "region": self.region,
             "queue_size": self.upload_queue.qsize(),
             "batch_size": len(self._batch),
-            "worker_running": self.worker_thread.is_alive() if self.worker_thread else False
+            "worker_running": self.worker_thread.is_alive() if self.worker_thread else False,
+            "sync_check_done": self._sync_check_done
         }
+
+    # ========== 异步同步检查功能 ==========
+
+    def _sync_check_worker(self):
+        """后台同步检查线程：扫描本地 sessions，对比云端，补充上传缺失消息"""
+        logger.info("Sync check worker thread started")
+
+        # 延迟启动，等待其他初始化完成
+        time.sleep(SYNC_CHECK_DELAY)
+
+        if self._stop_event.is_set():
+            return
+
+        try:
+            # 1. 先重试之前失败的上传
+            failed_count = self.retry_failed_uploads()
+            if failed_count > 0:
+                logger.info(f"Requeued {failed_count} previously failed events")
+
+            # 2. 扫描本地 sessions 目录
+            if not os.path.exists(SESSIONS_DIR):
+                logger.info("No sessions directory found, skipping sync check")
+                self._sync_check_done = True
+                return
+
+            session_dirs = [d for d in os.listdir(SESSIONS_DIR)
+                          if os.path.isdir(os.path.join(SESSIONS_DIR, d))]
+
+            logger.info(f"Found {len(session_dirs)} local sessions to check")
+
+            # 3. 对每个 session 进行同步检查
+            synced_count = 0
+            for session_id in session_dirs:
+                if self._stop_event.is_set():
+                    break
+
+                try:
+                    count = self._sync_session(session_id)
+                    if count > 0:
+                        synced_count += count
+                        logger.info(f"Session {session_id}: queued {count} missing messages")
+                except Exception as e:
+                    logger.warning(f"Failed to sync session {session_id}: {e}")
+
+            logger.info(f"Sync check complete: queued {synced_count} missing messages from {len(session_dirs)} sessions")
+            self._sync_check_done = True
+
+        except Exception as e:
+            logger.error(f"Sync check worker error: {e}")
+            self._sync_check_done = True
+
+    def _sync_session(self, session_id: str) -> int:
+        """
+        同步单个 session：对比本地和云端，补充上传缺失的消息
+
+        Returns:
+            补充上传的消息数
+        """
+        session_dir = os.path.join(SESSIONS_DIR, session_id)
+        session_file = os.path.join(session_dir, f"{session_id}.jsonl")
+
+        if not os.path.exists(session_file):
+            return 0
+
+        # 1. 读取本地同步状态
+        sync_state = self._load_sync_state(session_dir)
+        last_synced_index = sync_state.get("last_synced_index", -1)
+
+        # 2. 读取本地消息
+        local_messages = self._load_local_messages(session_file)
+        if not local_messages:
+            return 0
+
+        # 3. 查询云端事件数（可选，用于验证）
+        # cloud_count = self._get_cloud_event_count(session_id)
+
+        # 4. 找出未同步的消息（index > last_synced_index）
+        unsent_messages = []
+        for i, msg in enumerate(local_messages):
+            if i > last_synced_index:
+                unsent_messages.append((i, msg))
+
+        if not unsent_messages:
+            return 0
+
+        # 5. 将缺失消息加入上传队列（传递 message_index 用于后续状态更新）
+        queued_count = 0
+
+        for idx, msg in unsent_messages:
+            role = msg.get("role", "user")
+            actor = "assistant" if role == "assistant" else "user"
+
+            # 传递 message_index，同步状态将在 _update_sync_state_after_upload 中更新
+            if self.queue_message(session_id, msg, actor, message_index=idx):
+                queued_count += 1
+
+        # 注意：不在这里更新同步状态！同步状态只在消息实际上传成功后才更新
+        # 见 _update_sync_state_after_upload 方法
+        if queued_count > 0:
+            logger.info(f"Queued {queued_count} messages for session {session_id} (pending upload)")
+
+        return queued_count
+
+    def _load_local_messages(self, session_file: str) -> List[Dict[str, Any]]:
+        """从本地 JSONL 文件加载消息"""
+        messages = []
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        # 跳过元数据行
+                        if entry.get("type") == "session_start":
+                            continue
+                        if entry.get("type") == "message":
+                            messages.append(entry.get("message", {}))
+                        elif "message" in entry:
+                            messages.append(entry["message"])
+                        elif "role" in entry:
+                            # 直接是消息格式
+                            messages.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.warning(f"Failed to load messages from {session_file}: {e}")
+        return messages
+
+    def _load_sync_state(self, session_dir: str) -> Dict[str, Any]:
+        """加载 session 的同步状态"""
+        state_file = os.path.join(session_dir, SYNC_STATE_FILE)
+        if os.path.exists(state_file):
+            try:
+                with open(state_file, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"last_synced_index": -1}
+
+    def _save_sync_state(self, session_dir: str, state: Dict[str, Any]):
+        """保存 session 的同步状态"""
+        state_file = os.path.join(session_dir, SYNC_STATE_FILE)
+        try:
+            with open(state_file, 'w', encoding='utf-8') as f:
+                json.dump(state, ensure_ascii=False, fp=f, indent=2)
+        except Exception as e:
+            logger.warning(f"Failed to save sync state: {e}")
+
+    def _get_cloud_event_count(self, session_id: str) -> int:
+        """查询云端某个 session 的事件数"""
+        if not self._memory_client:
+            return 0
+
+        try:
+            response = self._memory_client.list_events(
+                memoryId=self.memory_id,
+                sessionId=session_id,
+                maxResults=1000  # 获取最多 1000 条
+            )
+            events = response.get("events", [])
+            return len(events)
+        except Exception as e:
+            logger.warning(f"Failed to get cloud event count for {session_id}: {e}")
+            return 0
+
+    def _update_sync_state_after_upload(self, batch: List[Dict]):
+        """上传成功后更新同步状态（仅基于实际上传的消息）"""
+        # 按 session_id 分组，记录 count 和 max_index
+        sessions: Dict[str, Dict[str, int]] = {}
+        for item in batch:
+            session_id = item.get("session_id")
+            msg_index = item.get("message_index", -1)
+            if session_id:
+                if session_id not in sessions:
+                    sessions[session_id] = {"count": 0, "max_index": -1}
+                sessions[session_id]["count"] += 1
+                if msg_index > sessions[session_id]["max_index"]:
+                    sessions[session_id]["max_index"] = msg_index
+
+        # 更新每个 session 的同步状态
+        for session_id, info in sessions.items():
+            count = info["count"]
+            max_index = info["max_index"]
+
+            try:
+                session_dir = os.path.join(SESSIONS_DIR, session_id)
+                if not os.path.exists(session_dir):
+                    continue
+
+                sync_state = self._load_sync_state(session_dir)
+                current_index = sync_state.get("last_synced_index", -1)
+
+                # 只有当实际上传的消息索引大于当前同步索引时才更新
+                if max_index > current_index:
+                    sync_state["last_synced_index"] = max_index
+                    sync_state["last_sync_time"] = datetime.utcnow().isoformat()
+                    sync_state["total_synced"] = sync_state.get("total_synced", 0) + count
+                    self._save_sync_state(session_dir, sync_state)
+                    logger.info(f"Sync state updated for {session_id}: index {current_index} -> {max_index} (+{count} messages)")
+                elif count > 0:
+                    # 消息上传成功但索引没有更新（可能是旧消息的重试）
+                    sync_state["total_synced"] = sync_state.get("total_synced", 0) + count
+                    self._save_sync_state(session_dir, sync_state)
+                    logger.debug(f"Uploaded {count} messages for {session_id} (no index change)")
+
+            except Exception as e:
+                logger.warning(f"Failed to update sync state for {session_id}: {e}")
 
     def retry_failed_uploads(self) -> int:
         """重试之前失败的上传"""
@@ -333,13 +654,37 @@ def get_sync_manager() -> Optional[MemorySyncManager]:
     return _sync_manager
 
 
-def init_memory_sync(memory_id: str = MEMORY_ID, region: str = MEMORY_REGION) -> bool:
+def init_memory_sync(memory_id: str = None, region: str = None) -> bool:
     """
     初始化并启动内存同步
 
-    在应用启动时调用一次
+    在应用启动时调用一次。
+    如果未配置 memory_id 或 memory_enabled=False，则跳过初始化。
+
+    Args:
+        memory_id: Memory ID (可选，默认从配置读取)
+        region: Memory 区域 (可选，默认从配置读取)
+
+    Returns:
+        是否成功初始化
     """
     global _sync_manager
+
+    # 使用传入的参数或配置值
+    memory_id = memory_id or MEMORY_ID
+    region = region or MEMORY_REGION
+
+    # 检查是否启用
+    if not MEMORY_ENABLED:
+        logger.info("Memory sync is disabled in config")
+        return False
+
+    # 检查 memory_id 是否配置
+    if not memory_id:
+        logger.warning("Memory sync skipped: memory_id not configured. "
+                      "Set 'memory.memory_id' in ~/.springo/config.json or "
+                      "SPRINGO_MEMORY_ID environment variable.")
+        return False
 
     if _sync_manager:
         logger.warning("Memory sync already initialized")
@@ -347,7 +692,7 @@ def init_memory_sync(memory_id: str = MEMORY_ID, region: str = MEMORY_REGION) ->
 
     _sync_manager = MemorySyncManager(memory_id, region)
     if _sync_manager.start():
-        logger.info("Memory sync initialized and started")
+        logger.info(f"Memory sync initialized: {memory_id} ({region})")
         return True
     else:
         _sync_manager = None
@@ -361,3 +706,17 @@ def shutdown_memory_sync():
         _sync_manager.stop()
         _sync_manager = None
         logger.info("Memory sync shutdown complete")
+
+
+def get_memory_config() -> Dict[str, Any]:
+    """获取当前 Memory 配置"""
+    return {
+        "memory_id": MEMORY_ID,
+        "memory_region": MEMORY_REGION,
+        "memory_enabled": MEMORY_ENABLED,
+        "batch_size": BATCH_SIZE,
+        "batch_timeout": BATCH_TIMEOUT,
+        "max_retries": MAX_RETRIES,
+        "sync_check_delay": SYNC_CHECK_DELAY,
+        "config_file": CONFIG_FILE
+    }
