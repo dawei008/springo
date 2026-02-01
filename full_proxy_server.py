@@ -1315,7 +1315,7 @@ def upload_image():
 
         # Create images directory for this session
         ctx_manager = get_context_manager()
-        session_dir = ctx_manager._get_session_dir(session_id)
+        session_dir = ctx_manager.get_session_dir(session_id)
         images_dir = os.path.join(session_dir, "images")
         os.makedirs(images_dir, exist_ok=True)
 
@@ -1351,7 +1351,7 @@ def get_image(session_id, image_filename):
     """
     try:
         ctx_manager = get_context_manager()
-        session_dir = ctx_manager._get_session_dir(session_id)
+        session_dir = ctx_manager.get_session_dir(session_id)
         image_path = os.path.join(session_dir, "images", image_filename)
 
         if not os.path.exists(image_path):

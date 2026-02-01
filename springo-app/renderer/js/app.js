@@ -66,6 +66,28 @@
             return toast;
         }
 
+        // Open image preview modal
+        window.openImagePreview = function(imageSrc) {
+            // Create modal
+            const modal = document.createElement('div');
+            modal.className = 'image-preview-modal';
+            modal.innerHTML = `<img src="${imageSrc}" alt="Image preview">`;
+
+            // Close on click
+            modal.addEventListener('click', () => modal.remove());
+
+            // Close on Escape key
+            const handleEscape = (e) => {
+                if (e.key === 'Escape') {
+                    modal.remove();
+                    document.removeEventListener('keydown', handleEscape);
+                }
+            };
+            document.addEventListener('keydown', handleEscape);
+
+            document.body.appendChild(modal);
+        };
+
         // Reset stuck conversation state - call when network recovers
         function resetStuckConversations() {
             let resetCount = 0;
@@ -2561,7 +2583,20 @@
             if (Array.isArray(content)) {
                 return content.map(c => {
                     if (c.type === 'text') return parseAndLinkify(c.text);
-                    if (c.type === 'image') return '[Image]';
+                    if (c.type === 'image') {
+                        // Render actual image if base64 data is available
+                        if (c.source?.data) {
+                            const mediaType = c.source.media_type || 'image/png';
+                            return `<div class="chat-image-container">
+                                <img src="data:${mediaType};base64,${c.source.data}"
+                                     class="chat-image"
+                                     alt="Uploaded image"
+                                     onclick="window.openImagePreview(this.src)">
+                            </div>`;
+                        }
+                        // Image reference without data (not yet restored)
+                        return '<div class="chat-image-placeholder">[Image loading...]</div>';
+                    }
                     return '';
                 }).join('');
             }
@@ -3570,6 +3605,7 @@
             if (isViewing) renderMessages();
 
             // Prepare messages for API (exclude thinking indicators, empty content, and sanitize tool_use/tool_result pairing)
+            // Also strip internal fields like _imageRef that API doesn't recognize
             const filteredMessages = messages
                 .filter(m => !m.isThinking)
                 .filter(m => {
@@ -3578,10 +3614,26 @@
                     if (Array.isArray(m.content) && m.content.length === 0) return false;
                     return true;
                 })
-                .map(m => ({
-                    role: m.role,
-                    content: m.content
-                }));
+                .map(m => {
+                    // Clean content - remove internal fields like _imageRef
+                    let cleanContent = m.content;
+                    if (Array.isArray(m.content)) {
+                        cleanContent = m.content.map(block => {
+                            if (block.type === 'image' && block._imageRef) {
+                                // Strip _imageRef, keep only API-compatible fields
+                                return {
+                                    type: 'image',
+                                    source: block.source
+                                };
+                            }
+                            return block;
+                        });
+                    }
+                    return {
+                        role: m.role,
+                        content: cleanContent
+                    };
+                });
 
             // Sanitize to ensure tool_result/tool_use pairing is valid
             let apiMessages = sanitizeMessagesForAPI(filteredMessages);
