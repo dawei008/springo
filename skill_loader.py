@@ -9,9 +9,13 @@ Skills are folders containing a SKILL.md file with:
 
 import os
 import re
+import time
 import yaml
 from pathlib import Path
 from typing import Dict, List, Optional
+
+# Cache TTL in seconds - only reload skills if cache is older than this
+SKILL_CACHE_TTL = 60  # 1 minute
 
 class Skill:
     """Represents a loaded skill"""
@@ -40,6 +44,7 @@ class SkillLoader:
             skills_dir = os.path.expanduser("~/.springo/skills")
         self.skills_dir = Path(skills_dir)
         self.skills: Dict[str, Skill] = {}
+        self._last_load_time = 0
         self._load_all_skills()
 
     def _parse_skill_md(self, content: str) -> tuple:
@@ -124,8 +129,26 @@ For example: `{skill_path_str}/html2pptx.md` or `{skill_path_str}/scripts/conver
                 if skill:
                     self.skills[skill.name] = skill
 
-    def reload(self):
-        """Reload all skills from disk"""
+        self._last_load_time = time.time()
+
+    def reload(self, force: bool = False):
+        """Reload all skills from disk with caching.
+
+        Args:
+            force: If True, bypass cache and force reload.
+                   If False (default), only reload if cache TTL expired.
+        """
+        if force:
+            self._load_all_skills()
+            return
+
+        # Check if cache is still valid
+        elapsed = time.time() - self._last_load_time
+        if elapsed > SKILL_CACHE_TTL:
+            self._load_all_skills()
+
+    def force_reload(self):
+        """Force reload all skills, bypassing cache"""
         self._load_all_skills()
 
     def list_skills(self) -> List[dict]:

@@ -28,6 +28,85 @@
             return div.innerHTML;
         }
 
+        // ==================== Toast Notification System ====================
+        // User-friendly toast notifications for errors and status updates
+        function showToast(message, type = 'info', duration = 5000) {
+            // Remove existing toast if any
+            const existing = document.querySelector('.toast-notification');
+            if (existing) existing.remove();
+
+            const toast = document.createElement('div');
+            toast.className = `toast-notification toast-${type}`;
+
+            const icons = {
+                error: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>',
+                warning: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+                success: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+                info: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>'
+            };
+
+            toast.innerHTML = `
+                <span class="toast-icon">${icons[type] || icons.info}</span>
+                <span class="toast-message">${escapeHTML(message)}</span>
+                <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
+            `;
+
+            document.body.appendChild(toast);
+
+            // Auto-remove after duration
+            if (duration > 0) {
+                setTimeout(() => {
+                    if (toast.parentElement) {
+                        toast.classList.add('toast-fade-out');
+                        setTimeout(() => toast.remove(), 300);
+                    }
+                }, duration);
+            }
+
+            return toast;
+        }
+
+        // Reset stuck conversation state - call when network recovers
+        function resetStuckConversations() {
+            let resetCount = 0;
+            for (const convId in convRuntime) {
+                const runtime = convRuntime[convId];
+                if (runtime.isStreaming) {
+                    console.log(`[Recovery] Resetting stuck conversation: ${convId}`);
+                    runtime.isStreaming = false;
+
+                    // Remove any thinking indicators
+                    const thinkingIdx = runtime.messages.findIndex(m => m.isThinking);
+                    if (thinkingIdx >= 0) {
+                        runtime.messages.splice(thinkingIdx, 1);
+                    }
+
+                    updateConversationStatus(convId, 'error');
+                    resetCount++;
+                }
+            }
+
+            if (resetCount > 0) {
+                updateSendButtonState();
+                renderMessages();
+                showToast(`Connection recovered. ${resetCount} stuck task(s) reset.`, 'warning', 8000);
+            }
+
+            return resetCount;
+        }
+
+        // Check if error is a network/connection error
+        function isNetworkError(error) {
+            const msg = error?.message?.toLowerCase() || '';
+            return msg.includes('failed to fetch') ||
+                   msg.includes('network') ||
+                   msg.includes('connection') ||
+                   msg.includes('net::err') ||
+                   msg.includes('econnrefused') ||
+                   msg.includes('enotfound') ||
+                   error?.name === 'TypeError' && msg.includes('fetch');
+        }
+
         // Welcome template HTML (stored on load, used when creating new chats)
         let welcomeTemplate = '';
 
@@ -317,6 +396,9 @@
 
             loadSettings();
 
+            // Initialize context indicator (will be updated when conversation loads)
+            updateContextIndicator(null);
+
             // Start Memory sync status updates
             startMemorySyncStatusUpdates();
 
@@ -394,6 +476,19 @@
             }, 3000);
             // Regular interval for ongoing monitoring (every 30 seconds)
             setInterval(checkConnection, 30000);
+
+            // Warmup interval - keeps backend ready to prevent cold starts (every 60 seconds)
+            setInterval(async () => {
+                try {
+                    const res = await fetch(`${BASE_URL}/v1/warmup`, { method: 'POST' });
+                    if (res.ok) {
+                        const data = await res.json();
+                        console.log('[Warmup]', data);
+                    }
+                } catch (e) {
+                    // Warmup failed silently - not critical
+                }
+            }, 60000);
 
             // Auto-resize textarea
             const input = document.getElementById('message-input');
@@ -919,30 +1014,26 @@
         function updateContextIndicator(stats, convId = null) {
             const indicator = document.getElementById('context-indicator');
             const textEl = document.getElementById('context-text');
-            const barFill = document.getElementById('context-bar-fill');
+            const iconEl = indicator.querySelector('.context-icon');
 
             // Only show for current conversation
             if (convId && convId !== currentConversationId) {
                 return;
             }
 
+            // Always show indicator (clickable for breakdown)
+            indicator.style.display = 'flex';
+
             if (!stats || !stats.total_tokens) {
-                indicator.style.display = 'none';
+                // Show default state when no stats available
+                textEl.textContent = 'Context: 0%';
+                indicator.className = 'context-indicator';
+                indicator.title = 'Click for context breakdown';
                 return;
             }
 
             const percent = stats.usage_percent || 0;
             const status = stats.status || 'normal';
-            const WARNING_THRESHOLD = 40; // Show indicator at 40%+
-
-            // Only show when above threshold
-            if (percent < WARNING_THRESHOLD && status === 'normal') {
-                indicator.style.display = 'none';
-                return;
-            }
-
-            indicator.style.display = 'flex';
-            barFill.style.width = `${Math.min(percent, 100)}%`;
 
             // Update indicator class and text based on status
             indicator.className = 'context-indicator';
@@ -950,14 +1041,14 @@
             switch (status) {
                 case 'critical':
                     indicator.classList.add('critical');
-                    textEl.textContent = `${Math.round(percent)}% - Auto-compacting`;
+                    textEl.textContent = `Context: ${Math.round(percent)}% - Compacting`;
                     break;
                 case 'warning':
                     indicator.classList.add('warning');
-                    textEl.textContent = `${Math.round(percent)}%`;
+                    textEl.textContent = `Context: ${Math.round(percent)}%`;
                     break;
                 default:
-                    textEl.textContent = `${Math.round(percent)}%`;
+                    textEl.textContent = `Context: ${Math.round(percent)}%`;
             }
 
             // Show token count on hover (tooltip)
@@ -968,13 +1059,11 @@
         function setContextCompacting(isCompacting) {
             const indicator = document.getElementById('context-indicator');
             const textEl = document.getElementById('context-text');
-            const barFill = document.getElementById('context-bar-fill');
 
             if (isCompacting) {
                 indicator.style.display = 'flex';
-                indicator.className = 'context-indicator summarizing';
-                textEl.textContent = 'Compacting...';
-                barFill.style.width = '100%';
+                indicator.className = 'context-indicator';
+                textEl.textContent = 'Context: Compacting...';
             }
         }
 
@@ -983,6 +1072,216 @@
             const indicator = document.getElementById('context-indicator');
             indicator.style.display = 'none';
         }
+
+        // Refresh context stats for current conversation
+        async function refreshContextStats() {
+            if (!currentConversationId) {
+                updateContextIndicator(null);
+                return;
+            }
+
+            const runtime = convRuntime[currentConversationId];
+            if (!runtime || !runtime.messages || runtime.messages.length === 0) {
+                updateContextIndicator(null);
+                return;
+            }
+
+            try {
+                const safeMessages = runtime.messages.map(msg => {
+                    try {
+                        JSON.stringify(msg);
+                        return msg;
+                    } catch (e) {
+                        return { role: msg.role || 'user', content: '[Non-serializable]' };
+                    }
+                });
+
+                const response = await fetch(`${BASE_URL}/v1/context/breakdown`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: safeMessages,
+                        system: '',
+                        tools: window.cachedTools || [],
+                        skills: window.loadedSkills || [],
+                        memory_files: []
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    updateContextIndicator({
+                        total_tokens: data.total_tokens,
+                        max_tokens: data.max_tokens,
+                        usage_percent: data.usage_percent,
+                        status: data.usage_percent >= 80 ? 'critical' :
+                                data.usage_percent >= 60 ? 'warning' : 'normal'
+                    }, currentConversationId);
+                }
+            } catch (e) {
+                console.error('Failed to refresh context stats:', e);
+            }
+        }
+
+        // Toggle context breakdown popup (like Claude Code /context)
+        function toggleContextBreakdown(event) {
+            if (event) event.stopPropagation();
+            const popup = document.getElementById('context-breakdown-popup');
+            if (popup.classList.contains('visible')) {
+                popup.classList.remove('visible');
+            } else {
+                fetchAndDisplayContextBreakdown();
+                popup.classList.add('visible');
+            }
+        }
+
+        // Fetch and display context breakdown
+        async function fetchAndDisplayContextBreakdown() {
+            const content = document.getElementById('breakdown-content');
+
+            // Check if we have conversation data
+            if (!currentConversationId) {
+                content.innerHTML = '<div class="breakdown-empty">No active conversation</div>';
+                return;
+            }
+
+            const runtime = convRuntime[currentConversationId];
+            if (!runtime || !runtime.messages || runtime.messages.length === 0) {
+                content.innerHTML = '<div class="breakdown-empty">Start a conversation to see context usage</div>';
+                return;
+            }
+
+            try {
+                content.innerHTML = '<div class="breakdown-loading">Loading...</div>';
+
+                // Get current tools from cache if available
+                const tools = window.cachedTools || [];
+
+                // Get loaded skills (stored in skillsData if available)
+                const skills = window.loadedSkills || [];
+
+                // Memory files would be CLAUDE.md content, but we don't have direct access
+                // The backend can estimate from system prompt structure
+                const memory_files = [];
+
+                // Safely serialize messages (handle any non-serializable content)
+                const safeMessages = runtime.messages.map(msg => {
+                    try {
+                        JSON.stringify(msg);
+                        return msg;
+                    } catch (e) {
+                        return { role: msg.role || 'user', content: '[Non-serializable content]' };
+                    }
+                });
+
+                console.log('[Context] Sending breakdown request:', {
+                    messagesCount: safeMessages.length,
+                    toolsCount: tools.length
+                });
+
+                const response = await fetch(`${BASE_URL}/v1/context/breakdown`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: safeMessages,
+                        system: '', // System prompt is handled by backend
+                        tools: tools,
+                        skills: skills,
+                        memory_files: memory_files
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({}));
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('[Context] Breakdown data:', data);
+                renderContextBreakdown(data);
+            } catch (e) {
+                console.error('Context breakdown error:', e);
+                // Check if it's a network error
+                if (e.name === 'TypeError' && e.message.includes('fetch')) {
+                    content.innerHTML = `<div class="breakdown-error">Cannot connect to server</div>`;
+                } else {
+                    content.innerHTML = `<div class="breakdown-error">Error: ${e.message}</div>`;
+                }
+            }
+        }
+
+        // Render context breakdown in popup (Claude Code style)
+        function renderContextBreakdown(data) {
+            const content = document.getElementById('breakdown-content');
+            const breakdown = data.breakdown;
+
+            // Categories ordered like Claude Code's /context
+            const categories = [
+                { key: 'system_prompt', label: 'System Prompt', cssClass: 'system' },
+                { key: 'system_tools', label: 'System Tools', cssClass: 'tools' },
+                { key: 'skills', label: 'Skills', cssClass: 'skills' },
+                { key: 'memory_files', label: 'Memory Files', cssClass: 'memory' },
+                { key: 'user_text', label: 'User', cssClass: 'user' },
+                { key: 'assistant_text', label: 'Assistant', cssClass: 'assistant' },
+                { key: 'tool_use', label: 'Tool Use', cssClass: 'tool-use' },
+                { key: 'tool_result', label: 'Tool Result', cssClass: 'tool-result' },
+                { key: 'images', label: 'Images', cssClass: 'images' }
+            ];
+
+            let html = '';
+            for (const cat of categories) {
+                const catData = breakdown[cat.key];
+                if (!catData) continue;
+                if (catData.count > 0 || catData.tokens > 0) {
+                    const tokensStr = catData.tokens >= 1000
+                        ? `${(catData.tokens / 1000).toFixed(1)}k`
+                        : catData.tokens;
+                    html += `
+                        <div class="breakdown-row">
+                            <span class="breakdown-label">${cat.label}</span>
+                            <div class="breakdown-bar-container">
+                                <div class="breakdown-bar ${cat.cssClass}" style="width: ${Math.min(catData.percent, 100)}%"></div>
+                            </div>
+                            <span class="breakdown-percent">${catData.percent.toFixed(1)}% (${tokensStr})</span>
+                        </div>
+                    `;
+                }
+            }
+
+            // Calculate free space
+            const usedPercent = data.usage_percent;
+            const freePercent = Math.max(0, 100 - usedPercent);
+            const freeTokens = data.max_tokens - data.total_tokens;
+            const freeStr = freeTokens >= 1000 ? `${(freeTokens / 1000).toFixed(1)}k` : freeTokens;
+
+            html += `
+                <div class="breakdown-row breakdown-free">
+                    <span class="breakdown-label">Free Space</span>
+                    <div class="breakdown-bar-container">
+                        <div class="breakdown-bar free" style="width: ${freePercent}%"></div>
+                    </div>
+                    <span class="breakdown-percent">${freePercent.toFixed(1)}% (${freeStr})</span>
+                </div>
+            `;
+
+            html += `
+                <div class="breakdown-total">
+                    <span class="breakdown-total-label">Total</span>
+                    <span class="breakdown-total-value">${data.total_tokens.toLocaleString()} / ${data.max_tokens.toLocaleString()} (${data.usage_percent}%)</span>
+                </div>
+            `;
+
+            content.innerHTML = html;
+        }
+
+        // Close breakdown popup when clicking outside
+        document.addEventListener('click', (e) => {
+            const indicator = document.getElementById('context-indicator');
+            const popup = document.getElementById('context-breakdown-popup');
+            if (!indicator.contains(e.target)) {
+                popup.classList.remove('visible');
+            }
+        });
 
         // Show brief notification for context events
         function showContextNotification(message, type = 'info') {
@@ -1122,9 +1421,24 @@
                 }
                 const data = await res.json();
                 if (data.status === 'healthy') {
+                    const wasDisconnected = !lastConnectionHealthy;
                     connectionCheckAttempts = 0; // Reset counter on success
+
+                    // On reconnection, check for and reset stuck conversations
+                    if (wasDisconnected) {
+                        console.log('Connection recovered, checking for stuck conversations...');
+                        // Small delay to let UI stabilize
+                        setTimeout(() => resetStuckConversations(), 500);
+
+                        // Trigger immediate warmup to pre-load skills and check MCP servers
+                        fetch(`${BASE_URL}/v1/warmup`, { method: 'POST' })
+                            .then(res => res.json())
+                            .then(data => console.log('[Warmup on connect]', data))
+                            .catch(() => {}); // Ignore warmup errors
+                    }
+
                     // Always verify and sync working directory on first connection or reconnection
-                    if (!lastConnectionHealthy && currentWorkingDir) {
+                    if (wasDisconnected && currentWorkingDir) {
                         console.log('Connection established, syncing working directory:', currentWorkingDir);
                         await updateServerWorkingDir(currentWorkingDir);
                     } else if (currentWorkingDir) {
@@ -1360,6 +1674,9 @@
                     console.log(`Cleaned up ${rawMessages.length - runtime.messages.length} invalid messages from conversation ${id}`);
                 }
 
+                // Restore image references - load base64 from stored files
+                runtime.messages = await restoreImageReferences(runtime.messages, id);
+
                 document.getElementById('header-title').textContent = conv.title || 'Chat';
 
                 // Reset running status if not actually streaming this conversation
@@ -1373,14 +1690,22 @@
                 updateSendButtonState();
 
                 // Update working directory display for this conversation
-                updateWorkingDirDisplay(conv.workingDir || runtime.workingDir);
+                const convWorkingDir = conv.workingDir || runtime.workingDir;
+                updateWorkingDirDisplay(convWorkingDir);
                 renderWorkingFolders(); // Update active state in workspace sidebar
+
+                // CRITICAL: Sync working directory to backend when switching conversations
+                // This ensures file operations use the correct directory for THIS conversation
+                if (convWorkingDir) {
+                    currentWorkingDir = convWorkingDir;
+                    updateServerWorkingDir(convWorkingDir);
+                }
 
                 renderMessages();
                 renderConversations();
                 updateTokenCount();
                 renderToolExecutionSidebar(); // Update right sidebar for this conversation
-                hideContextIndicator(); // Reset context indicator for new conversation
+                refreshContextStats(); // Update context indicator for this conversation
                 removeInlineChatToolPanel(); // Remove inline tool panel when switching conversations
 
                 // Restore inline tasks for this conversation
@@ -1450,6 +1775,93 @@
             return '';
         }
 
+        // Prepare messages for saving to JSONL - convert base64 images to references
+        // This optimizes storage by keeping only image references in JSONL
+        function prepareMessagesForSaving(messages) {
+            return messages.map(msg => {
+                if (!msg.content || !Array.isArray(msg.content)) {
+                    return msg;
+                }
+
+                // Deep copy the message
+                const newMsg = { ...msg };
+                newMsg.content = msg.content.map(block => {
+                    // Check if this is an image with imageRef
+                    if (block.type === 'image' && block._imageRef) {
+                        // Replace base64 with reference
+                        return {
+                            type: 'image',
+                            source: {
+                                type: 'file_ref',
+                                media_type: block.source?.media_type || 'image/png',
+                                image_ref: block._imageRef
+                            }
+                        };
+                    }
+                    return block;
+                });
+
+                return newMsg;
+            });
+        }
+
+        // Restore image references when loading - convert file_ref back to base64
+        async function restoreImageReferences(messages, sessionId) {
+            const restoredMessages = [];
+
+            for (const msg of messages) {
+                if (!msg.content || !Array.isArray(msg.content)) {
+                    restoredMessages.push(msg);
+                    continue;
+                }
+
+                // Check if any content block has file_ref
+                const hasFileRef = msg.content.some(
+                    block => block.type === 'image' && block.source?.type === 'file_ref'
+                );
+
+                if (!hasFileRef) {
+                    restoredMessages.push(msg);
+                    continue;
+                }
+
+                // Deep copy and restore image references
+                const newMsg = { ...msg };
+                newMsg.content = await Promise.all(msg.content.map(async (block) => {
+                    if (block.type === 'image' && block.source?.type === 'file_ref') {
+                        const imageRef = block.source.image_ref;
+                        if (!imageRef) return block;
+
+                        // Fetch base64 from backend
+                        const filename = imageRef.relative_path?.split('/').pop();
+                        if (!filename) return block;
+
+                        const base64Data = await fetchImageBase64(sessionId, filename);
+                        if (!base64Data) {
+                            console.warn(`Failed to restore image: ${filename}`);
+                            return block; // Keep original if fetch fails
+                        }
+
+                        // Restore to base64 format with _imageRef for future saves
+                        return {
+                            type: 'image',
+                            source: {
+                                type: 'base64',
+                                media_type: block.source.media_type || 'image/png',
+                                data: base64Data
+                            },
+                            _imageRef: imageRef
+                        };
+                    }
+                    return block;
+                }));
+
+                restoredMessages.push(newMsg);
+            }
+
+            return restoredMessages;
+        }
+
         // Save conversation - can specify ID to save a specific conversation (for background saves)
         // Sessions are saved to backend JSONL only (localStorage not used for sessions)
         function saveConversation(convId = null) {
@@ -1507,8 +1919,11 @@
 
             renderConversations();
 
+            // Prepare messages for saving - convert image base64 to references
+            const msgsForSaving = prepareMessagesForSaving(msgs);
+
             // Save to backend JSONL (persistent, full message history)
-            SessionAPI.save(targetId, msgs, {
+            SessionAPI.save(targetId, msgsForSaving, {
                 title: title,
                 workingDir: existingWorkingDir || '',
                 updatedAt: Date.now()
@@ -2847,10 +3262,27 @@
             if (attachments.length > 0) {
                 for (const att of attachments) {
                     if (att.type.startsWith('image/')) {
-                        messageContent.push({
-                            type: 'image',
-                            source: { type: 'base64', media_type: att.type, data: att.data }
-                        });
+                        // Check if this is an image reference (optimized storage)
+                        if (att.imageRef) {
+                            // Store reference for JSONL, but need base64 for API
+                            // Fetch base64 from backend for sending to Claude
+                            const imageBase64 = await fetchImageBase64(
+                                att.imageRef.session_id,
+                                att.imageRef.relative_path.split('/').pop()
+                            );
+                            messageContent.push({
+                                type: 'image',
+                                source: { type: 'base64', media_type: att.type, data: imageBase64 },
+                                // Store imageRef for later extraction when saving to JSONL
+                                _imageRef: att.imageRef
+                            });
+                        } else {
+                            // Legacy: direct base64
+                            messageContent.push({
+                                type: 'image',
+                                source: { type: 'base64', media_type: att.type, data: att.data }
+                            });
+                        }
                     } else {
                         fileAttachments.push({
                             name: att.name,
@@ -3172,28 +3604,14 @@
             }
 
             try {
-                // Fetch available tools from backend
-                let tools = [];
-                try {
-                    const toolsResponse = await fetch(`${BASE_URL}/v1/tools`);
-                    // Check if response is JSON before parsing
-                    const contentType = toolsResponse.headers.get('content-type') || '';
-                    if (!toolsResponse.ok || !contentType.includes('application/json')) {
-                        console.warn(`[${convId}] Tools endpoint returned non-JSON or error: ${toolsResponse.status}`);
-                    } else {
-                        const toolsData = await toolsResponse.json();
-                        tools = toolsData.tools || [];
-                        console.log(`[${convId}] Loaded ${tools.length} tools`);
-                    }
-                } catch (e) {
-                    console.warn(`[${convId}] Failed to load tools:`, e);
-                }
+                // NOTE: Tools are managed by backend - no need to fetch from frontend
+                // This prevents tool loading failures from causing hallucination issues
+                // Backend will auto-add tools via get_tool_definitions()
 
                 // System prompt to encourage tool usage
                 // NOTE: System prompt is kept static for KV cache efficiency
                 // Dynamic time is injected into the first user message by the backend
-                const systemPrompt = tools.length > 0 ?
-                    `You are Springo, a helpful AI assistant with access to various tools.
+                const systemPrompt = `You are Springo, a helpful AI assistant with access to various tools.
 
 **IMPORTANT: Do NOT use emojis in your responses or generated files.** Keep all output clean and text-based.
 
@@ -3208,13 +3626,13 @@ When user asks for "最新"/"latest"/"recent"/"newest" content:
 RULES (MUST follow ALL):
 1. Use ENGLISH keywords only (never Chinese)
 2. Use freshness="pw" on EVERY search call - including follow-up searches for details
-3. Include "2025 2026" in query to find recent content
+3. Include the current year in query to find recent content
 4. NEVER search for old content names like "Building Effective Agents" without freshness
 5. Trust the FIRST search results - don't second-guess by searching for older content
 
 Example workflow:
 - User: "anthropic最新的agent博客"
-- Search 1: brave_web_search(query="Anthropic agent blog 2025 2026 latest", freshness="pw") [CORRECT]
+- Search 1: brave_web_search(query="Anthropic agent blog ${new Date().getFullYear()} latest", freshness="pw") [CORRECT]
 - If need details: brave_web_search(query="<title from result> details", freshness="pw") [CORRECT]
 - WRONG: brave_web_search(query="Building Effective Agents") [WRONG - finds OLD content]
 
@@ -3228,7 +3646,7 @@ Available MCP tool categories:
 
 NOTE: All web searches use MCP servers. DO NOT use built-in web_search (removed).
 
-Be concise and helpful in your responses.` : '';
+Be concise and helpful in your responses.`;
 
                 const requestBody = {
                     model: model,
@@ -3236,7 +3654,7 @@ Be concise and helpful in your responses.` : '';
                     temperature: temperature,
                     system: systemPrompt,  // System prompt to guide behavior
                     messages: apiMessages,
-                    tools: tools,  // Include tools so model can use them
+                    // NOTE: tools not sent - backend manages tools via get_tool_definitions()
                     stream: true,  // Enable streaming
                     compact_model: settings.compactModel || 'claude-haiku-4-5-20251001',  // Model for context compaction
                     session_id: convId  // Session ID for tool-results storage (matches session directory)
@@ -3425,14 +3843,44 @@ Be concise and helpful in your responses.` : '';
                     messages.push({ role: 'user', content: toolResults });
                     await continueConversation(convId);
                 } else if (toolUses.length > 0 && AUTO_TOOL_EXECUTION) {
-                    // AUTO MODE: Tools were executed on server, just save
+                    // AUTO MODE: Tools were executed on server
+                    // CRITICAL: Build tool_result message from collected results
+                    // Without this, tool_use blocks become "orphaned" on reload and get stripped
                     console.log(`[${convId}] Auto mode: ${toolUses.length} tools executed on server`);
+
+                    // Build tool_results from toolUses array (results came via SSE tool_result events)
+                    const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
+                    if (toolsWithResults.length > 0) {
+                        const toolResults = toolsWithResults.map(tu => ({
+                            type: 'tool_result',
+                            tool_use_id: tu.id,
+                            content: typeof tu.result === 'string' ? tu.result : JSON.stringify(tu.result)
+                        }));
+
+                        // Add tool_result as user message (matches Claude API message format)
+                        messages.push({ role: 'user', content: toolResults });
+                        console.log(`[${convId}] Added ${toolResults.length} tool_result entries to messages`);
+
+                        // Update chat display with tool results
+                        if (currentConversationId === convId) {
+                            const toolHtml = formatToolCallsForChat(toolsWithResults);
+                            const displayContent = toolHtml + (textContent ? '\n\n' + textContent : '');
+                            const lastMsg = messages[messages.length - 2]; // Assistant message before tool_result
+                            if (lastMsg && lastMsg.role === 'assistant') {
+                                lastMsg.displayContent = displayContent;
+                                updateLastMessageContent(displayContent);
+                            }
+                        }
+                    }
+
                     if (stillViewing) hideToolPanel();
                     saveConversation(convId);
+                    if (currentConversationId === convId) refreshContextStats();
                 } else {
                     // No tools - save and hide panel
                     if (currentConversationId === convId) hideToolPanel();
                     saveConversation(convId);
+                    if (currentConversationId === convId) refreshContextStats();
                 }
 
             } catch (e) {
@@ -3508,6 +3956,7 @@ Be concise and helpful in your responses.` : '';
                     }
                 } catch {
                     // Fallback to string matching for legacy errors
+                    const isNetworkErr = isNetworkError(e);
                     const isThrottlingError = e.message?.includes('ThrottlingException') || e.message?.includes('Too many tokens') || e.message?.includes('请求频率限制');
                     const isRateLimitError = e.message?.includes('rate') && e.message?.includes('limit');
                     const isAccessDenied = e.message?.includes('AccessDenied') || e.message?.includes('访问被拒绝');
@@ -3516,7 +3965,13 @@ Be concise and helpful in your responses.` : '';
                     const isOverloaded = e.message?.includes('overload') || e.message?.includes('过载');
                     const isTimeout = e.message?.includes('timeout') || e.message?.includes('超时');
 
-                    if (isValidationError || isValidationErr) {
+                    if (isNetworkErr) {
+                        // Network/connection error - show toast and don't add error message to chat
+                        errorMessage = null; // Don't add to chat - transient error
+                        statusMessage = 'Connection error';
+                        showToast('Connection lost. Please check your network and try again.', 'error', 8000);
+                        lastConnectionHealthy = false; // Mark connection as unhealthy
+                    } else if (isValidationError || isValidationErr) {
                         errorMessage = `⚠️ 消息格式错误\n\n对话已清理，请重试。`;
                         statusMessage = '消息格式错误';
                     } else if (isThrottlingError || isRateLimitError) {
@@ -3538,14 +3993,17 @@ Be concise and helpful in your responses.` : '';
                 }
 
                 // Check if the last message is already this error message to avoid duplicates
-                const lastMsg = messages[messages.length - 1];
-                const isDuplicateError = lastMsg &&
-                    lastMsg.role === 'assistant' &&
-                    typeof lastMsg.content === 'string' &&
-                    lastMsg.content.includes('⚠️');
+                // For network errors, errorMessage is null - don't add to chat
+                if (errorMessage) {
+                    const lastMsg = messages[messages.length - 1];
+                    const isDuplicateError = lastMsg &&
+                        lastMsg.role === 'assistant' &&
+                        typeof lastMsg.content === 'string' &&
+                        lastMsg.content.includes('⚠️');
 
-                if (!isDuplicateError) {
-                    messages.push({ role: 'assistant', content: errorMessage });
+                    if (!isDuplicateError) {
+                        messages.push({ role: 'assistant', content: errorMessage });
+                    }
                 }
 
                 if (currentConversationId === convId) {
@@ -3682,7 +4140,8 @@ Be concise and helpful in your responses.` : '';
         }
 
         // Handle pasted image from clipboard
-        function handlePastedImage(file) {
+        // Optimized: compress and upload to backend, store reference instead of base64
+        async function handlePastedImage(file) {
             if (!file || !file.type.startsWith('image/')) return;
 
             // Check file size (max 10MB)
@@ -3691,34 +4150,150 @@ Be concise and helpful in your responses.` : '';
                 return;
             }
 
-            const reader = new FileReader();
-            reader.onload = (e) => {
-                const base64 = e.target.result.split(',')[1];
-
-                // Generate a name for the pasted image
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-                const extension = file.type.split('/')[1] || 'png';
-                const fileName = `pasted-image-${timestamp}.${extension}`;
-
-                attachments.push({
-                    name: fileName,
-                    type: file.type,
-                    data: base64,
-                    path: fileName,
-                    isPasted: true // Mark as pasted for UI distinction
+            try {
+                // Compress image before uploading
+                const compressedData = await compressImage(file, {
+                    maxWidth: 1920,
+                    maxHeight: 1920,
+                    quality: 0.8
                 });
+
+                // Generate filename
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                const fileName = `pasted-image-${timestamp}`;
+
+                // Upload to backend
+                const uploadResult = await uploadImageToBackend(
+                    currentConversationId,
+                    compressedData.base64,
+                    compressedData.mediaType,
+                    fileName
+                );
+
+                if (uploadResult.error) {
+                    console.error('Failed to upload image:', uploadResult.error);
+                    // Fallback to base64 storage
+                    attachments.push({
+                        name: fileName + '.png',
+                        type: file.type,
+                        data: compressedData.base64,
+                        path: fileName,
+                        isPasted: true
+                    });
+                } else {
+                    // Store reference instead of base64
+                    attachments.push({
+                        name: uploadResult.filename,
+                        type: uploadResult.media_type,
+                        imageRef: {
+                            image_id: uploadResult.image_id,
+                            relative_path: uploadResult.relative_path,
+                            session_id: currentConversationId
+                        },
+                        isPasted: true
+                    });
+                    console.log(`Image uploaded: ${uploadResult.filename} (${(uploadResult.size / 1024).toFixed(1)} KB)`);
+                }
 
                 renderAttachments();
                 document.getElementById('send-btn').disabled = false;
 
-                // Show a brief notification
-                console.log(`Image pasted: ${fileName} (${(file.size / 1024).toFixed(1)} KB)`);
-            };
-            reader.onerror = () => {
-                console.error('Failed to read pasted image');
+            } catch (e) {
+                console.error('Failed to process pasted image:', e);
                 alert('Failed to process pasted image');
-            };
-            reader.readAsDataURL(file);
+            }
+        }
+
+        // Compress image using canvas
+        function compressImage(file, options = {}) {
+            return new Promise((resolve, reject) => {
+                const maxWidth = options.maxWidth || 1920;
+                const maxHeight = options.maxHeight || 1920;
+                const quality = options.quality || 0.8;
+
+                const img = new Image();
+                img.onload = () => {
+                    let { width, height } = img;
+
+                    // Calculate new dimensions
+                    if (width > maxWidth || height > maxHeight) {
+                        const ratio = Math.min(maxWidth / width, maxHeight / height);
+                        width = Math.round(width * ratio);
+                        height = Math.round(height * ratio);
+                    }
+
+                    // Create canvas and draw resized image
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    // Convert to JPEG for better compression (unless PNG is needed for transparency)
+                    const mediaType = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
+                    const dataUrl = canvas.toDataURL(mediaType, quality);
+                    const base64 = dataUrl.split(',')[1];
+
+                    resolve({
+                        base64,
+                        mediaType,
+                        width,
+                        height
+                    });
+                };
+                img.onerror = () => reject(new Error('Failed to load image'));
+
+                // Read file as data URL
+                const reader = new FileReader();
+                reader.onload = (e) => { img.src = e.target.result; };
+                reader.onerror = () => reject(new Error('Failed to read file'));
+                reader.readAsDataURL(file);
+            });
+        }
+
+        // Upload image to backend
+        async function uploadImageToBackend(sessionId, base64Data, mediaType, filename) {
+            try {
+                const response = await fetch(`${BASE_URL}/v1/images/upload`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        image_data: base64Data,
+                        media_type: mediaType,
+                        filename: filename
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    return { error: error.error || 'Upload failed' };
+                }
+
+                return await response.json();
+            } catch (e) {
+                return { error: e.message };
+            }
+        }
+
+        // Fetch image base64 from backend (for sending to Claude API)
+        async function fetchImageBase64(sessionId, imageFilename) {
+            try {
+                const response = await fetch(
+                    `${BASE_URL}/v1/images/${sessionId}/${imageFilename}?format=base64`
+                );
+
+                if (!response.ok) {
+                    console.error('Failed to fetch image:', response.status);
+                    return null;
+                }
+
+                const data = await response.json();
+                return data.data;
+            } catch (e) {
+                console.error('Failed to fetch image base64:', e);
+                return null;
+            }
         }
 
         // File handling

@@ -129,7 +129,9 @@ def get_bedrock_client():
         logger.warning(f"Failed to get configured client, falling back to default: {e}")
         config = Config(
             region_name=AWS_REGION,
-            retries={'max_attempts': 3, 'mode': 'adaptive'}
+            retries={'max_attempts': 3, 'mode': 'adaptive'},
+            connect_timeout=60,
+            read_timeout=600  # 10 分钟 - 支持长时间 tool use
         )
         return boto3.client('bedrock-runtime', config=config)
 
@@ -252,7 +254,7 @@ For complex tasks, use `enter_plan_mode` first:
      - freshness="pw" (past week) - RECOMMENDED for "最新" queries
      - freshness="pm" (past month) - for broader recent content
      - freshness="py" (past year) - for annual content
-   - Use ENGLISH keywords in query, include year (e.g., "topic 2025 2026")
+   - Use ENGLISH keywords in query, include current year for recent content
    - Use count=5-10 for initial exploration
    - For news: use web-search__brave_news_search
 
@@ -328,8 +330,10 @@ def convert_anthropic_to_bedrock(anthropic_request: dict, include_tools: bool = 
                 break  # Only modify the last user message
 
     # 自动添加 MCP 工具 (动态生成，包含技能列表)
-    if include_tools and "tools" not in bedrock_body:
+    # Check for empty tools array too - frontend may send tools: [] on fetch failure
+    if include_tools and not bedrock_body.get("tools"):
         bedrock_body["tools"] = get_tool_definitions()
+        logger.info(f"[TOOLS] Auto-added {len(bedrock_body['tools'])} tools (request had none or empty)")
 
     return bedrock_model_id, bedrock_body
 
@@ -559,6 +563,12 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
                 logger.warning(f"Context compact failed: {e}, continuing anyway")
 
         # 构建请求
+        logger.info(f"[DEBUG] Building request - tools count: {len(tools)}, messages count: {len(messages)}")
+        if tools:
+            logger.info(f"[DEBUG] First 3 tools: {[t.get('name', '?') for t in tools[:3]]}")
+        else:
+            logger.warning(f"[DEBUG] NO TOOLS in request! This will cause hallucination.")
+
         model_id, bedrock_body = convert_anthropic_to_bedrock({
             "model": original_model,
             "messages": messages,
@@ -567,6 +577,10 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             "max_tokens": anthropic_request.get("max_tokens", 8192),
             "stream": True
         })
+
+        # Verify tools are in bedrock_body
+        bedrock_tools = bedrock_body.get("tools", [])
+        logger.info(f"[DEBUG] Bedrock body tools count: {len(bedrock_tools)}")
 
         # 调用 Bedrock 流式 API
         try:
@@ -868,6 +882,56 @@ def health():
     return Response(json.dumps({"status": "healthy", "backend": "bedrock"}), mimetype='application/json')
 
 
+@app.route('/v1/warmup', methods=['POST'])
+def warmup():
+    """Warmup endpoint to prevent cold starts.
+
+    Call this periodically (e.g., every 30s) to keep the system ready:
+    - Pre-loads skill definitions
+    - Checks MCP server health (removes dead servers)
+    - Keeps Bedrock client connection warm
+    """
+    import time
+    start = time.time()
+    results = {
+        "skills": None,
+        "mcp_servers": None,
+        "bedrock_client": None
+    }
+
+    try:
+        # 1. Pre-load skills (uses cache, fast)
+        loader = get_skill_loader()
+        loader.reload()  # Uses cache TTL, won't re-scan if fresh
+        results["skills"] = {"count": len(loader.skills), "cached": True}
+    except Exception as e:
+        results["skills"] = {"error": str(e)}
+
+    try:
+        # 2. Check MCP server health
+        manager = get_mcp_manager()
+        health_results = manager.health_check_all()
+        results["mcp_servers"] = {
+            "checked": len(health_results),
+            "healthy": sum(1 for v in health_results.values() if v),
+            "dead_cleaned": sum(1 for v in health_results.values() if not v)
+        }
+    except Exception as e:
+        results["mcp_servers"] = {"error": str(e)}
+
+    try:
+        # 3. Keep Bedrock client alive (just get client, don't make API call)
+        client = get_bedrock_client()
+        results["bedrock_client"] = {"ready": client is not None}
+    except Exception as e:
+        results["bedrock_client"] = {"error": str(e)}
+
+    elapsed = time.time() - start
+    results["elapsed_ms"] = round(elapsed * 1000, 2)
+
+    return Response(json.dumps(results), mimetype='application/json')
+
+
 # ==================== 上下文管理端点 ====================
 
 @app.route('/v1/context/stats', methods=['POST'])
@@ -880,6 +944,30 @@ def context_stats():
         return Response(json.dumps(stats), mimetype='application/json')
     except Exception as e:
         logger.error(f"Context stats error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+@app.route('/v1/context/breakdown', methods=['POST'])
+def context_breakdown():
+    """获取详细的上下文分类统计（类似 Claude Code 的 /context 命令）"""
+    try:
+        data = request.get_json()
+        messages = data.get('messages', [])
+        system_prompt = data.get('system', '')
+        tools = data.get('tools', [])
+        skills = data.get('skills', [])
+        memory_files = data.get('memory_files', [])
+        ctx_manager = get_context_manager()
+        breakdown = ctx_manager.get_context_breakdown(
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
+            skills=skills,
+            memory_files=memory_files
+        )
+        return Response(json.dumps(breakdown), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"Context breakdown error: {e}")
         return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
 
 
@@ -1100,6 +1188,44 @@ def get_session(session_id):
         return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
 
 
+@app.route('/v1/sessions/by-number/<int:number>', methods=['GET'])
+def get_session_by_number(number):
+    """通过前端显示编号获取会话 (如 #168)
+
+    前端显示逻辑: sessionNumber = totalCount - index (最新的是最大号)
+    所以 #N 对应 sessions[totalCount - N]
+    """
+    try:
+        ctx_manager = get_context_manager()
+        sessions = ctx_manager.list_sessions()
+        total_count = len(sessions)
+
+        if number < 1 or number > total_count:
+            return Response(json.dumps({
+                "error": f"Session #{number} not found. Valid range: #1 - #{total_count}"
+            }), status=404, mimetype='application/json')
+
+        # #N 对应 sessions[total_count - N] (因为 sessions 是按时间倒序)
+        index = total_count - number
+        session_info = sessions[index]
+        session_id = session_info.get('session_id')
+
+        # 加载消息
+        messages = ctx_manager.load_session(session_id)
+
+        return Response(json.dumps({
+            "display_number": number,
+            "session_id": session_id,
+            "title": session_info.get('metadata', {}).get('title', ''),
+            "messages": messages,
+            "count": len(messages),
+            "total_sessions": total_count
+        }), mimetype='application/json')
+    except Exception as e:
+        logger.error(f"Get session by number error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
 @app.route('/v1/sessions/<session_id>', methods=['POST'])
 def save_session_messages(session_id):
     """保存消息到会话（完整覆盖，类似 Claude Code 的 JSONL 格式）"""
@@ -1151,6 +1277,118 @@ def get_session_hash():
         }), mimetype='application/json')
     except Exception as e:
         logger.error(f"Session hash error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+# ==================== Image Storage API (Optimized - avoid base64 in JSONL) ====================
+
+@app.route('/v1/images/upload', methods=['POST'])
+def upload_image():
+    """
+    上传图片并存储为文件，返回图片引用 ID
+
+    避免 base64 直接存入 JSONL，优化存储空间和加载速度
+    图片存储位置: ~/.springo/sessions/{session_id}/images/{image_id}.{ext}
+    """
+    try:
+        data = request.get_json()
+        session_id = data.get('session_id')
+        image_data = data.get('image_data')  # base64 encoded
+        media_type = data.get('media_type', 'image/png')
+        filename = data.get('filename', '')
+
+        if not session_id or not image_data:
+            return Response(json.dumps({"error": "session_id and image_data required"}),
+                          status=400, mimetype='application/json')
+
+        # Determine file extension from media type
+        ext_map = {
+            'image/png': 'png',
+            'image/jpeg': 'jpg',
+            'image/gif': 'gif',
+            'image/webp': 'webp'
+        }
+        ext = ext_map.get(media_type, 'png')
+
+        # Generate unique image ID
+        image_id = f"img_{uuid.uuid4().hex[:12]}"
+
+        # Create images directory for this session
+        ctx_manager = get_context_manager()
+        session_dir = ctx_manager._get_session_dir(session_id)
+        images_dir = os.path.join(session_dir, "images")
+        os.makedirs(images_dir, exist_ok=True)
+
+        # Save image file
+        image_path = os.path.join(images_dir, f"{image_id}.{ext}")
+        import base64
+        with open(image_path, 'wb') as f:
+            f.write(base64.b64decode(image_data))
+
+        # Get file size for logging
+        file_size = os.path.getsize(image_path)
+        logger.info(f"Image saved: {image_id}.{ext} ({file_size:,} bytes) for session {session_id}")
+
+        return Response(json.dumps({
+            "image_id": image_id,
+            "filename": f"{image_id}.{ext}",
+            "media_type": media_type,
+            "size": file_size,
+            "relative_path": f"images/{image_id}.{ext}"
+        }), mimetype='application/json')
+
+    except Exception as e:
+        logger.error(f"Image upload error: {e}")
+        return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
+
+
+@app.route('/v1/images/<session_id>/<image_filename>', methods=['GET'])
+def get_image(session_id, image_filename):
+    """
+    获取存储的图片文件
+
+    返回图片的 base64 数据或直接返回二进制
+    """
+    try:
+        ctx_manager = get_context_manager()
+        session_dir = ctx_manager._get_session_dir(session_id)
+        image_path = os.path.join(session_dir, "images", image_filename)
+
+        if not os.path.exists(image_path):
+            return Response(json.dumps({"error": "Image not found"}),
+                          status=404, mimetype='application/json')
+
+        # Determine media type from extension
+        ext = image_filename.split('.')[-1].lower()
+        media_type_map = {
+            'png': 'image/png',
+            'jpg': 'image/jpeg',
+            'jpeg': 'image/jpeg',
+            'gif': 'image/gif',
+            'webp': 'image/webp'
+        }
+        media_type = media_type_map.get(ext, 'image/png')
+
+        # Check if client wants base64 or binary
+        want_base64 = request.args.get('format') == 'base64'
+
+        if want_base64:
+            import base64
+            with open(image_path, 'rb') as f:
+                image_data = base64.b64encode(f.read()).decode('utf-8')
+            return Response(json.dumps({
+                "image_id": image_filename.rsplit('.', 1)[0],
+                "media_type": media_type,
+                "data": image_data
+            }), mimetype='application/json')
+        else:
+            # Return binary image directly
+            with open(image_path, 'rb') as f:
+                image_data = f.read()
+            return Response(image_data, mimetype=media_type)
+
+    except Exception as e:
+        logger.error(f"Get image error: {e}")
         return Response(json.dumps({"error": str(e)}), status=500, mimetype='application/json')
 
 
@@ -1406,10 +1644,10 @@ def get_skill_instructions(skill_name):
 
 @app.route('/v1/skills/reload', methods=['POST'])
 def reload_skills():
-    """重新加载所有 Skills"""
+    """重新加载所有 Skills (强制刷新)"""
     try:
         loader = get_skill_loader()
-        loader.reload()
+        loader.reload(force=True)  # Force reload bypassing cache
         skills = loader.list_skills()
         return Response(
             json.dumps({"message": "Skills reloaded", "count": len(skills), "skills": skills}),

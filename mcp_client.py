@@ -115,6 +115,24 @@ class MCPServerConnection:
                 self.process.kill()
             self.process = None
 
+    def is_alive(self) -> bool:
+        """Check if the server process is still alive"""
+        if not self.process:
+            return False
+        return self.process.poll() is None  # None means still running
+
+    def health_check(self) -> bool:
+        """Check if the server is healthy and responsive.
+
+        Returns True if server is alive and responsive, False otherwise.
+        This detects zombie servers that have died but weren't cleaned up.
+        """
+        if not self.is_alive():
+            self._running = False
+            return False
+        # Server process is alive
+        return True
+
     def _send_request(self, method: str, params: Dict[str, Any] = None, timeout: float = 30) -> Optional[Dict[str, Any]]:
         """Send a JSON-RPC request and wait for response"""
         if not self.process or not self._running:
@@ -208,20 +226,52 @@ class MCPServerConnection:
         else:
             self.tools = []
 
-    def call_tool(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Call a tool on this server"""
-        # Use 40 second timeout for tool calls (slightly less than frontend's 45s)
-        result = self._send_request("tools/call", {
-            "name": name,
-            "arguments": arguments
-        }, timeout=40)
+    def call_tool(self, name: str, arguments: Dict[str, Any], timeout: float = 60) -> Dict[str, Any]:
+        """Call a tool on this server with robust timeout handling.
+
+        Args:
+            name: Tool name
+            arguments: Tool arguments
+            timeout: Timeout in seconds (default 60)
+        """
+        import concurrent.futures
+        import time
+
+        start_time = time.time()
+        logger.info(f"MCP tool call started: {self.name}/{name} (timeout={timeout}s)")
+
+        def _do_call():
+            return self._send_request("tools/call", {
+                "name": name,
+                "arguments": arguments
+            }, timeout=timeout)
+
+        # Use ThreadPoolExecutor for hard timeout guarantee
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_do_call)
+                try:
+                    result = future.result(timeout=timeout + 5)  # Extra 5s buffer
+                    elapsed = time.time() - start_time
+                    logger.info(f"MCP tool call completed: {self.name}/{name} ({elapsed:.1f}s)")
+                except concurrent.futures.TimeoutError:
+                    elapsed = time.time() - start_time
+                    logger.error(f"MCP tool {name} hard timeout after {elapsed:.1f}s (limit={timeout}s)")
+                    return {"error": f"Tool '{name}' timed out after {timeout} seconds. The external service may be slow or unavailable."}
+        except Exception as e:
+            elapsed = time.time() - start_time
+            logger.error(f"MCP tool {name} execution error after {elapsed:.1f}s: {e}")
+            return {"error": f"Tool execution failed: {e}"}
 
         if result and "result" in result:
             return result["result"]
         elif result and "error" in result:
-            return {"error": result["error"]}
+            error_msg = result["error"]
+            if isinstance(error_msg, dict):
+                error_msg = error_msg.get("message", str(error_msg))
+            return {"error": error_msg}
         else:
-            return {"error": "Unknown error"}
+            return {"error": "Unknown error from MCP server"}
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get tool definitions in Claude format"""
@@ -539,17 +589,35 @@ class MCPManager:
             all_tools.extend(server.get_tool_definitions())
         return all_tools
 
-    def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Call a tool by its full name (server__toolname)"""
+    def call_tool(self, tool_name: str, arguments: Dict[str, Any], timeout: float = 60) -> Dict[str, Any]:
+        """Call a tool by its full name (server__toolname).
+
+        Args:
+            tool_name: Full tool name in format "server__toolname"
+            arguments: Tool arguments
+            timeout: Timeout in seconds (default 60)
+        """
         if "__" not in tool_name:
             return {"error": f"Invalid tool name format: {tool_name}"}
 
         server_name, actual_tool_name = tool_name.split("__", 1)
 
+        # Check if server needs to be started (lazy loading)
         if server_name not in self.servers:
-            return {"error": f"Server not found: {server_name}"}
+            # Try lazy loading
+            if not self.ensure_server_started(server_name):
+                return {"error": f"Server not found or failed to start: {server_name}"}
 
-        return self.servers[server_name].call_tool(actual_tool_name, arguments)
+        # Check server health and restart if dead
+        server = self.servers[server_name]
+        if not server.health_check():
+            logger.warning(f"Server {server_name} is dead, attempting restart")
+            del self.servers[server_name]
+            if not self.ensure_server_started(server_name):
+                return {"error": f"Server {server_name} died and failed to restart"}
+            server = self.servers[server_name]
+
+        return server.call_tool(actual_tool_name, arguments, timeout=timeout)
 
     def stop_all(self):
         """Stop all MCP servers"""
@@ -562,10 +630,36 @@ class MCPManager:
         for name, server in self.servers.items():
             status[name] = {
                 "running": server._running,
+                "alive": server.is_alive(),
                 "tools_count": len(server.tools),
                 "tools": [t.get("name") for t in server.tools]
             }
         return status
+
+    def health_check_all(self) -> Dict[str, bool]:
+        """Check health of all servers and clean up dead ones.
+
+        Returns dict of server_name -> is_healthy.
+        Dead servers are removed from self.servers.
+        """
+        results = {}
+        dead_servers = []
+
+        for name, server in self.servers.items():
+            healthy = server.health_check()
+            results[name] = healthy
+            if not healthy:
+                dead_servers.append(name)
+                logger.warning(f"MCP server {name} is dead, marking for cleanup")
+
+        # Remove dead servers
+        for name in dead_servers:
+            del self.servers[name]
+            if name in self.server_configs:
+                self.server_configs[name]["status"] = "stopped"
+            logger.info(f"Removed dead MCP server: {name}")
+
+        return results
 
     def register_tools_as_deferred(self):
         """Register all MCP tools as deferred in the tool registry (lazy loading)"""
@@ -654,9 +748,18 @@ def get_mcp_tools() -> List[Dict[str, Any]]:
     return get_mcp_manager().get_all_tools()
 
 
-def call_mcp_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Call an MCP tool"""
-    return get_mcp_manager().call_tool(tool_name, arguments)
+def call_mcp_tool(tool_name: str, arguments: Dict[str, Any], timeout: float = 60) -> Dict[str, Any]:
+    """Call an MCP tool with timeout protection.
+
+    Args:
+        tool_name: Full tool name in format "server__toolname"
+        arguments: Tool arguments
+        timeout: Timeout in seconds (default 60)
+
+    Returns:
+        Tool result or error dict
+    """
+    return get_mcp_manager().call_tool(tool_name, arguments, timeout=timeout)
 
 
 def shutdown_mcp_servers():
