@@ -21,7 +21,7 @@ def _run_git_command(args: List[str], cwd: str = None) -> Dict[str, Any]:
             ["git"] + args,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,  # 2 minutes, same as Claude Code
             cwd=cwd
         )
 

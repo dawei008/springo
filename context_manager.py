@@ -10,9 +10,12 @@ Enhanced version with Claude Code-like features:
 import json
 import os
 import hashlib
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Optional tiktoken import
 try:
@@ -54,6 +57,10 @@ class ContextManager:
 
     # Max tool result size before saving to file (30KB)
     MAX_INLINE_OUTPUT_SIZE = 30 * 1024
+
+    # Max size for tool results in context (8KB for each tool result in history)
+    # This prevents old tool results from consuming too much context
+    MAX_TOOL_RESULT_CONTEXT_SIZE = 8 * 1024
 
     def __init__(self):
         if HAS_TIKTOKEN:
@@ -567,6 +574,29 @@ class ContextManager:
         while split_index > 0 and messages[split_index].get("role") != "user":
             split_index -= 1
 
+        # CRITICAL: Ensure tool_use/tool_result pairs are not split
+        # If the user message at split_index contains tool_result,
+        # we must also keep the previous assistant message (which has tool_use)
+        while split_index > 0:
+            msg = messages[split_index]
+            content = msg.get("content", "")
+            has_tool_result = False
+
+            if isinstance(content, list):
+                has_tool_result = any(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in content
+                )
+
+            if has_tool_result:
+                # Move back to include the assistant message with tool_use
+                split_index -= 1
+                # Then move back to the previous user message boundary
+                while split_index > 0 and messages[split_index].get("role") != "user":
+                    split_index -= 1
+            else:
+                break
+
         old_messages = messages[:split_index]
         recent_messages = messages[split_index:]
 
@@ -686,6 +716,26 @@ class ContextManager:
                     "message": message
                 }
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+        # After overwriting session, sync to AgentCore Memory
+        # Note: This syncs ALL messages since indices have changed after compaction
+        if self._memory_sync_enabled:
+            sync_mgr = get_sync_manager()
+            if sync_mgr:
+                # Reset sync state since we overwrote the file
+                sync_state_file = os.path.join(session_dir, ".sync_state.json")
+                try:
+                    # Mark as needs full resync
+                    with open(sync_state_file, 'w') as f:
+                        json.dump({
+                            "last_synced_index": -1,  # Reset to trigger full resync
+                            "compacted": True,
+                            "compacted_at": datetime.now().isoformat()
+                        }, f)
+                except Exception:
+                    pass
+                # Queue all messages for sync
+                sync_mgr.queue_conversation(session_id, messages)
 
     def load_session(self, session_id: str) -> List[Dict[str, Any]]:
         """Load all messages from a session JSONL file
@@ -954,6 +1004,225 @@ class ContextManager:
                         cleaned += 1
 
         return cleaned
+
+    # ========== Tool Result Truncation (Claude Code style) ==========
+
+    def truncate_tool_results(self, messages: List[Dict[str, Any]], max_size: int = None) -> List[Dict[str, Any]]:
+        """
+        Truncate tool results in messages to prevent context overflow.
+        Like Claude Code: keeps recent tool results full, truncates older ones.
+
+        Args:
+            messages: The message list
+            max_size: Max size per tool result in bytes (default: MAX_TOOL_RESULT_CONTEXT_SIZE)
+
+        Returns:
+            New message list with truncated tool results
+        """
+        if max_size is None:
+            max_size = self.MAX_TOOL_RESULT_CONTEXT_SIZE
+
+        result = []
+        for msg in messages:
+            content = msg.get("content", "")
+
+            # Handle user messages with tool_result blocks
+            if msg.get("role") == "user" and isinstance(content, list):
+                new_content = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        result_content = block.get("content", "")
+                        if isinstance(result_content, str):
+                            content_size = len(result_content.encode('utf-8'))
+                            if content_size > max_size:
+                                # Truncate to max_size
+                                truncated = result_content[:max_size // 2]
+                                truncated += f"\n\n[... truncated {content_size - max_size:,} bytes ...]\n\n"
+                                truncated += result_content[-(max_size // 4):]
+                                new_content.append({
+                                    **block,
+                                    "content": truncated
+                                })
+                            else:
+                                new_content.append(block)
+                        else:
+                            new_content.append(block)
+                    else:
+                        new_content.append(block)
+                result.append({**msg, "content": new_content})
+            else:
+                result.append(msg)
+
+        return result
+
+    def prepare_messages_for_api(self, messages: List[Dict[str, Any]], keep_recent: int = 3) -> List[Dict[str, Any]]:
+        """
+        Prepare messages for API call by truncating old tool results.
+        Keeps the most recent tool results full for context.
+
+        Args:
+            messages: The message list
+            keep_recent: Number of recent user messages to keep tool results full
+
+        Returns:
+            Messages ready for API with managed context size
+        """
+        if not messages:
+            return messages
+
+        # Find indices of user messages (which contain tool_result blocks)
+        user_msg_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+
+        if len(user_msg_indices) <= keep_recent:
+            # Not enough messages to truncate, return as-is
+            return messages
+
+        # Split: older messages get truncated, recent ones stay full
+        cutoff_idx = user_msg_indices[-keep_recent] if keep_recent > 0 else len(messages)
+
+        # Truncate older messages
+        older = self.truncate_tool_results(messages[:cutoff_idx])
+        recent = messages[cutoff_idx:]
+
+        return older + recent
+
+    def repair_orphan_tool_uses(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Repair orphaned tool_use blocks by adding dummy tool_result responses.
+
+        This handles two cases:
+        1. User interrupts mid-turn, leaving tool_use without tool_result
+        2. Context compaction creates duplicate tool_use IDs (same ID used in multiple messages)
+
+        The Bedrock API requires every tool_use to have a matching tool_result
+        in the IMMEDIATELY FOLLOWING user message.
+
+        Args:
+            messages: The message list to repair
+
+        Returns:
+            Repaired message list with all tool_use having corresponding tool_result
+        """
+        if not messages:
+            return messages
+
+        # First pass: identify tool_use blocks that need repair
+        # Key insight: each tool_use must have a tool_result in the NEXT user message
+        # So we track tool_use by (msg_index, id) pairs
+        tool_uses_needing_result = []  # List of (msg_index, tool_id, tool_name)
+        seen_tool_ids = set()  # Track IDs we've seen to detect duplicates
+
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "")
+            content = msg.get("content", [])
+
+            if isinstance(content, list):
+                if role == "assistant":
+                    # Collect tool_use from this assistant message
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            tool_id = block.get("id")
+                            tool_name = block.get("name", "unknown")
+                            if tool_id:
+                                # Check if this is a duplicate ID
+                                if tool_id in seen_tool_ids:
+                                    logger.warning(f"Duplicate tool_use ID detected: {tool_id[:30]}... in msg[{i}]")
+                                seen_tool_ids.add(tool_id)
+                                tool_uses_needing_result.append((i, tool_id, tool_name))
+
+                elif role == "user":
+                    # Check which tool_results are in this user message
+                    tool_result_ids_here = set()
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_result":
+                            tool_result_ids_here.add(block.get("tool_use_id"))
+
+                    # Remove satisfied tool_uses (from the previous assistant message only)
+                    # Tool_result must come IMMEDIATELY after tool_use
+                    remaining = []
+                    for (msg_idx, tool_id, tool_name) in tool_uses_needing_result:
+                        if msg_idx == i - 1 and tool_id in tool_result_ids_here:
+                            # This tool_use is satisfied
+                            pass
+                        else:
+                            remaining.append((msg_idx, tool_id, tool_name))
+                    tool_uses_needing_result = remaining
+
+        # Any remaining tool_uses need dummy results
+        if not tool_uses_needing_result:
+            return messages  # All tool_uses are satisfied
+
+        logger.warning(f"Found {len(tool_uses_needing_result)} tool_use blocks needing repair...")
+
+        # Group by message index
+        orphans_by_msg = {}
+        for (msg_idx, tool_id, tool_name) in tool_uses_needing_result:
+            if msg_idx not in orphans_by_msg:
+                orphans_by_msg[msg_idx] = []
+            orphans_by_msg[msg_idx].append((tool_id, tool_name))
+
+        # Build repaired message list
+        # Strategy: When we encounter a user message that follows an assistant message
+        # with orphaned tool_use, prepend dummy tool_results to that user message
+        repaired = []
+        pending_orphans = []  # Orphans from previous assistant message
+
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "")
+
+            # If this is a user message and we have pending orphans from previous assistant
+            if role == "user" and pending_orphans:
+                # Create dummy tool_results for pending orphans
+                dummy_results = []
+                for tool_id, tool_name in pending_orphans:
+                    dummy_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": f"[Tool execution interrupted - user sent new message before {tool_name} completed]",
+                        "is_error": True
+                    })
+
+                # Merge with existing user message content
+                existing_content = msg.get("content", "")
+                if isinstance(existing_content, str):
+                    # Convert string content to list format
+                    merged_content = dummy_results + [{"type": "text", "text": existing_content}]
+                elif isinstance(existing_content, list):
+                    # Prepend dummy results to existing list
+                    merged_content = dummy_results + list(existing_content)
+                else:
+                    merged_content = dummy_results
+
+                repaired.append({
+                    "role": "user",
+                    "content": merged_content
+                })
+                logger.info(f"Merged {len(dummy_results)} dummy tool_results into user message {i}")
+                pending_orphans = []  # Clear pending orphans
+            else:
+                repaired.append(msg)
+
+            # Check if this assistant message has orphaned tool_uses
+            if role == "assistant" and i in orphans_by_msg:
+                pending_orphans = orphans_by_msg[i]
+
+        # Handle case where orphans are at the end (no following user message)
+        if pending_orphans:
+            dummy_results = []
+            for tool_id, tool_name in pending_orphans:
+                dummy_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": f"[Tool execution interrupted - no response received for {tool_name}]",
+                    "is_error": True
+                })
+            repaired.append({
+                "role": "user",
+                "content": dummy_results
+            })
+            logger.info(f"Added {len(dummy_results)} dummy tool_results at end of messages")
+
+        return repaired
 
     # ========== Auto-Summarization ==========
 

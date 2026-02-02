@@ -303,9 +303,9 @@ def _should_use_shell(command: str) -> bool:
     return any(feat in command for feat in shell_features)
 
 
-def execute_command(command: str, working_directory: str = None, timeout: int = 60,
+def execute_command(command: str, working_directory: str = None, timeout: int = 120,
                    run_in_background: bool = False, description: str = None) -> Dict[str, Any]:
-    """Execute shell command with improved security"""
+    """Execute shell command with improved security (timeout: 120s, same as Claude Code)"""
     global _task_counter
 
     try:

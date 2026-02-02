@@ -37,3 +37,11 @@ workspace/
 
 # Test outputs
 tests/__pycache__/
+tests/*.png
+tests/*.json
+
+# Process outputs
+nohup.out
+
+# PyInstaller
+*.spec

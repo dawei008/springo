@@ -554,15 +554,65 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             logger.info(f"Injected skill '{active_skill['name']}' into system prompt")
             yield f"event: skill_injected\ndata: {json.dumps({'type': 'skill_injected', 'skill_name': active_skill['name']})}\n\n"
 
-        # Context 检查和自动 compact (Claude Code 风格)
+        # Get session_id for persistence (Claude Code style: persist changes)
+        session_id = anthropic_request.get('session_id')
+        messages_modified = False
+
+        # Step 1: Truncate old tool results to prevent context overflow (Claude Code style)
+        # This is CRITICAL to prevent tool results from consuming too much context
+        before_truncation = ctx_manager.count_messages_tokens(messages)
+        messages = ctx_manager.prepare_messages_for_api(messages, keep_recent=3)
+        after_truncation = ctx_manager.count_messages_tokens(messages)
+        if before_truncation != after_truncation:
+            logger.info(f"Tool results truncated: {before_truncation:,} -> {after_truncation:,} tokens")
+            messages_modified = True
+
+        # Step 2: Context 检查和自动 compact (Claude Code 风格)
+        current_token_count = ctx_manager.count_messages_tokens(messages)
+        logger.info(f"[Compact Check] iteration={iteration}, tokens={current_token_count:,}, threshold={ctx_manager.SUMMARY_THRESHOLD:,}, should_compact={current_token_count > ctx_manager.SUMMARY_THRESHOLD}")
         if ctx_manager.should_summarize(messages):
-            logger.info(f"Context approaching limit, compacting with {compact_model}... (iteration {iteration})")
-            yield f"event: context_compact\ndata: {json.dumps({'type': 'context_compact', 'reason': 'approaching_limit', 'model': compact_model})}\n\n"
+            logger.info(f"Context approaching limit ({ctx_manager.count_messages_tokens(messages):,} tokens), compacting with {compact_model}... (iteration {iteration})")
+            yield f"event: context_compact\ndata: {json.dumps({'type': 'context_compact', 'reason': 'approaching_limit', 'model': compact_model, 'tokens_before': ctx_manager.count_messages_tokens(messages)})}\n\n"
             try:
+                original_count = len(messages)
                 messages = ctx_manager.summarize_messages(messages, model=compact_model)
-                logger.info(f"Context compacted, now {len(messages)} messages")
+                new_token_count = ctx_manager.count_messages_tokens(messages)
+                logger.info(f"Context compacted: {original_count} -> {len(messages)} messages, {new_token_count:,} tokens")
+                messages_modified = True
+                yield f"event: context_compact_done\ndata: {json.dumps({'type': 'context_compact_done', 'messages_before': original_count, 'messages_after': len(messages), 'tokens_after': new_token_count})}\n\n"
             except Exception as e:
-                logger.warning(f"Context compact failed: {e}, continuing anyway")
+                logger.error(f"Context compact failed: {e}", exc_info=True)
+                # Even if compact fails, continue with truncated tool results
+                yield f"event: context_compact_failed\ndata: {json.dumps({'type': 'context_compact_failed', 'error': str(e)})}\n\n"
+
+        # Step 3: Final check - if still over limit, force truncation
+        current_tokens = ctx_manager.count_messages_tokens(messages)
+        if current_tokens > ctx_manager.MAX_TOKENS * 0.95:  # 95% threshold
+            logger.warning(f"Context still critical ({current_tokens:,} tokens), forcing aggressive truncation")
+            # Force aggressive truncation on ALL tool results
+            messages = ctx_manager.truncate_tool_results(messages, max_size=2048)  # 2KB limit
+            final_tokens = ctx_manager.count_messages_tokens(messages)
+            logger.info(f"After aggressive truncation: {final_tokens:,} tokens")
+            messages_modified = True
+
+        # Step 4: Persist changes and notify frontend (Claude Code style)
+        # This ensures truncated/compacted messages are saved and frontend stays in sync
+        if messages_modified and session_id:
+            try:
+                # Save updated messages to JSONL (overwrite with compacted version)
+                ctx_manager.save_session_complete(session_id, messages, metadata={
+                    'compacted': True,
+                    'tokens': ctx_manager.count_messages_tokens(messages)
+                })
+                logger.info(f"Session {session_id} updated with compacted messages")
+                # Notify frontend to reload messages
+                yield f"event: messages_updated\ndata: {json.dumps({'type': 'messages_updated', 'session_id': session_id, 'messages': messages, 'token_count': ctx_manager.count_messages_tokens(messages)})}\n\n"
+            except Exception as e:
+                logger.error(f"Failed to persist compacted messages: {e}")
+
+        # Step 5: Repair orphaned tool_use blocks (critical for Bedrock API)
+        # This handles the case where user interrupts mid-turn, leaving tool_use without tool_result
+        messages = ctx_manager.repair_orphan_tool_uses(messages)
 
         # 构建请求
         logger.info(f"[DEBUG] Building request - tools count: {len(tools)}, messages count: {len(messages)}")
@@ -673,8 +723,15 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
         # 检查是否需要执行工具
         tool_uses = [b for b in content_blocks if b.get("type") == "tool_use"]
 
+        # Debug: log stop_reason and tool_uses
+        logger.info(f"[DEBUG] Response stop_reason: {stop_reason}")
+        logger.info(f"[DEBUG] Content blocks: {len(content_blocks)}, tool_uses: {len(tool_uses)}")
+        if tool_uses:
+            logger.info(f"[DEBUG] Tool uses: {[t.get('name') for t in tool_uses]}")
+
         if not tool_uses or stop_reason != "tool_use":
             # 没有工具调用，完成
+            logger.info(f"[DEBUG] No tool execution - stop_reason={stop_reason}, tool_uses={len(tool_uses)}")
             return
 
         # 执行工具并发送进度更新 (include input for frontend display)
@@ -762,9 +819,12 @@ def handle_auto_nonstreaming(anthropic_request: dict, max_iterations: int = 1000
     bedrock_client = get_bedrock_client()
     ctx_manager = get_context_manager()
     original_model = anthropic_request.get("model", "claude-3-5-sonnet-20241022")
-    messages = anthropic_request.get("messages", [])
+    messages = list(anthropic_request.get("messages", []))  # Make a copy
     tools = anthropic_request.get("tools", [])
     system = anthropic_request.get("system", "")
+
+    # Repair orphaned tool_use blocks (critical for Bedrock API)
+    messages = ctx_manager.repair_orphan_tool_uses(messages)
 
     iteration = 0
     final_response = None

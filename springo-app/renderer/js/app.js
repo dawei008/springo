@@ -997,6 +997,10 @@
                     status.textContent = '◐ Executing tools...';
                     status.className = 'status-running';
                     break;
+                case 'compacting':
+                    status.textContent = '◐ Compacting...';
+                    status.className = 'status-running';
+                    break;
                 case 'completed':
                     status.textContent = '✓ Completed';
                     status.className = 'status-completed';
@@ -1310,11 +1314,21 @@
             const notification = document.createElement('div');
             notification.className = `context-notification ${type}`;
             notification.textContent = message;
+
+            // Map type to background color
+            let bgColor;
+            switch (type) {
+                case 'success': bgColor = 'var(--success, #28a745)'; break;
+                case 'warning': bgColor = '#f0ad4e'; break;
+                case 'error': bgColor = '#d9534f'; break;
+                default: bgColor = 'var(--accent, #007bff)';
+            }
+
             notification.style.cssText = `
                 position: fixed;
                 bottom: 80px;
                 right: 20px;
-                background: ${type === 'success' ? 'var(--success)' : 'var(--accent)'};
+                background: ${bgColor};
                 color: white;
                 padding: 10px 16px;
                 border-radius: 8px;
@@ -1328,6 +1342,50 @@
                 notification.style.animation = 'fadeOut 0.3s ease';
                 setTimeout(() => notification.remove(), 300);
             }, 3000);
+        }
+
+        // Enable/disable input during context compaction
+        function setInputEnabled(enabled) {
+            const input = document.getElementById('message-input');
+            const sendBtn = document.querySelector('.send-button');
+
+            if (input) {
+                input.disabled = !enabled;
+                input.style.opacity = enabled ? '1' : '0.6';
+            }
+            if (sendBtn) {
+                sendBtn.disabled = !enabled;
+                sendBtn.style.opacity = enabled ? '1' : '0.6';
+            }
+
+            // Also show/hide a blocking overlay if needed
+            let overlay = document.getElementById('compact-overlay');
+            if (!enabled) {
+                if (!overlay) {
+                    overlay = document.createElement('div');
+                    overlay.id = 'compact-overlay';
+                    overlay.style.cssText = `
+                        position: fixed;
+                        bottom: 0;
+                        left: 0;
+                        right: 0;
+                        height: 60px;
+                        background: rgba(0,0,0,0.3);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: white;
+                        font-size: 14px;
+                        z-index: 999;
+                    `;
+                    overlay.textContent = '正在压缩上下文，请稍候...';
+                    document.body.appendChild(overlay);
+                }
+            } else {
+                if (overlay) {
+                    overlay.remove();
+                }
+            }
         }
 
         // Check and auto-summarize context if needed (Claude Code style - automatic)
@@ -2550,16 +2608,10 @@
                 return linkifyFilePaths(parsed);
             };
 
-            // If content contains chat-tool-container (new tool display), preserve it
+            // Strip chat-tool-container HTML (tools shown in inline panel instead)
             if (typeof content === 'string' && content.includes('<div class="chat-tool-container"')) {
-                // Split by tool container using END marker for reliable matching
-                const parts = content.split(/(<div class="chat-tool-container">[\s\S]*?<!-- END_TOOL_CONTAINER -->)/g);
-                return parts.map(part => {
-                    if (part.includes('<div class="chat-tool-container"')) {
-                        return part;
-                    }
-                    return parseAndLinkify(part);
-                }).join('');
+                // Remove tool container, keep only the text content
+                content = content.replace(/<div class="chat-tool-container">[\s\S]*?<!-- END_TOOL_CONTAINER -->/g, '').trim();
             }
 
             // If content is already HTML (contains tool-call divs), return as-is
@@ -2724,6 +2776,7 @@
             let toolUses = [];
             let currentToolUse = null;
             let currentToolInput = '';
+            let streamToolInterval = null;  // Local interval for real-time tool updates
 
             try {
                 for await (const { event, data } of parseSSEStream(reader)) {
@@ -2785,44 +2838,122 @@
                         // Server-side auto tool execution events
                         case 'tool_execution_start':
                             console.log(`[${convId}] Server executing tools:`, data.tools?.map(t => t.name));
-                            // Add tools to sidebar in running state (now includes input from server)
+                            // Add tools to inline panel in running state
                             if (currentConversationId === convId && data.tools) {
                                 for (const tool of data.tools) {
-                                    addToolExecution({ id: tool.id, name: tool.name, input: tool.input || {} });
+                                    // Add to toolUses if not already present
+                                    if (!toolUses.find(tu => tu.id === tool.id)) {
+                                        toolUses.push({ id: tool.id, name: tool.name, input: tool.input || {}, status: 'running' });
+                                    }
                                 }
+                                // Update inline panel immediately
+                                updateInlineChatToolPanel(toolUses);
+                                // Start interval to update elapsed time (AUTO mode)
+                                if (streamToolInterval) clearInterval(streamToolInterval);
+                                streamToolInterval = setInterval(() => {
+                                    if (currentConversationId === convId) {
+                                        updateInlineChatToolPanel(toolUses);
+                                    }
+                                }, 1000);
                             }
                             break;
 
                         case 'tool_executing':
                             console.log(`[${convId}] Executing: ${data.name}`);
+                            // Update tool status to running and refresh panel
+                            if (currentConversationId === convId) {
+                                const executingTool = toolUses.find(tu => tu.id === data.id);
+                                if (executingTool) {
+                                    executingTool.status = 'running';
+                                    updateInlineChatToolPanel(toolUses);
+                                }
+                            }
                             break;
 
                         case 'tool_result':
                             // Backend sends: tool_use_id, tool_name, result
                             console.log(`[${convId}] Tool result: ${data.tool_name}`);
-                            // Update sidebar with result
-                            if (currentConversationId === convId) {
-                                updateToolExecution(data.tool_use_id, data.result);
-                            }
                             // Store result in toolUses array for chat display
                             const matchingTool = toolUses.find(tu => tu.id === data.tool_use_id);
                             if (matchingTool) {
                                 matchingTool.result = data.result;
+                                matchingTool.status = 'complete';
+                            }
+                            // Update inline panel immediately to show completion
+                            if (currentConversationId === convId) {
+                                updateInlineChatToolPanel(toolUses);
                             }
                             break;
 
                         case 'tool_execution_complete':
                             console.log(`[${convId}] All ${data.count} tools executed on server`);
-                            // Tool details are shown in the inline panel, no need to embed in chat
+                            // Stop elapsed time update interval
+                            if (streamToolInterval) {
+                                clearInterval(streamToolInterval);
+                                streamToolInterval = null;
+                            }
+                            // Final update to inline panel
+                            if (currentConversationId === convId) {
+                                updateInlineChatToolPanel(toolUses);
+                            }
+                            break;
+
+                        case 'skill_injected':
+                            // Skill was activated and injected into system prompt
+                            console.log(`[${convId}] Skill injected: ${data.skill_name}`);
+                            // Note: skill execution shown via subsequent tool calls (use_skill, read_file, etc.)
                             break;
 
                         case 'context_compact':
                             // Claude Code 风格：context 接近限制时自动 compact
-                            console.log(`[${convId}] Context compacted: ${data.reason}`);
-                            // 可选：显示通知给用户
+                            console.log(`[${convId}] Context compacting: ${data.reason}, tokens_before: ${data.tokens_before}`);
                             if (currentConversationId === convId) {
-                                updateStatus('ready');  // Brief status update
-                                console.log('Context window approaching limit, conversation compacted to continue');
+                                // Show compacting state in status bar only
+                                updateStatus('compacting');
+                            }
+                            break;
+
+                        case 'context_compact_done':
+                            // Compact completed successfully
+                            console.log(`[${convId}] Context compact done: ${data.messages_before} -> ${data.messages_after} messages, ${data.tokens_after} tokens`);
+                            if (currentConversationId === convId) {
+                                updateStatus('running');  // Resume running state
+                                updateContextIndicator({
+                                    total_tokens: data.tokens_after,
+                                    max_tokens: 200000,
+                                    usage_percent: (data.tokens_after / 200000) * 100,
+                                    status: 'normal'
+                                }, convId);
+                            }
+                            break;
+
+                        case 'context_compact_failed':
+                            // Compact failed - resume running
+                            console.error(`[${convId}] Context compact failed: ${data.error}`);
+                            if (currentConversationId === convId) {
+                                updateStatus('running');
+                            }
+                            break;
+
+                        case 'messages_updated':
+                            // Backend has modified messages (truncated/compacted) - sync to frontend
+                            // This is CRITICAL for Claude Code style context management
+                            console.log(`[${convId}] Messages updated from backend: ${data.messages?.length} messages, ${data.token_count} tokens`);
+                            if (data.messages && convRuntime[convId]) {
+                                // Update frontend messages with compacted version
+                                convRuntime[convId].messages = data.messages;
+                                console.log(`[${convId}] Frontend messages synced with backend`);
+
+                                // Update context indicator
+                                if (currentConversationId === convId) {
+                                    updateContextIndicator({
+                                        total_tokens: data.token_count,
+                                        max_tokens: 200000,
+                                        usage_percent: (data.token_count / 200000) * 100,
+                                        status: data.token_count > 160000 ? 'critical' :
+                                                data.token_count > 120000 ? 'warning' : 'normal'
+                                    }, convId);
+                                }
                             }
                             break;
 
@@ -2837,6 +2968,12 @@
             } catch (e) {
                 console.error(`[${convId}] Stream error:`, e);
                 throw e;
+            } finally {
+                // Always cleanup interval
+                if (streamToolInterval) {
+                    clearInterval(streamToolInterval);
+                    streamToolInterval = null;
+                }
             }
         }
 
@@ -3879,15 +4016,13 @@ Be concise and helpful in your responses.`;
                         toolUpdateInterval = null;
                     }
 
-                    // Update chat display with tool results (non-AUTO mode)
-                    const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
-                    if (toolsWithResults.length > 0 && currentConversationId === convId) {
-                        const toolHtml = formatToolCallsForChat(toolsWithResults);
-                        const displayContent = toolHtml + (textContent ? '\n\n' + textContent : '');
+                    // Update chat display (non-AUTO mode)
+                    // Tool calls are shown in inline panel, not in chat message
+                    if (textContent && currentConversationId === convId) {
                         const lastMsg = messages[messages.length - 1];
                         if (lastMsg && lastMsg.role === 'assistant') {
-                            lastMsg.displayContent = displayContent;
-                            updateLastMessageContent(displayContent);
+                            lastMsg.displayContent = textContent;
+                            updateLastMessageContent(textContent);
                         }
                     }
 
@@ -3913,14 +4048,12 @@ Be concise and helpful in your responses.`;
                         messages.push({ role: 'user', content: toolResults });
                         console.log(`[${convId}] Added ${toolResults.length} tool_result entries to messages`);
 
-                        // Update chat display with tool results
-                        if (currentConversationId === convId) {
-                            const toolHtml = formatToolCallsForChat(toolsWithResults);
-                            const displayContent = toolHtml + (textContent ? '\n\n' + textContent : '');
+                        // Update chat display - tool calls shown in inline panel, not in message
+                        if (textContent && currentConversationId === convId) {
                             const lastMsg = messages[messages.length - 2]; // Assistant message before tool_result
                             if (lastMsg && lastMsg.role === 'assistant') {
-                                lastMsg.displayContent = displayContent;
-                                updateLastMessageContent(displayContent);
+                                lastMsg.displayContent = textContent;
+                                updateLastMessageContent(textContent);
                             }
                         }
                     }

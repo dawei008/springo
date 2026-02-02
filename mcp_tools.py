@@ -1058,7 +1058,7 @@ _background_tasks = {}
 _task_counter = 0
 
 
-def execute_command(command: str, working_directory: str = None, timeout: int = 60,
+def execute_command(command: str, working_directory: str = None, timeout: int = 120,
                    run_in_background: bool = False, description: str = None) -> Dict[str, Any]:
     """
     Execute shell command.
@@ -1066,7 +1066,7 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
     Args:
         command: Shell command to execute
         working_directory: Directory to run command in
-        timeout: Timeout in seconds (ignored for background tasks)
+        timeout: Timeout in seconds (default 120s, same as Claude Code)
         run_in_background: If True, run command in background and return task_id
         description: Optional description for background task tracking
     """
@@ -1334,7 +1334,7 @@ def _run_git_command(args: List[str], cwd: str = None) -> Dict[str, Any]:
             ["git"] + args,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,  # 2 minutes, same as Claude Code
             cwd=cwd
         )
 
@@ -3189,20 +3189,26 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
 
             skill_list = "\n".join(skill_entries) if skill_entries else "No skills available"
 
-            # Build the dynamic description
-            dynamic_description = f"""Execute a skill to help complete specific types of tasks.
-Use this tool when the user's request matches one of the available skills.
+            # Build the dynamic description (Claude Code style - strong guidance)
+            dynamic_description = f"""Execute a skill to complete specialized tasks like document creation, data processing, etc.
+
+**CRITICAL: When a skill matches the user's request, you MUST invoke this tool IMMEDIATELY.**
+- NEVER pretend to create files (PPT, Word, Excel, PDF) without calling this tool first
+- NEVER announce "I'll create..." and then just output text - actually call the tool
+- This is a BLOCKING REQUIREMENT: invoke the skill tool BEFORE generating file-related responses
 
 Available skills:
 {skill_list}
 
 When to use this tool:
-- When the user explicitly mentions a skill name (e.g., "/pptx", "/pdf")
-- When the user's request clearly matches a skill's purpose (e.g., "create a presentation" → pptx skill)
-- When specialized workflows or templates would help complete the task
+- User explicitly mentions a skill (e.g., "/pptx", "/pdf")
+- User asks to CREATE documents: PPT, Word, Excel, PDF → use corresponding skill
+- User asks to EDIT existing documents → use corresponding skill
+- Task matches a skill's description above
 
-Call this tool with the skill_name and the user's original request.
-The tool will return detailed instructions for completing the task."""
+Example: User says "create a presentation about X" → MUST call use_skill(skill_name="pptx")
+
+Call with skill_name and optionally user_request. The skill will provide detailed implementation."""
 
             # Find and update use_skill tool description
             for tool in tools:

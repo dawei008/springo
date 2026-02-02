@@ -177,16 +177,25 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
 
             skill_list = "\n".join(skill_entries) if skill_entries else "No skills available"
 
-            dynamic_description = f"""Execute a skill to help complete specific types of tasks.
+            dynamic_description = f"""Execute a skill to complete specialized tasks like document creation, data processing, etc.
+
+**CRITICAL: When a skill matches the user's request, you MUST invoke this tool IMMEDIATELY.**
+- NEVER pretend to create files (PPT, Word, Excel, PDF) without calling this tool first
+- NEVER announce "I'll create..." and then just output text - actually call the tool
+- This is a BLOCKING REQUIREMENT: invoke the skill tool BEFORE generating file-related responses
 
 Available skills:
 {skill_list}
 
 When to use this tool:
-- When the user explicitly mentions a skill name (e.g., "/pptx", "/pdf")
-- When the user's request clearly matches a skill's purpose
+- User explicitly mentions a skill (e.g., "/pptx", "/pdf")
+- User asks to CREATE documents: PPT, Word, Excel, PDF -> use corresponding skill
+- User asks to EDIT existing documents -> use corresponding skill
+- Task matches a skill's description above
 
-Call this tool with the skill_name and the user's original request."""
+Example: User says "create a presentation about X" -> MUST call use_skill(skill_name="pptx")
+
+Call with skill_name and optionally user_request. The skill will provide detailed implementation."""
 
             for tool in tools:
                 if tool["name"] == "use_skill":
