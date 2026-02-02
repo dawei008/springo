@@ -692,6 +692,9 @@ class ContextManager:
         - First line: session metadata (title, workingDir, timestamps)
         - Following lines: each message with timestamp
         """
+        # Trigger lazy memory sync initialization (non-blocking background thread)
+        self._ensure_memory_sync_initialized()
+
         session_dir = self.get_session_dir(session_id)
         Path(session_dir).mkdir(parents=True, exist_ok=True)
         session_path = self.get_session_path(session_id)
