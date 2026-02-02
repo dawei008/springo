@@ -4895,24 +4895,28 @@ Be concise and helpful in your responses.`;
         // ==================== Memory Sync Status ====================
         let memorySyncStatusInterval = null;
 
+        // Track last known good sync count
+        let lastKnownSyncCount = 0;
+
         async function updateMemorySyncStatus() {
             const iconEl = document.getElementById('sync-icon');
             const textEl = document.getElementById('sync-text');
 
-            console.log('[Memory] Updating sync status, elements:', !!iconEl, !!textEl);
-
             if (!iconEl || !textEl) {
-                console.log('[Memory] Elements not found, skipping');
                 return;
             }
 
             try {
                 const res = await fetch(`${BASE_URL}/v1/memory/status`);
                 const data = await res.json();
-                console.log('[Memory] Status response:', data);
 
                 // Update icon class
                 iconEl.className = 'sync-icon';
+
+                // Track last known good count
+                if (data.sessions_synced > 0) {
+                    lastKnownSyncCount = data.sessions_synced;
+                }
 
                 switch (data.status) {
                     case 'synced':
@@ -4924,34 +4928,43 @@ Be concise and helpful in your responses.`;
                         textEl.textContent = `Syncing... (${data.pending} pending)`;
                         break;
                     case 'disabled':
-                        iconEl.classList.add('disabled');
-                        textEl.textContent = 'Memory: off';
-                        break;
                     case 'not_running':
                         iconEl.classList.add('disabled');
-                        textEl.textContent = 'Memory: stopped';
+                        // Show last known count instead of alarming message
+                        textEl.textContent = lastKnownSyncCount > 0
+                            ? `Synced: ${lastKnownSyncCount} sessions`
+                            : 'Memory: off';
                         break;
                     case 'error':
-                        iconEl.classList.add('error');
-                        textEl.textContent = 'Memory: error';
+                        // Show warning state (yellow) instead of error (red)
+                        iconEl.classList.add('syncing');
+                        textEl.textContent = lastKnownSyncCount > 0
+                            ? `Synced: ${lastKnownSyncCount} sessions`
+                            : 'Sync paused';
                         break;
                     default:
                         iconEl.classList.add('disabled');
-                        textEl.textContent = 'Memory: --';
+                        textEl.textContent = lastKnownSyncCount > 0
+                            ? `Synced: ${lastKnownSyncCount} sessions`
+                            : 'Memory: --';
                 }
 
-                // Add tooltip with details
+                // Add tooltip with details (only place to show technical details)
                 document.getElementById('memory-sync-status').title =
                     `AgentCore Memory Sync\n` +
+                    `Status: ${data.status || 'unknown'}\n` +
                     `Memory ID: ${data.memory_id || 'N/A'}\n` +
                     `Region: ${data.region || 'N/A'}\n` +
                     `Sessions: ${data.sessions_synced || 0}\n` +
                     `Total Events: ${data.total_events || 0}`;
 
             } catch (e) {
+                // Network error - show last known count, don't alarm user
                 console.error('[Memory] Error fetching status:', e);
-                iconEl.className = 'sync-icon error';
-                textEl.textContent = 'Memory: offline';
+                iconEl.className = 'sync-icon disabled';
+                textEl.textContent = lastKnownSyncCount > 0
+                    ? `Synced: ${lastKnownSyncCount} sessions`
+                    : 'Memory: --';
             }
         }
 
