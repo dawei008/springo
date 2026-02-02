@@ -91,6 +91,21 @@ app.register_blueprint(config_bp)
 # MCP auto-initialization flag
 _mcp_initialized = False
 
+# Image media type mappings (used across multiple endpoints)
+MEDIA_TYPE_TO_EXT = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/gif': 'gif',
+    'image/webp': 'webp'
+}
+EXT_TO_MEDIA_TYPE = {
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'gif': 'image/gif',
+    'webp': 'image/webp'
+}
+
 @app.before_request
 def ensure_mcp_initialized():
     """Auto-initialize MCP servers on first request"""
@@ -1364,13 +1379,7 @@ def upload_image():
                           status=400, mimetype='application/json')
 
         # Determine file extension from media type
-        ext_map = {
-            'image/png': 'png',
-            'image/jpeg': 'jpg',
-            'image/gif': 'gif',
-            'image/webp': 'webp'
-        }
-        ext = ext_map.get(media_type, 'png')
+        ext = MEDIA_TYPE_TO_EXT.get(media_type, 'png')
 
         # Generate unique image ID
         image_id = f"img_{uuid.uuid4().hex[:12]}"
@@ -1422,14 +1431,7 @@ def get_image(session_id, image_filename):
 
         # Determine media type from extension
         ext = image_filename.split('.')[-1].lower()
-        media_type_map = {
-            'png': 'image/png',
-            'jpg': 'image/jpeg',
-            'jpeg': 'image/jpeg',
-            'gif': 'image/gif',
-            'webp': 'image/webp'
-        }
-        media_type = media_type_map.get(ext, 'image/png')
+        media_type = EXT_TO_MEDIA_TYPE.get(ext, 'image/png')
 
         # Check if client wants base64 or binary
         want_base64 = request.args.get('format') == 'base64'

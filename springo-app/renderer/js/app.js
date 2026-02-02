@@ -1,5 +1,4 @@
-        // API Base URL - for Electron app
-        const BASE_URL = 'http://127.0.0.1:8080';
+        // NOTE: BASE_URL and CONFIG are defined in config.js (loaded before this file)
 
         // HTML Sanitization helper using DOMPurify
         function sanitizeHTML(html) {
@@ -30,7 +29,7 @@
 
         // ==================== Toast Notification System ====================
         // User-friendly toast notifications for errors and status updates
-        function showToast(message, type = 'info', duration = 5000) {
+        function showToast(message, type = 'info', duration = CONFIG.TIMEOUTS.TOAST_DURATION) {
             // Remove existing toast if any
             const existing = document.querySelector('.toast-notification');
             if (existing) existing.remove();
@@ -658,13 +657,12 @@
 
         // Load available skills from backend
         async function loadSkills() {
-            try {
-                const res = await fetch(`${BASE_URL}/v1/skills`);
-                const data = await res.json();
+            const { ok, data, error } = await apiCall('/v1/skills', {}, { retry: false });
+            if (ok) {
                 availableSkills = data.skills || [];
                 console.log('Loaded skills:', availableSkills.map(s => s.name));
-            } catch (e) {
-                console.error('Failed to load skills:', e);
+            } else {
+                console.error('Failed to load skills:', error);
                 availableSkills = [];
             }
         }
@@ -944,25 +942,15 @@
 
         // Get skill instructions to prepend to message
         async function getSkillInstructions(skillName) {
-            try {
-                const res = await fetch(`${BASE_URL}/v1/skills/${skillName}/instructions`);
-                const data = await res.json();
+            const { ok, data, error } = await apiCall(`/v1/skills/${skillName}/instructions`, {}, { retry: false });
+            if (ok) {
                 return data.instructions || '';
-            } catch (e) {
-                console.error('Failed to get skill instructions:', e);
-                return '';
             }
+            console.error('Failed to get skill instructions:', error);
+            return '';
         }
 
-        // Keyword to skill mapping for auto-detection
-        const SKILL_KEYWORDS = {
-            'pptx': ['ppt', 'pptx', '幻灯片', '演示文稿', 'powerpoint', 'presentation', 'slides'],
-            'docx': ['docx', 'word', '文档', 'document', '报告'],
-            'xlsx': ['xlsx', 'excel', '表格', 'spreadsheet', '电子表格', '数据分析'],
-            'pdf': ['pdf', '填表', 'form', '表单填写'],
-        };
-
-        // Auto-detect skill from message content
+        // Auto-detect skill from message content (SKILL_KEYWORDS defined in config.js)
         function detectSkillFromMessage(message) {
             const lowerMsg = message.toLowerCase();
             for (const [skillName, keywords] of Object.entries(SKILL_KEYWORDS)) {
@@ -2673,7 +2661,7 @@
 
         // Generic fetch with retry logic for network errors
         // externalSignal: optional AbortSignal to allow external cancellation
-        async function fetchWithRetry(url, options, maxRetries = 3, timeout = 180000, externalSignal = null) {
+        async function fetchWithRetry(url, options, maxRetries = CONFIG.RETRY.MAX_ATTEMPTS, timeout = CONFIG.TIMEOUTS.FETCH_RETRY, externalSignal = null) {
             let lastError;
             for (let attempt = 0; attempt <= maxRetries; attempt++) {
                 const controller = new AbortController();
@@ -2726,6 +2714,55 @@
                 }
             }
             throw lastError;
+        }
+
+        /**
+         * Unified API call wrapper with consistent error handling
+         * @param {string} endpoint - API endpoint (without BASE_URL)
+         * @param {object} options - fetch options (method, body, headers)
+         * @param {object} config - additional config { parseJson: true, retry: true, timeout: 30000 }
+         * @returns {Promise<{ok: boolean, data: any, error: string|null, status: number}>}
+         */
+        async function apiCall(endpoint, options = {}, config = {}) {
+            const { parseJson = true, retry = true, timeout = 30000, maxRetries = 2 } = config;
+            const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${endpoint}`;
+
+            const fetchOptions = {
+                headers: { 'Content-Type': 'application/json', ...options.headers },
+                ...options
+            };
+
+            try {
+                const response = retry
+                    ? await fetchWithRetry(url, fetchOptions, maxRetries, timeout)
+                    : await fetch(url, fetchOptions);
+
+                // Handle non-OK responses consistently
+                if (!response.ok) {
+                    let errorMessage = `HTTP ${response.status}`;
+                    try {
+                        const errorData = await response.json();
+                        errorMessage = errorData.error || errorData.detail || errorData.message || errorMessage;
+                    } catch {
+                        // If response isn't JSON, use status text
+                        errorMessage = response.statusText || errorMessage;
+                    }
+                    return { ok: false, data: null, error: errorMessage, status: response.status };
+                }
+
+                // Parse response
+                if (parseJson) {
+                    const data = await response.json();
+                    return { ok: true, data, error: null, status: response.status };
+                }
+
+                return { ok: true, data: response, error: null, status: response.status };
+            } catch (e) {
+                // Network errors, timeouts, etc.
+                const isAbort = e.name === 'AbortError';
+                const errorMessage = isAbort ? 'Request timed out' : (e.message || 'Network error');
+                return { ok: false, data: null, error: errorMessage, status: 0 };
+            }
         }
 
         // SSE Stream Parser for handling streaming responses
@@ -2920,8 +2957,8 @@
                                 updateStatus('running');  // Resume running state
                                 updateContextIndicator({
                                     total_tokens: data.tokens_after,
-                                    max_tokens: 200000,
-                                    usage_percent: (data.tokens_after / 200000) * 100,
+                                    max_tokens: CONFIG.TOKENS.MAX_CONTEXT,
+                                    usage_percent: (data.tokens_after / CONFIG.TOKENS.MAX_CONTEXT) * 100,
                                     status: 'normal'
                                 }, convId);
                             }
@@ -2948,10 +2985,10 @@
                                 if (currentConversationId === convId) {
                                     updateContextIndicator({
                                         total_tokens: data.token_count,
-                                        max_tokens: 200000,
-                                        usage_percent: (data.token_count / 200000) * 100,
-                                        status: data.token_count > 160000 ? 'critical' :
-                                                data.token_count > 120000 ? 'warning' : 'normal'
+                                        max_tokens: CONFIG.TOKENS.MAX_CONTEXT,
+                                        usage_percent: (data.token_count / CONFIG.TOKENS.MAX_CONTEXT) * 100,
+                                        status: data.token_count > CONFIG.TOKENS.WARNING_THRESHOLD ? 'critical' :
+                                                data.token_count > CONFIG.TOKENS.COMPACT_THRESHOLD ? 'warning' : 'normal'
                                     }, convId);
                                 }
                             }
