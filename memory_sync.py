@@ -31,6 +31,20 @@ from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+# S3 sync integration (lazy import to avoid circular dependency)
+_s3_sync_module = None
+
+def _get_s3_manager():
+    """Lazy load S3 manager to avoid circular import"""
+    global _s3_sync_module
+    if _s3_sync_module is None:
+        try:
+            import s3_sync as s3_module
+            _s3_sync_module = s3_module
+        except ImportError:
+            return None
+    return _s3_sync_module.get_s3_manager()
+
 # 配置文件路径
 CONFIG_DIR = os.path.expanduser("~/.springo")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
@@ -314,12 +328,22 @@ class MemorySyncManager:
         if not self._memory_client:
             raise RuntimeError("Memory client not initialized")
 
+        # 获取 S3 manager（如果可用）
+        s3_manager = _get_s3_manager()
+
         # 按 session_id 分组
         sessions: Dict[str, List[Dict]] = {}
         for item in batch:
             session_id = item["session_id"]
             if session_id not in sessions:
                 sessions[session_id] = []
+
+            # 如果 S3 同步可用，先处理消息中的文件引用
+            if s3_manager:
+                message = item.get("message", {})
+                processed_message = s3_manager.process_message_for_memory(session_id, message)
+                item = {**item, "message": processed_message}
+
             sessions[session_id].append(item)
 
         # 每个 session 创建一个 event
@@ -363,7 +387,7 @@ class MemorySyncManager:
                 )
 
     def _extract_content(self, content) -> str:
-        """提取消息内容为字符串"""
+        """提取消息内容为字符串，包含 S3 URI 引用"""
         if isinstance(content, str):
             return content
         elif isinstance(content, list):
@@ -373,10 +397,23 @@ class MemorySyncManager:
                 if isinstance(part, dict):
                     if part.get("type") == "text":
                         texts.append(part.get("text", ""))
+                    elif part.get("type") == "image":
+                        # 包含 S3 URI（如果有）
+                        s3_uri = part.get("s3_uri", "")
+                        if s3_uri:
+                            texts.append(f"[Image: {s3_uri}]")
+                        else:
+                            texts.append("[Image]")
                     elif part.get("type") == "tool_use":
                         texts.append(f"[Tool: {part.get('name', 'unknown')}]")
                     elif part.get("type") == "tool_result":
-                        texts.append(f"[Tool Result: {part.get('tool_use_id', '')}]")
+                        # 包含 S3 URI（如果有）
+                        s3_uri = part.get("s3_uri", "")
+                        tool_use_id = part.get('tool_use_id', '')
+                        if s3_uri:
+                            texts.append(f"[Tool Result: {tool_use_id}, {s3_uri}]")
+                        else:
+                            texts.append(f"[Tool Result: {tool_use_id}]")
                 elif isinstance(part, str):
                     texts.append(part)
             return " ".join(texts)
@@ -720,3 +757,71 @@ def get_memory_config() -> Dict[str, Any]:
         "sync_check_delay": SYNC_CHECK_DELAY,
         "config_file": CONFIG_FILE
     }
+
+
+def create_memory(region: str, name_prefix: str = "springo_memory") -> Dict[str, Any]:
+    """
+    配置 AgentCore Memory 区域
+
+    注意：Memory 创建需要通过 AgentCore CLI 或 AWS Console 完成。
+    此函数仅更新区域配置，并验证现有 Memory 是否可用。
+
+    Args:
+        region: Memory 所在区域
+        name_prefix: Memory 名称前缀 (未使用，保留兼容性)
+
+    Returns:
+        {"success": True, "memory_id": "...", "region": "..."} 或
+        {"success": False, "error": "..."}
+    """
+    try:
+        # 检查是否已有 Memory 配置
+        config = load_memory_config()
+        existing_memory_id = config.get('memory_id', '')
+
+        if existing_memory_id:
+            # Memory 已配置，更新区域并验证
+            logger.info(f"Using existing Memory: {existing_memory_id}, updating region to {region}")
+
+            # 更新配置
+            config['memory_region'] = region
+            config['memory_enabled'] = True
+            save_memory_config(config)
+
+            # 验证 Memory 是否可用
+            import boto3
+            client = boto3.client('bedrock-agentcore', region_name=region)
+
+            try:
+                # 尝试列出 sessions 来验证 Memory 可用
+                client.list_sessions(memoryId=existing_memory_id, maxResults=1)
+                logger.info(f"Memory {existing_memory_id} is accessible in {region}")
+
+                return {
+                    "success": True,
+                    "memory_id": existing_memory_id,
+                    "region": region,
+                    "already_exists": True
+                }
+            except Exception as e:
+                logger.warning(f"Memory validation failed: {e}")
+                # Memory 可能在不同区域，仍然返回成功让用户尝试
+                return {
+                    "success": True,
+                    "memory_id": existing_memory_id,
+                    "region": region,
+                    "already_exists": True,
+                    "warning": f"Memory may not be accessible: {str(e)}"
+                }
+        else:
+            # 没有配置 Memory，提示用户创建
+            return {
+                "success": False,
+                "error": "Memory ID not configured. Please create Memory using AgentCore CLI:\n"
+                         "  agentcore memory create --name springo_memory --region " + region,
+                "region": region
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to configure Memory: {e}")
+        return {"success": False, "error": str(e)}

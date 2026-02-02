@@ -234,7 +234,10 @@ AWS_DEFAULT_REGION={region}
 
         boto_config = Config(
             region_name=self._config.region,
-            retries={'max_attempts': 3, 'mode': 'adaptive'}
+            retries={'max_attempts': 3, 'mode': 'adaptive'},
+            # 增加超时时间：MCP 工具调用（如 web search）可能需要较长时间
+            connect_timeout=60,      # 连接超时 60 秒
+            read_timeout=600         # 读取超时 600 秒（10 分钟）- 支持长时间 tool use
         )
 
         try:

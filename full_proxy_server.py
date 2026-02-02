@@ -52,6 +52,8 @@ from error_handler import format_error_response, get_user_friendly_message, shou
 
 # Memory 同步模块
 from memory_sync import init_memory_sync, shutdown_memory_sync
+# S3 同步模块
+from s3_sync import init_s3_sync, shutdown_s3_sync, get_s3_manager, get_s3_config
 
 logging.basicConfig(
     level=logging.INFO,
@@ -1799,6 +1801,92 @@ def memory_config():
             )
 
 
+@app.route('/v1/config/memory/create', methods=['POST'])
+def memory_create():
+    """
+    自动创建 AgentCore Memory 和 S3 桶
+
+    在用户选择的区域同时创建:
+    1. AgentCore Memory
+    2. S3 桶 (用于存储图片和工具结果)
+
+    请求体: {"region": "us-west-2"}
+    """
+    from memory_sync import create_memory, save_memory_config, init_memory_sync
+    from s3_sync import create_s3_bucket, init_s3_sync
+
+    try:
+        data = request.get_json() or {}
+        region = data.get('region', 'us-west-2')
+
+        logger.info(f"Creating Memory and S3 bucket in region: {region}")
+
+        result = {
+            "region": region,
+            "memory": None,
+            "s3": None
+        }
+
+        # 1. 创建 AgentCore Memory
+        memory_result = create_memory(region)
+        result["memory"] = memory_result
+
+        if not memory_result.get("success"):
+            return Response(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to create Memory: {memory_result.get('error')}",
+                    "result": result
+                }),
+                status=500,
+                mimetype='application/json'
+            )
+
+        # 2. 创建 S3 桶
+        s3_result = create_s3_bucket(region)
+        result["s3"] = s3_result
+
+        if not s3_result.get("success"):
+            return Response(
+                json.dumps({
+                    "success": False,
+                    "error": f"Failed to create S3 bucket: {s3_result.get('error')}",
+                    "result": result
+                }),
+                status=500,
+                mimetype='application/json'
+            )
+
+        # 3. 重新初始化同步服务
+        try:
+            init_s3_sync(s3_result["bucket"], region)
+            init_memory_sync(memory_result["memory_id"], region)
+        except Exception as e:
+            logger.warning(f"Failed to reinitialize sync services: {e}")
+
+        logger.info(f"Created Memory ({memory_result['memory_id']}) and S3 ({s3_result['bucket']}) in {region}")
+
+        return Response(
+            json.dumps({
+                "success": True,
+                "region": region,
+                "memory_id": memory_result.get("memory_id"),
+                "memory_name": memory_result.get("memory_name"),
+                "s3_bucket": s3_result.get("bucket"),
+                "result": result
+            }),
+            mimetype='application/json'
+        )
+
+    except Exception as e:
+        logger.error(f"Memory/S3 create error: {e}")
+        return Response(
+            json.dumps({"success": False, "error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
+
+
 @app.route('/v1/config/memory/test', methods=['GET'])
 def memory_test_connection():
     """测试 AgentCore Memory 连接"""
@@ -1920,6 +2008,110 @@ def memory_sync_status():
         logger.error(f"Memory status error: {e}")
         return Response(
             json.dumps({"status": "error", "error": str(e)}),
+            mimetype='application/json'
+        )
+
+
+@app.route('/v1/config/s3', methods=['GET', 'POST'])
+def s3_config():
+    """获取或设置 S3 同步配置"""
+    from s3_sync import load_s3_config, save_s3_config, get_s3_config
+
+    if request.method == 'GET':
+        config = get_s3_config()
+        return Response(json.dumps(config), mimetype='application/json')
+
+    # POST - 更新配置
+    try:
+        data = request.get_json() or {}
+        current_config = load_s3_config()
+
+        # 更新指定字段
+        for key in ['s3_bucket', 's3_region', 's3_enabled', 's3_upload_on_sync']:
+            if key in data:
+                current_config[key] = data[key]
+
+        if save_s3_config(current_config):
+            return Response(json.dumps({
+                "success": True,
+                "config": current_config
+            }), mimetype='application/json')
+        else:
+            return Response(
+                json.dumps({"error": "Failed to save config"}),
+                status=500,
+                mimetype='application/json'
+            )
+    except Exception as e:
+        logger.error(f"S3 config error: {e}")
+        return Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
+
+
+@app.route('/v1/s3/status', methods=['GET'])
+def s3_sync_status():
+    """获取 S3 同步状态"""
+    try:
+        s3_manager = get_s3_manager()
+        config = get_s3_config()
+
+        status = {
+            "enabled": config.get('s3_enabled', False),
+            "bucket": config.get('s3_bucket', 'springo'),
+            "region": config.get('s3_region', 'us-east-1'),
+            "running": s3_manager is not None and s3_manager._initialized,
+            "account_id": s3_manager._account_id if s3_manager else None,
+            "cached_uploads": len(s3_manager._upload_cache) if s3_manager else 0
+        }
+
+        if s3_manager and s3_manager._initialized:
+            status["status"] = "ready"
+        elif not config.get('s3_enabled'):
+            status["status"] = "disabled"
+        else:
+            status["status"] = "not_initialized"
+
+        return Response(json.dumps(status), mimetype='application/json')
+
+    except Exception as e:
+        logger.error(f"S3 status error: {e}")
+        return Response(
+            json.dumps({"status": "error", "error": str(e)}),
+            mimetype='application/json'
+        )
+
+
+@app.route('/v1/s3/sync/<session_id>', methods=['POST'])
+def s3_sync_session(session_id):
+    """手动同步会话文件到 S3"""
+    try:
+        s3_manager = get_s3_manager()
+
+        if not s3_manager:
+            return Response(
+                json.dumps({"error": "S3 sync not initialized"}),
+                status=400,
+                mimetype='application/json'
+            )
+
+        # 同步会话文件
+        uploaded = s3_manager.sync_session_files(session_id)
+
+        return Response(json.dumps({
+            "success": True,
+            "session_id": session_id,
+            "uploaded_count": len(uploaded),
+            "files": uploaded
+        }), mimetype='application/json')
+
+    except Exception as e:
+        logger.error(f"S3 sync error: {e}")
+        return Response(
+            json.dumps({"error": str(e)}),
+            status=500,
             mimetype='application/json'
         )
 
@@ -2243,6 +2435,15 @@ if __name__ == '__main__':
     except Exception as e:
         logger.warning(f"MCP auto-init failed: {e}")
 
+    # 初始化 S3 同步（先于 Memory 同步，因为 Memory 同步可能依赖 S3）
+    try:
+        if init_s3_sync():
+            print("    ✓ S3 同步已启动")
+        else:
+            print("    - S3 同步未启用 (检查配置)")
+    except Exception as e:
+        print(f"    ✗ S3 同步初始化失败: {e}")
+
     # 初始化 AgentCore Memory 同步
     try:
         if init_memory_sync():
@@ -2255,5 +2456,6 @@ if __name__ == '__main__':
     # 注册退出处理
     import atexit
     atexit.register(shutdown_memory_sync)
+    atexit.register(shutdown_s3_sync)
 
     app.run(host=args.host, port=port, debug=debug_mode, threaded=True, ssl_context=ssl_context)

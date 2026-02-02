@@ -4626,18 +4626,29 @@ Be concise and helpful in your responses.`;
 
         async function loadMemorySettings() {
             try {
-                const res = await fetch(`${BASE_URL}/v1/config/memory`);
-                const data = await res.json();
+                // Load Memory config
+                const memRes = await fetch(`${BASE_URL}/v1/config/memory`);
+                const memData = await memRes.json();
 
-                document.getElementById('settings-memory-enabled').checked = data.memory_enabled !== false;
-                document.getElementById('settings-memory-id').value = data.memory_id || '';
-                document.getElementById('settings-memory-region').value = data.memory_region || 'us-west-2';
+                document.getElementById('settings-memory-enabled').checked = memData.memory_enabled !== false;
+                document.getElementById('settings-memory-region').value = memData.memory_region || 'us-west-2';
+                document.getElementById('settings-memory-id').value = memData.memory_id || '';
+
+                // Load S3 config
+                try {
+                    const s3Res = await fetch(`${BASE_URL}/v1/config/s3`);
+                    const s3Data = await s3Res.json();
+                    document.getElementById('settings-s3-bucket').value = s3Data.s3_bucket || '';
+                } catch (e) {
+                    console.log('S3 config not available');
+                }
 
                 // Show status
                 const statusEl = document.getElementById('memory-connection-status');
-                if (data.memory_id && data.memory_enabled) {
+                const memoryId = memData.memory_id || '';
+                if (memoryId && memData.memory_enabled) {
                     statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Configured</span>';
-                } else if (!data.memory_enabled) {
+                } else if (!memData.memory_enabled) {
                     statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Disabled</span>';
                 } else {
                     statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not configured</span>';
@@ -4652,8 +4663,10 @@ Be concise and helpful in your responses.`;
             const enabled = document.getElementById('settings-memory-enabled').checked;
             const memoryId = document.getElementById('settings-memory-id').value.trim();
             const region = document.getElementById('settings-memory-region').value;
+            const s3Bucket = document.getElementById('settings-s3-bucket').value.trim();
 
             try {
+                // Save Memory config
                 await fetch(`${BASE_URL}/v1/config/memory`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -4663,9 +4676,21 @@ Be concise and helpful in your responses.`;
                         memory_region: region
                     })
                 });
-                console.log('Memory settings saved');
+
+                // Save S3 config (same region as Memory)
+                await fetch(`${BASE_URL}/v1/config/s3`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        s3_bucket: s3Bucket,
+                        s3_region: region,
+                        s3_enabled: enabled && s3Bucket ? true : false
+                    })
+                });
+
+                console.log('Memory and S3 settings saved');
             } catch (e) {
-                console.error('Failed to save Memory settings:', e);
+                console.error('Failed to save settings:', e);
             }
         }
 

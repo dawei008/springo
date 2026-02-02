@@ -72,12 +72,28 @@ class ContextManager:
         self._token_cache_max_size = 1000  # Limit cache size
 
         # Initialize memory sync (async upload to AgentCore Memory)
+        # Use lazy initialization to avoid blocking first request (~470ms for boto3)
         self._memory_sync_enabled = False
-        if HAS_MEMORY_SYNC:
+        self._memory_sync_init_started = False
+
+    def _ensure_memory_sync_initialized(self):
+        """Lazy initialize memory sync in background thread (non-blocking)"""
+        if self._memory_sync_init_started or not HAS_MEMORY_SYNC:
+            return
+
+        self._memory_sync_init_started = True
+
+        import threading
+        def init_in_background():
             try:
-                self._memory_sync_enabled = init_memory_sync()
+                if init_memory_sync():
+                    self._memory_sync_enabled = True
+                    print("[ContextManager] Memory sync initialized in background")
             except Exception as e:
                 print(f"[ContextManager] Memory sync init failed: {e}")
+
+        # Start initialization in background thread
+        threading.Thread(target=init_in_background, daemon=True).start()
 
     # ========== Token Counting ==========
 
@@ -177,6 +193,147 @@ class ContextManager:
     def should_summarize(self, messages: List[Dict[str, Any]]) -> bool:
         """Check if messages exceed the threshold and need summarization"""
         return self.count_messages_tokens(messages) > self.SUMMARY_THRESHOLD
+
+    def get_context_breakdown(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str = "",
+        tools: List[Dict] = None,
+        skills: List[Dict] = None,
+        memory_files: List[Dict] = None
+    ) -> Dict[str, Any]:
+        """
+        Get detailed context breakdown by category (like Claude Code's /context command).
+
+        Returns breakdown of tokens by:
+        - System prompt
+        - System tools (tool definitions)
+        - Skills
+        - Memory files
+        - User messages (text)
+        - Assistant messages (text)
+        - Tool use blocks
+        - Tool result blocks
+        - Images
+        """
+        breakdown = {
+            "system_prompt": {"tokens": 0, "count": 0},
+            "system_tools": {"tokens": 0, "count": 0},
+            "skills": {"tokens": 0, "count": 0},
+            "memory_files": {"tokens": 0, "count": 0},
+            "user_text": {"tokens": 0, "count": 0},
+            "assistant_text": {"tokens": 0, "count": 0},
+            "tool_use": {"tokens": 0, "count": 0},
+            "tool_result": {"tokens": 0, "count": 0},
+            "images": {"tokens": 0, "count": 0},
+            "other": {"tokens": 0, "count": 0},
+        }
+
+        # Count system prompt
+        if system_prompt:
+            breakdown["system_prompt"]["tokens"] = self.count_tokens(system_prompt)
+            breakdown["system_prompt"]["count"] = 1
+
+        # Count system tools (tool definitions sent to API)
+        if tools:
+            for tool in tools:
+                tool_tokens = self.count_tokens(json.dumps(tool))
+                breakdown["system_tools"]["tokens"] += tool_tokens
+                breakdown["system_tools"]["count"] += 1
+
+        # Count skills
+        if skills:
+            for skill in skills:
+                skill_tokens = self.count_tokens(json.dumps(skill) if isinstance(skill, dict) else str(skill))
+                breakdown["skills"]["tokens"] += skill_tokens
+                breakdown["skills"]["count"] += 1
+
+        # Count memory files (CLAUDE.md etc.)
+        if memory_files:
+            for mem in memory_files:
+                mem_tokens = self.count_tokens(mem.get("content", "") if isinstance(mem, dict) else str(mem))
+                breakdown["memory_files"]["tokens"] += mem_tokens
+                breakdown["memory_files"]["count"] += 1
+
+        # Analyze each message
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+
+            if isinstance(content, str):
+                # Simple text message
+                tokens = self.count_tokens(content)
+                if role == "user":
+                    breakdown["user_text"]["tokens"] += tokens
+                    breakdown["user_text"]["count"] += 1
+                elif role == "assistant":
+                    breakdown["assistant_text"]["tokens"] += tokens
+                    breakdown["assistant_text"]["count"] += 1
+                else:
+                    breakdown["other"]["tokens"] += tokens
+                    breakdown["other"]["count"] += 1
+
+            elif isinstance(content, list):
+                # Content blocks
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+
+                    block_type = block.get("type", "")
+
+                    if block_type == "text":
+                        tokens = self.count_tokens(block.get("text", ""))
+                        if role == "user":
+                            breakdown["user_text"]["tokens"] += tokens
+                            breakdown["user_text"]["count"] += 1
+                        else:
+                            breakdown["assistant_text"]["tokens"] += tokens
+                            breakdown["assistant_text"]["count"] += 1
+
+                    elif block_type == "tool_use":
+                        tokens = self.count_tokens(block.get("name", ""))
+                        tokens += self.count_tokens(json.dumps(block.get("input", {})))
+                        breakdown["tool_use"]["tokens"] += tokens
+                        breakdown["tool_use"]["count"] += 1
+
+                    elif block_type == "tool_result":
+                        result_content = block.get("content", "")
+                        if isinstance(result_content, str):
+                            tokens = self.count_tokens(result_content)
+                        else:
+                            tokens = self.count_tokens(json.dumps(result_content))
+                        breakdown["tool_result"]["tokens"] += tokens
+                        breakdown["tool_result"]["count"] += 1
+
+                    elif block_type == "image":
+                        breakdown["images"]["tokens"] += 1500  # Estimate
+                        breakdown["images"]["count"] += 1
+
+                    else:
+                        tokens = self.count_tokens(json.dumps(block))
+                        breakdown["other"]["tokens"] += tokens
+                        breakdown["other"]["count"] += 1
+
+        # Calculate totals and percentages
+        total_tokens = sum(cat["tokens"] for cat in breakdown.values())
+        total_tokens += len(messages) * 4  # Message overhead
+
+        # Add percentages
+        for category in breakdown:
+            if total_tokens > 0:
+                breakdown[category]["percent"] = round(
+                    (breakdown[category]["tokens"] / total_tokens) * 100, 1
+                )
+            else:
+                breakdown[category]["percent"] = 0
+
+        return {
+            "breakdown": breakdown,
+            "total_tokens": total_tokens,
+            "max_tokens": self.MAX_TOKENS,
+            "usage_percent": round((total_tokens / self.MAX_TOKENS) * 100, 1),
+            "messages_count": len(messages)
+        }
 
     # ========== Structured Summary Generation ==========
 
@@ -456,6 +613,9 @@ class ContextManager:
 
     def save_message(self, session_id: str, message: Dict[str, Any]):
         """Append a single message to the session JSONL file"""
+        # Trigger lazy memory sync initialization (non-blocking background thread)
+        self._ensure_memory_sync_initialized()
+
         session_dir = self.get_session_dir(session_id)
         Path(session_dir).mkdir(parents=True, exist_ok=True)
         session_path = self.get_session_path(session_id)
@@ -466,7 +626,7 @@ class ContextManager:
         with open(session_path, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        # Async upload to AgentCore Memory (non-blocking)
+        # Async upload to AgentCore Memory (non-blocking, only if already initialized)
         if self._memory_sync_enabled:
             sync_mgr = get_sync_manager()
             if sync_mgr:
@@ -475,6 +635,9 @@ class ContextManager:
 
     def save_messages(self, session_id: str, messages: List[Dict[str, Any]]):
         """Save multiple messages to the session JSONL file (append mode)"""
+        # Trigger lazy memory sync initialization (non-blocking background thread)
+        self._ensure_memory_sync_initialized()
+
         session_dir = self.get_session_dir(session_id)
         Path(session_dir).mkdir(parents=True, exist_ok=True)
         session_path = self.get_session_path(session_id)
@@ -486,7 +649,7 @@ class ContextManager:
                 }
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-        # Async upload to AgentCore Memory (non-blocking)
+        # Async upload to AgentCore Memory (non-blocking, only if already initialized)
         if self._memory_sync_enabled:
             sync_mgr = get_sync_manager()
             if sync_mgr:

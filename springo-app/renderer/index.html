@@ -201,12 +201,6 @@
 
         <div class="status-bar">
             <span id="status">Connecting...</span>
-            <div class="context-indicator" id="context-indicator" style="display: none;">
-                <span id="context-text">0%</span>
-                <div class="context-bar">
-                    <div class="context-bar-fill" id="context-bar-fill" style="width: 0%"></div>
-                </div>
-            </div>
             <div class="status-workdir-area">
                 <span class="workdir-path" id="workdir-path-display"></span>
                 <div class="status-workdir-selector">
@@ -247,9 +241,22 @@
                         </svg>
                     </button>
                 </div>
-                <div class="memory-sync-status" id="memory-sync-status" title="AgentCore Memory Sync Status">
-                    <span class="sync-icon" id="sync-icon">●</span>
-                    <span id="sync-text">Memory: checking...</span>
+                <div class="bottom-status-row">
+                    <div class="context-indicator" id="context-indicator" onclick="toggleContextBreakdown(event)">
+                        <span class="context-icon">●</span>
+                        <span id="context-text">Context: 0%</span>
+                        <!-- Context Breakdown Popup -->
+                        <div class="context-breakdown-popup" id="context-breakdown-popup">
+                            <div class="breakdown-header">Context Breakdown</div>
+                            <div class="breakdown-content" id="breakdown-content">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="memory-sync-status" id="memory-sync-status" title="AgentCore Memory Sync Status">
+                        <span class="sync-icon" id="sync-icon">●</span>
+                        <span id="sync-text">Memory: checking...</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -319,11 +326,22 @@
 
                 <div class="setting-divider"></div>
 
+                <!-- Region Section (applies to all AWS services) -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Region</h3>
+                <div class="setting-group">
+                    <select id="settings-memory-region">
+                        <option value="us-west-2">us-west-2 (Oregon)</option>
+                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                    </select>
+                    <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
+                </div>
+
+                <div class="setting-divider"></div>
+
                 <!-- AgentCore Memory Section -->
                 <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
-                <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
-                    Sync conversations to AWS Bedrock AgentCore Memory for persistent storage.
-                </div>
                 <div class="setting-group">
                     <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                         <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
@@ -333,17 +351,13 @@
                 <div class="setting-group">
                     <label>Memory ID</label>
                     <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
+                    <div class="hint" style="margin-top: 4px;">Create via <code>agentcore memory create --name springo_memory</code></div>
                 </div>
                 <div class="setting-group">
-                    <label>Memory Region</label>
-                    <select id="settings-memory-region">
-                        <option value="us-west-2">us-west-2 (Oregon)</option>
-                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
-                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
-                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
-                    </select>
+                    <label>S3 Bucket</label>
+                    <input type="text" id="settings-s3-bucket" placeholder="e.g., my-springo-bucket">
+                    <div class="hint" style="margin-top: 4px;">Pre-created S3 bucket for storing images and tool results</div>
                 </div>
-                <div class="hint">Memory ID can be created via AgentCore CLI or API</div>
                 <div class="setting-group" style="margin-top: 12px;">
                     <button onclick="testMemoryConnection()" id="test-memory-btn">Test Connection</button>
                     <span id="memory-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
@@ -494,12 +508,6 @@
                 <button class="new-folder-btn" onclick="selectNewFolderForChat()">Select New Directory</button>
             </div>
         </div>
-    </div>
-
-    <!-- Context Summary Indicator -->
-    <div class="context-indicator" id="context-indicator">
-        <span>Note</span>
-        <span id="context-indicator-text">Context summarized</span>
     </div>
 
     <!-- External JavaScript -->
