@@ -44,32 +44,42 @@ if [ "$(uname)" != "Darwin" ]; then
     exit 1
 fi
 
-# 获取最新版本
+# 获取最新版本（包括 prerelease）
 echo -e "${BLUE}→${NC} 获取最新版本信息..."
-LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest")
+RELEASES_JSON=$(curl -s "https://api.github.com/repos/${REPO}/releases")
 
-if [ -z "$LATEST_RELEASE" ] || echo "$LATEST_RELEASE" | grep -q "Not Found"; then
+if [ -z "$RELEASES_JSON" ] || echo "$RELEASES_JSON" | grep -q '"message"'; then
     echo -e "${RED}✗${NC} 无法获取版本信息，请检查网络连接"
     exit 1
 fi
 
-VERSION=$(echo "$LATEST_RELEASE" | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
-echo -e "${GREEN}✓${NC} 最新版本: ${VERSION}"
+# 提取第一个 release 的 tag_name
+VERSION=$(echo "$RELEASES_JSON" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)
 
-# 构建下载 URL (优先使用 ZIP，更可靠)
-DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | grep "browser_download_url" | grep "${ARCH_NAME}-mac.zip" | head -1 | sed -E 's/.*"browser_download_url": *"([^"]+)".*/\1/')
-
-if [ -z "$DOWNLOAD_URL" ]; then
-    # 尝试 DMG
-    DOWNLOAD_URL=$(echo "$LATEST_RELEASE" | grep "browser_download_url" | grep "${ARCH_NAME}.dmg" | head -1 | sed -E 's/.*"browser_download_url": *"([^"]+)".*/\1/')
-    USE_DMG=true
-else
-    USE_DMG=false
+if [ -z "$VERSION" ]; then
+    echo -e "${RED}✗${NC} 未找到可用版本"
+    exit 1
 fi
 
-if [ -z "$DOWNLOAD_URL" ]; then
-    echo -e "${RED}✗${NC} 未找到适合您系统的安装包"
-    exit 1
+echo -e "${GREEN}✓${NC} 最新版本: ${VERSION}"
+
+# 构建下载 URL - 直接使用已知的文件命名格式
+# 优先使用 ZIP
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/Springo-1.0.0-${ARCH_NAME}-mac.zip"
+USE_DMG=false
+
+# 检查 ZIP 是否存在
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I -L "$DOWNLOAD_URL")
+if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "302" ]; then
+    # 尝试 DMG
+    DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/Springo-1.0.0-${ARCH_NAME}.dmg"
+    USE_DMG=true
+
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -I -L "$DOWNLOAD_URL")
+    if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "302" ]; then
+        echo -e "${RED}✗${NC} 未找到适合您系统的安装包"
+        exit 1
+    fi
 fi
 
 echo -e "${GREEN}✓${NC} 下载地址: ${DOWNLOAD_URL}"
