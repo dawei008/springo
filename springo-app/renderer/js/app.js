@@ -272,6 +272,59 @@
         // Each conversation has: { isStreaming: bool, attachments: [], messages: [] }
         let convRuntime = {};
 
+        // Memory management configuration
+        const MEMORY_CONFIG = {
+            MAX_CACHED_SESSIONS: 10,      // Keep runtime for at most N recently accessed sessions
+            GC_INTERVAL_MS: 5 * 60 * 1000, // Run garbage collection every 5 minutes
+            MIN_IDLE_TIME_MS: 3 * 60 * 1000 // Session must be idle for 3 minutes before cleanup
+        };
+
+        // Track recently accessed sessions (most recent first)
+        let recentlyAccessedSessions = [];
+
+        // Update recently accessed sessions list
+        function markSessionAccessed(convId) {
+            if (!convId) return;
+            // Remove if already in list
+            recentlyAccessedSessions = recentlyAccessedSessions.filter(id => id !== convId);
+            // Add to front
+            recentlyAccessedSessions.unshift(convId);
+            // Trim to max size
+            if (recentlyAccessedSessions.length > MEMORY_CONFIG.MAX_CACHED_SESSIONS * 2) {
+                recentlyAccessedSessions = recentlyAccessedSessions.slice(0, MEMORY_CONFIG.MAX_CACHED_SESSIONS * 2);
+            }
+        }
+
+        // Cleanup inactive session runtimes to free memory
+        // Preserves: current session, streaming sessions, and recently accessed sessions
+        function cleanupInactiveRuntimes() {
+            const now = Date.now();
+            const keepIds = new Set([
+                currentConversationId,
+                ...getStreamingConvIds(),
+                ...recentlyAccessedSessions.slice(0, MEMORY_CONFIG.MAX_CACHED_SESSIONS)
+            ].filter(Boolean));
+
+            let cleanedCount = 0;
+            for (const convId of Object.keys(convRuntime)) {
+                if (keepIds.has(convId)) continue;
+
+                const runtime = convRuntime[convId];
+                // Don't clean up if streaming
+                if (runtime.isStreaming) continue;
+
+                // Clean up runtime
+                delete convRuntime[convId];
+                cleanupAbortController(convId);
+                cleanedCount++;
+            }
+
+            if (cleanedCount > 0) {
+                console.log(`[Memory GC] Cleaned up ${cleanedCount} inactive session runtimes`);
+            }
+            return cleanedCount;
+        }
+
         // Cross-session event bus for delegation communication
         const crossSessionEvents = {
             _listeners: {},
@@ -334,6 +387,19 @@
         function resetAbortController(convId) {
             abortControllers[convId] = new AbortController();
             return abortControllers[convId];
+        }
+
+        // Cleanup abort controller for a conversation (call when deleting session)
+        // Part of memory leak fix - abortControllers were never cleaned up
+        function cleanupAbortController(convId) {
+            if (abortControllers[convId]) {
+                try {
+                    abortControllers[convId].abort(); // Abort any pending requests
+                } catch (e) {
+                    // Ignore abort errors
+                }
+                delete abortControllers[convId];
+            }
         }
 
         // Stop the current task
@@ -444,6 +510,13 @@
 
             // Start Memory sync status updates
             startMemorySyncStatusUpdates();
+
+            // Start periodic memory garbage collection
+            // Cleans up inactive session runtimes to prevent memory leaks
+            setInterval(() => {
+                cleanupInactiveRuntimes();
+            }, MEMORY_CONFIG.GC_INTERVAL_MS);
+            console.log(`[Memory GC] Started periodic cleanup every ${MEMORY_CONFIG.GC_INTERVAL_MS / 1000}s`);
 
             // Ensure default working folder is in workspace list
             ensureDefaultFolderInWorkspace();
@@ -1736,6 +1809,9 @@
         async function loadConversation(id) {
             const conv = conversations.find(c => c.id === id);
             if (conv) {
+                // Mark this session as accessed (memory management)
+                markSessionAccessed(id);
+
                 // Store the previous conversation ID before switching
                 const previousConvId = currentConversationId;
                 const previousRuntime = previousConvId ? convRuntime[previousConvId] : null;
@@ -2078,6 +2154,8 @@
                 if (convRuntime[c.id]) {
                     delete convRuntime[c.id];
                 }
+                // Clean up abort controller (memory leak fix)
+                cleanupAbortController(c.id);
             });
 
             console.log(`[Cleanup] Removed ${oldConversations.length} old conversations`);
@@ -2102,6 +2180,9 @@
                 delete convRuntime[id];
                 console.log(`[${id}] Cleaned up runtime state`);
             }
+
+            // Clean up abort controller (memory leak fix)
+            cleanupAbortController(id);
 
             // If deleting current conversation, create a new one
             if (currentConversationId === id) {
@@ -4560,6 +4641,15 @@ Be concise and helpful in your responses.`;
                     const dataUrl = canvas.toDataURL(mediaType, quality);
                     const base64 = dataUrl.split(',')[1];
 
+                    // Memory leak fix: Release canvas and image resources
+                    // Setting dimensions to 0 releases GPU memory used by canvas
+                    canvas.width = 0;
+                    canvas.height = 0;
+                    // Clear image source to release memory
+                    img.src = '';
+                    img.onload = null;
+                    img.onerror = null;
+
                     resolve({
                         base64,
                         mediaType,
@@ -4567,7 +4657,13 @@ Be concise and helpful in your responses.`;
                         height
                     });
                 };
-                img.onerror = () => reject(new Error('Failed to load image'));
+                img.onerror = () => {
+                    // Clean up on error too
+                    img.src = '';
+                    img.onload = null;
+                    img.onerror = null;
+                    reject(new Error('Failed to load image'));
+                };
 
                 // Read file as data URL
                 const reader = new FileReader();
