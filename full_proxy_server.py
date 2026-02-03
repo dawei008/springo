@@ -779,7 +779,7 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             result_str = json.dumps(result) if isinstance(result, dict) else str(result)
             result_size = len(result_str.encode('utf-8'))
 
-            # If result exceeds 64KB, save to file and return reference
+            # If result exceeds 30KB, save to file and return reference
             if result_size > ctx_manager.MAX_INLINE_OUTPUT_SIZE:
                 # Get session_id from request context or generate one
                 session_id = anthropic_request.get('session_id', f"auto_{uuid.uuid4().hex[:8]}")
@@ -796,8 +796,14 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
                         "message": f"Result saved to file ({result_size:,} bytes). Use /v1/tool-results/{session_id}/{tool_id} to retrieve full content."
                     })
 
-            # 发送工具完成事件 (use tool_use_id and tool_name for consistency with api/messages.py)
-            yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': tool_id, 'tool_name': tool_name, 'result': result})}\n\n"
+            # 发送工具完成事件 - 使用截断后的结果，避免发送超大 SSE 事件
+            # 注意：result_str 可能已被截断（如果 > 30KB），这是正确的行为
+            # 前端如需完整数据可通过 /v1/tool-results/{session_id}/{tool_id} 获取
+            try:
+                sse_result = json.loads(result_str) if isinstance(result_str, str) else result_str
+            except:
+                sse_result = result_str
+            yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': tool_id, 'tool_name': tool_name, 'result': sse_result})}\n\n"
 
             tool_results.append({
                 "type": "tool_result",
@@ -915,7 +921,7 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             result_str = json.dumps(result) if isinstance(result, dict) else str(result)
             result_size = len(result_str.encode('utf-8'))
 
-            # If result exceeds 64KB, save to file and return reference
+            # If result exceeds 30KB, save to file and return reference
             if result_size > ctx_manager.MAX_INLINE_OUTPUT_SIZE:
                 session_id = anthropic_request.get('session_id', f"auto_{uuid.uuid4().hex[:8]}")
                 result_info = ctx_manager.save_tool_result(session_id, tool_id, result_str, tool_name)

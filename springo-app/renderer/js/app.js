@@ -87,8 +87,9 @@
             document.body.appendChild(modal);
         };
 
-        // Reset stuck conversation state - call when network recovers
-        function resetStuckConversations() {
+        // Reset stuck conversation state - call when network recovers or user wants to force reset
+        // Set showToast=false when calling manually via /reset command
+        function resetStuckConversations(showToastMsg = true) {
             let resetCount = 0;
             for (const convId in convRuntime) {
                 const runtime = convRuntime[convId];
@@ -96,21 +97,34 @@
                     console.log(`[Recovery] Resetting stuck conversation: ${convId}`);
                     runtime.isStreaming = false;
 
+                    // Abort any pending requests to release resources
+                    if (typeof abortControllers !== 'undefined' && abortControllers[convId]) {
+                        try {
+                            abortControllers[convId].abort();
+                            console.log(`[Recovery] Aborted pending request for: ${convId}`);
+                        } catch (e) {
+                            // Ignore abort errors
+                        }
+                    }
+
                     // Remove any thinking indicators
                     const thinkingIdx = runtime.messages.findIndex(m => m.isThinking);
                     if (thinkingIdx >= 0) {
                         runtime.messages.splice(thinkingIdx, 1);
                     }
 
-                    updateConversationStatus(convId, 'error');
+                    updateConversationStatus(convId, 'idle');
                     resetCount++;
                 }
             }
 
             if (resetCount > 0) {
                 updateSendButtonState();
+                updateStatus('idle');
                 renderMessages();
-                showToast(`Connection recovered. ${resetCount} stuck task(s) reset.`, 'warning', 8000);
+                if (showToastMsg) {
+                    showToast(`Connection recovered. ${resetCount} stuck task(s) reset.`, 'warning', 8000);
+                }
             }
 
             return resetCount;
@@ -357,6 +371,14 @@
 
             // Save conversation state
             saveConversation(currentConversationId);
+        }
+
+        // Force reset all stuck streaming states
+        // Use this when sessions get stuck in "Running" state
+        // Alias for resetStuckConversations with showToast=false
+        function forceResetAllStreaming() {
+            console.log('Force resetting all streaming states via /reset command');
+            return resetStuckConversations(false);
         }
 
         // Legacy compatibility - will be removed after refactor
@@ -634,9 +656,25 @@
             initTodoPanelDrag();
 
             // Global Escape key to stop current task
+            // Double-Escape (within 500ms) forces reset of all stuck sessions
+            let lastEscapeTime = 0;
             document.addEventListener('keydown', (e) => {
                 if (e.key === 'Escape') {
-                    // If streaming, stop the task
+                    const now = Date.now();
+                    const timeSinceLastEscape = now - lastEscapeTime;
+                    lastEscapeTime = now;
+
+                    // Double-Escape: force reset all stuck sessions
+                    if (timeSinceLastEscape < 500) {
+                        e.preventDefault();
+                        const resetCount = forceResetAllStreaming();
+                        if (resetCount > 0) {
+                            showToast(`Force reset ${resetCount} stuck session(s)`, 'warning', 3000);
+                        }
+                        return;
+                    }
+
+                    // Single Escape: stop current task if streaming
                     if (isCurrentStreaming()) {
                         e.preventDefault();
                         stopCurrentTask();
@@ -2766,12 +2804,32 @@
         }
 
         // SSE Stream Parser for handling streaming responses
-        async function* parseSSEStream(reader) {
+        // With timeout protection to prevent hanging on large responses
+        async function* parseSSEStream(reader, timeoutMs = 120000) {
             const decoder = new TextDecoder();
             let buffer = '';
+            let lastActivityTime = Date.now();
+
+            // Helper to read with timeout
+            async function readWithTimeout() {
+                return new Promise((resolve, reject) => {
+                    const timeoutId = setTimeout(() => {
+                        reject(new Error(`SSE stream timeout: no data received for ${timeoutMs/1000}s`));
+                    }, timeoutMs);
+
+                    reader.read().then(result => {
+                        clearTimeout(timeoutId);
+                        lastActivityTime = Date.now();
+                        resolve(result);
+                    }).catch(err => {
+                        clearTimeout(timeoutId);
+                        reject(err);
+                    });
+                });
+            }
 
             while (true) {
-                const { done, value } = await reader.read();
+                const { done, value } = await readWithTimeout();
                 if (done) break;
 
                 buffer += decoder.decode(value, { stream: true });
@@ -2779,6 +2837,12 @@
                 // Split on double newlines (SSE event separator)
                 const events = buffer.split('\n\n');
                 buffer = events.pop() || ''; // Keep incomplete event in buffer
+
+                // Safety: if buffer grows too large, something is wrong
+                if (buffer.length > 10 * 1024 * 1024) { // 10MB limit
+                    console.error('SSE buffer overflow, clearing');
+                    buffer = '';
+                }
 
                 for (const eventBlock of events) {
                     if (!eventBlock.trim()) continue;
@@ -2799,7 +2863,7 @@
                         try {
                             yield { event: eventType, data: JSON.parse(eventData) };
                         } catch (e) {
-                            console.warn('SSE parse error:', e, eventData);
+                            console.warn('SSE parse error:', e, eventData?.substring(0, 200));
                         }
                     }
                 }
@@ -2807,6 +2871,7 @@
         }
 
         // Process streaming response and update UI progressively
+        // With watchdog timer to prevent hanging on large responses
         async function processStreamingResponse(response, convId, onTextUpdate, onComplete) {
             const reader = response.body.getReader();
             let textContent = '';
@@ -2814,9 +2879,13 @@
             let currentToolUse = null;
             let currentToolInput = '';
             let streamToolInterval = null;  // Local interval for real-time tool updates
+            let streamCompleted = false;
+
+            // Watchdog: if no activity for 2 minutes, consider stream dead
+            const STREAM_TIMEOUT_MS = 120000;
 
             try {
-                for await (const { event, data } of parseSSEStream(reader)) {
+                for await (const { event, data } of parseSSEStream(reader, STREAM_TIMEOUT_MS)) {
                     // Check if conversation switched
                     const runtime = getConvRuntime(convId);
                     if (!runtime) break;
@@ -2999,17 +3068,30 @@
                     }
                 }
 
+                streamCompleted = true;
                 onComplete(textContent, toolUses);
                 return { textContent, toolUses };
 
             } catch (e) {
                 console.error(`[${convId}] Stream error:`, e);
+                // Still call onComplete with whatever we have so UI state is updated
+                if (!streamCompleted) {
+                    console.log(`[${convId}] Calling onComplete after error with partial data`);
+                    onComplete(textContent, toolUses);
+                }
                 throw e;
             } finally {
                 // Always cleanup interval
                 if (streamToolInterval) {
                     clearInterval(streamToolInterval);
                     streamToolInterval = null;
+                }
+                // Always try to cancel the reader to release resources
+                try {
+                    await reader.cancel();
+                    console.log(`[${convId}] Stream reader cancelled`);
+                } catch (cancelError) {
+                    // Ignore cancel errors - reader may already be closed
                 }
             }
         }
@@ -3378,7 +3460,19 @@
             'name': { description: 'Rename current session', handler: handleNameCommand },
             'rename': { description: 'Rename current session', handler: handleNameCommand },
             'clear': { description: 'Clear current session messages', handler: handleClearCommand },
+            'reset': { description: 'Force reset stuck sessions', handler: handleResetCommand },
         };
+
+        // Handle /reset command - force reset stuck streaming states
+        function handleResetCommand(args) {
+            const resetCount = forceResetAllStreaming();
+            if (resetCount > 0) {
+                alert(`Reset ${resetCount} stuck session(s). You can now send messages.`);
+            } else {
+                alert('No stuck sessions found.');
+            }
+            return true;
+        }
 
         // Handle /name command
         function handleNameCommand(args) {
@@ -3560,13 +3654,23 @@
                 console.error('sendMessage error:', e);
 
                 // Check if this is an intentional abort (user switched conversations)
-                const isAbortError = e.name === 'AbortError' || e.message?.includes('aborted');
+                // Note: timeout errors should NOT be treated as abort errors
+                const isAbortError = e.name === 'AbortError' && !e.message?.includes('timeout');
+                const isTimeoutError = e.message?.includes('timeout') || e.message?.includes('Timeout');
 
                 if (isAbortError) {
                     // User switched away from this conversation - not a real error
                     console.log(`[${thisConvId}] Stream aborted (user switched away)`);
-                    // Set to 'running' to indicate it was interrupted but not failed
-                    updateConversationStatus(thisConvId, 'running');
+                    // Set to 'completed' instead of 'running' to allow sending new messages
+                    updateConversationStatus(thisConvId, 'completed');
+                } else if (isTimeoutError) {
+                    // Timeout error - mark as error but allow retry
+                    console.error(`[${thisConvId}] Stream timeout: ${e.message}`);
+                    updateConversationStatus(thisConvId, 'error');
+                    if (currentConversationId === thisConvId) {
+                        updateStatus('error', 'Request timed out. Please try again.');
+                        hideToolPanel();
+                    }
                 } else {
                     // Real error
                     updateConversationStatus(thisConvId, 'error');
