@@ -110,7 +110,7 @@ def load_memory_config() -> Dict[str, Any]:
 
 
 def save_memory_config(memory_config: Dict[str, Any]) -> bool:
-    """保存 Memory 配置到配置文件"""
+    """保存 Memory 配置到配置文件（合并而非覆盖）"""
     try:
         # 读取现有配置
         file_config = {}
@@ -118,8 +118,17 @@ def save_memory_config(memory_config: Dict[str, Any]) -> bool:
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 file_config = json.load(f)
 
-        # 更新 memory 节
-        file_config["memory"] = memory_config
+        # 获取现有的 memory 节（保留 ltm 等子配置）
+        existing_memory = file_config.get("memory", {})
+
+        # 更新基础字段，保留其他子配置（如 ltm）
+        existing_memory.update({
+            "memory_id": memory_config.get("memory_id", existing_memory.get("memory_id", "")),
+            "memory_region": memory_config.get("memory_region", existing_memory.get("memory_region", "us-west-2")),
+            "memory_enabled": memory_config.get("memory_enabled", existing_memory.get("memory_enabled", True))
+        })
+
+        file_config["memory"] = existing_memory
 
         # 确保目录存在
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -747,7 +756,7 @@ def shutdown_memory_sync():
 
 def get_memory_config() -> Dict[str, Any]:
     """获取当前 Memory 配置"""
-    return {
+    config = {
         "memory_id": MEMORY_ID,
         "memory_region": MEMORY_REGION,
         "memory_enabled": MEMORY_ENABLED,
@@ -757,6 +766,23 @@ def get_memory_config() -> Dict[str, Any]:
         "sync_check_delay": SYNC_CHECK_DELAY,
         "config_file": CONFIG_FILE
     }
+
+    # 加载 LTM 配置
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                file_config = json.load(f)
+                memory_section = file_config.get("memory", {})
+                config["ltm"] = memory_section.get("ltm", {
+                    "enabled": False,
+                    "strategies": [],
+                    "sync_interval": 900
+                })
+    except Exception as e:
+        logger.warning(f"Failed to load LTM config: {e}")
+        config["ltm"] = {"enabled": False, "strategies": [], "sync_interval": 900}
+
+    return config
 
 
 def create_memory(region: str, name_prefix: str = "springo_memory") -> Dict[str, Any]:

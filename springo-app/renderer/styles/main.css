@@ -3503,3 +3503,102 @@
 .toast-info .toast-message {
     color: var(--text-primary);
 }
+
+/* LTM Strategies Display in Settings */
+.ltm-strategies-display {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.ltm-strategy-row {
+    display: flex;
+    flex-direction: column;
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+}
+
+.ltm-strategy-row:last-child {
+    border-bottom: none;
+}
+
+.ltm-strategy-name {
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.ltm-strategy-type {
+    font-size: 10px;
+    color: var(--accent);
+    background: var(--accent-light);
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    margin-bottom: 4px;
+}
+
+.ltm-strategy-namespace {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    padding: 4px 8px;
+    border-radius: 4px;
+    word-break: break-all;
+}
+
+/* Secondary button style */
+.secondary-btn {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.secondary-btn:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.secondary-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Spinning animation */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.spinning {
+    display: inline-block;
+    animation: spin 1s linear infinite;
+}
+
+/* Strategy verification badges */
+.ltm-strategy-unverified {
+    font-size: 10px;
+    color: var(--warning-color, #f5a623);
+    background: rgba(245, 166, 35, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.ltm-strategy-verified {
+    font-size: 10px;
+    color: var(--success-color, #34c759);
+}
+
+.ltm-strategy-row.unverified {
+    opacity: 0.8;
+    border-left: 2px solid var(--warning-color, #f5a623);
+    padding-left: 10px;
+}

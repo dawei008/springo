@@ -4813,19 +4813,73 @@ Be concise and helpful in your responses.`;
                     console.log('S3 config not available');
                 }
 
-                // Show status
-                const statusEl = document.getElementById('memory-connection-status');
-                const memoryId = memData.memory_id || '';
-                if (memoryId && memData.memory_enabled) {
-                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Configured</span>';
-                } else if (!memData.memory_enabled) {
-                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Disabled</span>';
-                } else {
-                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not configured</span>';
-                }
+                // Display LTM Strategies
+                displayLtmStrategies(memData.ltm);
             } catch (e) {
                 console.log('Failed to load Memory settings:', e);
-                document.getElementById('memory-connection-status').innerHTML = '';
+            }
+        }
+
+        function displayLtmStrategies(ltmConfig) {
+            const section = document.getElementById('ltm-strategies-section');
+            const display = document.getElementById('ltm-strategies-display');
+
+            if (!ltmConfig || !ltmConfig.strategies || ltmConfig.strategies.length === 0) {
+                section.style.display = 'none';
+                return;
+            }
+
+            section.style.display = 'block';
+
+            const html = ltmConfig.strategies.map(strategy => {
+                const unverifiedBadge = strategy.unverified
+                    ? '<span class="ltm-strategy-unverified">Unverified</span>'
+                    : '<span class="ltm-strategy-verified">✓</span>';
+                return `
+                    <div class="ltm-strategy-row ${strategy.unverified ? 'unverified' : ''}">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div class="ltm-strategy-name">${escapeHTML(strategy.name)}</div>
+                            ${unverifiedBadge}
+                        </div>
+                        <span class="ltm-strategy-type">${escapeHTML(strategy.type)}</span>
+                        <div class="ltm-strategy-namespace">${escapeHTML(strategy.namespace)}</div>
+                    </div>
+                `;
+            }).join('');
+
+            display.innerHTML = html;
+        }
+
+        async function refreshLtmStrategies() {
+            const btn = document.getElementById('refresh-strategies-btn');
+            const icon = document.getElementById('refresh-strategies-icon');
+
+            // Show loading state
+            btn.disabled = true;
+            icon.classList.add('spinning');
+            icon.textContent = '↻';
+
+            try {
+                const response = await fetch(`${BASE_URL}/v1/config/memory/strategies/refresh`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+
+                const result = await response.json();
+
+                if (result.success && result.strategies) {
+                    // Update display with new strategies
+                    displayLtmStrategies({ strategies: result.strategies });
+                    showNotification(`Discovered ${result.strategies.length} strategies`, 'success');
+                } else {
+                    showNotification(result.error || 'No strategies found', 'error');
+                }
+            } catch (e) {
+                console.error('Failed to refresh strategies:', e);
+                showNotification('Failed to refresh strategies', 'error');
+            } finally {
+                btn.disabled = false;
+                icon.classList.remove('spinning');
             }
         }
 
@@ -4861,34 +4915,6 @@ Be concise and helpful in your responses.`;
                 console.log('Memory and S3 settings saved');
             } catch (e) {
                 console.error('Failed to save settings:', e);
-            }
-        }
-
-        async function testMemoryConnection() {
-            const btn = document.getElementById('test-memory-btn');
-            const statusEl = document.getElementById('memory-connection-status');
-
-            btn.disabled = true;
-            btn.textContent = 'Testing...';
-            statusEl.innerHTML = '';
-
-            // Save settings first
-            await saveMemorySettings();
-
-            try {
-                const res = await fetch(`${BASE_URL}/v1/config/memory/test`);
-                const data = await res.json();
-
-                if (data.success) {
-                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ Connected</span>`;
-                } else {
-                    statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
-                }
-            } catch (e) {
-                statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${e.message}</span>`;
-            } finally {
-                btn.disabled = false;
-                btn.textContent = 'Test Connection';
             }
         }
 
@@ -7210,4 +7236,6 @@ ${content || 'Task completed successfully.'}
             }
             renderProjects();
         }
+
+        // LTM Panel removed - LTM retrieval will be implemented via skill
 

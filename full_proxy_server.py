@@ -1826,7 +1826,7 @@ def aws_test_connection():
 @app.route('/v1/config/memory', methods=['GET', 'POST'])
 def memory_config():
     """获取或设置 AgentCore Memory 配置"""
-    from memory_sync import load_memory_config, save_memory_config, get_memory_config
+    from memory_sync import load_memory_config, save_memory_config, get_memory_config, CONFIG_FILE
 
     if request.method == 'GET':
         config = get_memory_config()
@@ -1842,6 +1842,34 @@ def memory_config():
                 "memory_region": data.get('memory_region', 'us-west-2'),
                 "memory_enabled": data.get('memory_enabled', True)
             }
+
+            # 当启用 Memory Sync 时，自动配置 4 种内置策略
+            if new_config.get('memory_enabled') and new_config.get('memory_id'):
+                setup_result = auto_setup_memory_strategies(
+                    new_config['memory_id'],
+                    new_config['memory_region']
+                )
+                if setup_result.get('strategies'):
+                    # 保存策略配置到 ltm 节点
+                    full_config = {}
+                    if os.path.exists(CONFIG_FILE):
+                        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                            full_config = json.load(f)
+
+                    if 'memory' not in full_config:
+                        full_config['memory'] = {}
+
+                    full_config['memory']['ltm'] = {
+                        'enabled': True,
+                        'strategies': setup_result['strategies'],
+                        'sync_interval': 900
+                    }
+
+                    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                        json.dump(full_config, f, indent=2, ensure_ascii=False)
+
+                    logger.info(f"Auto-configured {len(setup_result['strategies'])} strategies for Memory")
+
             if save_memory_config(new_config):
                 logger.info(f"Memory config updated: {new_config.get('memory_id')}")
                 return Response(
@@ -1861,6 +1889,225 @@ def memory_config():
                 status=500,
                 mimetype='application/json'
             )
+
+
+@app.route('/v1/config/memory/strategies/refresh', methods=['POST'])
+def refresh_memory_strategies():
+    """刷新 LTM 策略配置，从 Memory 资源获取实际的策略 ID 和 namespace"""
+    from memory_sync import get_memory_config, CONFIG_FILE
+
+    try:
+        config = get_memory_config()
+        memory_id = config.get('memory_id')
+        region = config.get('memory_region', 'us-west-2')
+
+        if not memory_id:
+            return Response(
+                json.dumps({"success": False, "error": "Memory ID not configured"}),
+                status=400,
+                mimetype='application/json'
+            )
+
+        # 调用 auto_setup 函数获取实际的策略配置
+        setup_result = auto_setup_memory_strategies(memory_id, region)
+
+        if setup_result.get('strategies'):
+            # 更新配置文件中的策略
+            full_config = {}
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    full_config = json.load(f)
+
+            if 'memory' not in full_config:
+                full_config['memory'] = {}
+
+            full_config['memory']['ltm'] = {
+                'enabled': True,
+                'strategies': setup_result['strategies'],
+                'sync_interval': full_config.get('memory', {}).get('ltm', {}).get('sync_interval', 900)
+            }
+
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(full_config, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"Refreshed {len(setup_result['strategies'])} strategies from Memory")
+
+            return Response(
+                json.dumps({
+                    "success": True,
+                    "strategies": setup_result['strategies'],
+                    "message": f"Discovered {len(setup_result['strategies'])} strategies"
+                }),
+                mimetype='application/json'
+            )
+        else:
+            return Response(
+                json.dumps({
+                    "success": False,
+                    "error": setup_result.get('error', 'No strategies found'),
+                    "strategies": []
+                }),
+                status=500,
+                mimetype='application/json'
+            )
+
+    except Exception as e:
+        logger.error(f"Refresh strategies error: {e}")
+        return Response(
+            json.dumps({"success": False, "error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
+
+
+def auto_setup_memory_strategies(memory_id: str, region: str) -> dict:
+    """
+    自动设置 Memory 的 4 种内置策略
+    从 Memory 资源中获取实际的策略 ID 和 namespace
+    """
+    import boto3
+
+    actor_id = "springo"
+    strategies = []
+
+    # 策略类型映射
+    type_display_map = {
+        'SEMANTIC': 'SEMANTIC_MEMORY',
+        'USER_PREFERENCE': 'USER_PREFERENCE',
+        'SUMMARIZATION': 'SUMMARIZATION',
+        'EPISODIC': 'EPISODIC_MEMORY',
+    }
+
+    try:
+        # 使用控制面板客户端获取 Memory 详情
+        control_client = boto3.client('bedrock-agentcore-control', region_name=region)
+
+        try:
+            memory_response = control_client.get_memory(memoryId=memory_id)
+            logger.info(f"Got memory details for {memory_id}")
+
+            # 从响应中提取策略信息 - 正确的路径是 response['memory']['strategies']
+            memory_data = memory_response.get('memory', {})
+            memory_strategies = memory_data.get('strategies', [])
+            logger.info(f"Found {len(memory_strategies)} strategies in memory resource")
+
+            for mem_strategy in memory_strategies:
+                # 直接从策略对象获取字段
+                strategy_id = mem_strategy.get('strategyId', '')
+                strategy_name = mem_strategy.get('name', '')
+                strategy_type_raw = mem_strategy.get('type', 'SEMANTIC')
+                strategy_description = mem_strategy.get('description', '')
+                namespace_patterns = mem_strategy.get('namespaces', [])
+
+                # 映射类型显示名称
+                strategy_type = type_display_map.get(strategy_type_raw, strategy_type_raw)
+
+                # 构建实际的 namespace
+                # 模板格式: /strategies/{memoryStrategyId}/actors/{actorId}/
+                # 或: /episodes/{memoryStrategyId}/actors/{actorId}/
+                if namespace_patterns:
+                    pattern = namespace_patterns[0]
+                    actual_namespace = pattern.replace('{memoryStrategyId}', strategy_id).replace('{actorId}', actor_id)
+                    # 移除 {sessionId} 占位符（如果存在）
+                    if '{sessionId}' in actual_namespace:
+                        actual_namespace = actual_namespace.replace('/sessions/{sessionId}/', '/')
+                else:
+                    # 默认 namespace 格式
+                    actual_namespace = f"/strategies/{strategy_id}/actors/{actor_id}/"
+
+                strategies.append({
+                    'id': strategy_id,
+                    'name': strategy_name,
+                    'type': strategy_type,
+                    'namespace': actual_namespace,
+                    'description': strategy_description or f'{strategy_name} strategy'
+                })
+
+                logger.info(f"Found strategy: {strategy_name} (ID: {strategy_id}) -> {actual_namespace}")
+
+        except control_client.exceptions.ResourceNotFoundException:
+            logger.warning(f"Memory {memory_id} not found")
+        except Exception as e:
+            logger.warning(f"Failed to get memory details via control plane: {e}")
+
+            # 备选方案：通过数据面板 list_memory_records 发现已有的记录
+            data_client = boto3.client('bedrock-agentcore', region_name=region)
+
+            # 尝试每种可能的策略 namespace 前缀来发现实际使用的
+            strategy_candidates = ['ConversationFacts', 'UserPreferences', 'SessionSummary', 'EpisodicMemory']
+
+            for candidate in strategy_candidates:
+                try:
+                    # 尝试列出该策略类型下的记录
+                    response = data_client.list_memory_records(
+                        memoryId=memory_id,
+                        namespace=f"/strategies/{candidate}",  # 使用前缀匹配
+                        maxResults=10
+                    )
+                    records = response.get('memoryRecords', [])
+
+                    if records:
+                        # 从记录中提取实际的 namespace
+                        for record in records:
+                            namespace = record.get('namespace', '')
+                            if namespace and '/strategies/' in namespace:
+                                # 解析 namespace: /strategies/{strategyId}/actors/{actorId}/
+                                parts = namespace.strip('/').split('/')
+                                if len(parts) >= 4 and parts[0] == 'strategies' and parts[2] == 'actors':
+                                    strategy_id = parts[1]
+                                    base_name = strategy_id.split('-')[0] if '-' in strategy_id else strategy_id
+                                    strategy_type = strategy_type_map.get(base_name, 'SEMANTIC_MEMORY')
+
+                                    # 检查是否已添加（避免重复）
+                                    existing_ids = [s['id'] for s in strategies]
+                                    if strategy_id not in existing_ids:
+                                        strategies.append({
+                                            'id': strategy_id,
+                                            'name': base_name,
+                                            'type': strategy_type,
+                                            'namespace': namespace,
+                                            'description': f'{base_name} strategy'
+                                        })
+                                        logger.info(f"Discovered strategy from records: {strategy_id} -> {namespace}")
+                                break  # 找到一个就够了
+
+                except Exception as list_err:
+                    logger.debug(f"Failed to list records for {candidate}: {list_err}")
+
+        # 如果没有发现任何策略，使用默认配置（但标记为未验证）
+        if not strategies:
+            logger.warning("No strategies discovered, using default configuration")
+            default_strategies = [
+                {'type': 'SEMANTIC_MEMORY', 'name': 'ConversationFacts', 'description': 'Extract semantic facts from conversations'},
+                {'type': 'USER_PREFERENCE', 'name': 'UserPreferences', 'description': 'Extract user preferences'},
+                {'type': 'SUMMARIZATION', 'name': 'SessionSummary', 'description': 'Summarize conversation sessions'},
+                {'type': 'EPISODIC_MEMORY', 'name': 'EpisodicMemory', 'description': 'Store episodic memories'},
+            ]
+            for strategy_type in default_strategies:
+                strategies.append({
+                    'id': f"{strategy_type['name']}-{actor_id}",
+                    'name': strategy_type['name'],
+                    'type': strategy_type['type'],
+                    'namespace': f"/strategies/{strategy_type['name']}/actors/{actor_id}/",
+                    'description': strategy_type['description'],
+                    'unverified': True  # 标记为未验证
+                })
+
+        return {
+            'success': True,
+            'strategies': strategies,
+            'actor_id': actor_id
+        }
+
+    except Exception as e:
+        logger.warning(f"Auto-setup strategies failed: {e}")
+        # 返回空策略列表，让用户知道需要手动配置
+        return {
+            'success': False,
+            'strategies': [],
+            'actor_id': actor_id,
+            'error': str(e)
+        }
 
 
 @app.route('/v1/config/memory/create', methods=['POST'])

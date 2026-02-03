@@ -262,7 +262,6 @@
         </div>
     </div>
 
-
     <!-- Project Modal -->
     <div class="project-modal" id="project-modal">
         <div class="project-modal-content">
@@ -336,31 +335,6 @@
                         <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
                     </select>
                     <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
-                </div>
-
-                <div class="setting-divider"></div>
-
-                <!-- AgentCore Memory Section -->
-                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
-                <div class="setting-group">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                        <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
-                        Enable Memory Sync
-                    </label>
-                </div>
-                <div class="setting-group">
-                    <label>Memory ID</label>
-                    <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
-                    <div class="hint" style="margin-top: 4px;">Create via <code>agentcore memory create --name springo_memory</code></div>
-                </div>
-                <div class="setting-group">
-                    <label>S3 Bucket</label>
-                    <input type="text" id="settings-s3-bucket" placeholder="e.g., my-springo-bucket">
-                    <div class="hint" style="margin-top: 4px;">Pre-created S3 bucket for storing images and tool results</div>
-                </div>
-                <div class="setting-group" style="margin-top: 12px;">
-                    <button onclick="testMemoryConnection()" id="test-memory-btn">Test Connection</button>
-                    <span id="memory-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
                 </div>
 
                 <div class="setting-divider"></div>
@@ -438,6 +412,40 @@
                     </div>
                 </div>
                 <div class="hint">MCP servers provide additional tools. Config file: <code>~/.springo/mcp_servers.json</code></div>
+
+                <div class="setting-divider"></div>
+
+                <!-- AgentCore Memory Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
+                <div class="setting-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
+                        Enable Memory Sync
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label>Memory ID</label>
+                    <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
+                    <div class="hint" style="margin-top: 4px;">Create via <code>agentcore memory create --name springo_memory</code></div>
+                </div>
+                <div class="setting-group">
+                    <label>S3 Bucket</label>
+                    <input type="text" id="settings-s3-bucket" placeholder="e.g., my-springo-bucket">
+                    <div class="hint" style="margin-top: 4px;">Pre-created S3 bucket for storing images and tool results</div>
+                </div>
+                <!-- LTM Strategies Section -->
+                <div class="setting-group" id="ltm-strategies-section" style="margin-top: 16px; display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <label style="margin: 0;">LTM Strategies</label>
+                        <button onclick="refreshLtmStrategies()" id="refresh-strategies-btn" class="secondary-btn" style="font-size: 11px; padding: 4px 10px;">
+                            <span id="refresh-strategies-icon">↻</span> Refresh
+                        </button>
+                    </div>
+                    <div id="ltm-strategies-display" class="ltm-strategies-display">
+                        <!-- Dynamically populated -->
+                    </div>
+                    <div class="hint" style="margin-top: 4px;">Click Refresh to discover actual namespaces. "Unverified" means namespace not confirmed from Memory.</div>
+                </div>
             </div>
         </div>
     </div>
