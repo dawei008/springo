@@ -485,6 +485,8 @@ class MCPManager:
                 # Cache discovered tools for future lazy loading
                 if server.tools:
                     self.cache_server_tools(server_name, server.get_tool_definitions())
+                    # Register tools in deferred registry for tool lookup
+                    self._register_server_tools_deferred(server_name, server)
                 logger.info(f"Lazy-loaded MCP server: {server_name} with {len(server.tools)} tools")
                 return True
             else:
@@ -660,6 +662,35 @@ class MCPManager:
             logger.info(f"Removed dead MCP server: {name}")
 
         return results
+
+    def _register_server_tools_deferred(self, server_name: str, server: 'MCPServerConnection'):
+        """Register tools from a single server as deferred in the tool registry.
+
+        Called after lazy loading a server to make its tools available for lookup.
+        """
+        try:
+            from tool_registry import get_tool_registry
+            registry = get_tool_registry()
+
+            for tool in server.tools:
+                full_name = f"{server_name}__{tool['name']}"
+                description = tool.get("description", "")
+
+                # Extract keywords from tool name and description
+                keywords = tool['name'].replace('-', ' ').replace('_', ' ').split()
+
+                registry.register_deferred(
+                    name=full_name,
+                    description=description,
+                    server_name=server_name,
+                    keywords=keywords
+                )
+                logger.debug(f"Registered deferred tool: {full_name}")
+
+            logger.info(f"Registered {len(server.tools)} tools from {server_name} as deferred")
+
+        except Exception as e:
+            logger.error(f"Failed to register deferred tools for {server_name}: {e}")
 
     def register_tools_as_deferred(self):
         """Register all MCP tools as deferred in the tool registry (lazy loading)"""
