@@ -1960,12 +1960,16 @@ def refresh_memory_strategies():
         )
 
 
-def auto_setup_memory_strategies(memory_id: str, region: str) -> dict:
+def auto_setup_memory_strategies(memory_id: str, region: str, create_missing: bool = True) -> dict:
     """
-    自动设置 Memory 的 4 种内置策略
-    从 Memory 资源中获取实际的策略 ID 和 namespace
+    自动设置 Memory 的 LTM 策略
+    1. 获取现有策略
+    2. 如果缺少必要策略，自动创建（semantic, summary, userPreference）
+    3. 创建 EPISODIC 策略，配置 reflection 指向其他策略的 namespace
+    4. 返回所有策略的实际 namespace
     """
     import boto3
+    import time
 
     actor_id = "springo"
     strategies = []
@@ -1976,6 +1980,13 @@ def auto_setup_memory_strategies(memory_id: str, region: str) -> dict:
         'USER_PREFERENCE': 'USER_PREFERENCE',
         'SUMMARIZATION': 'SUMMARIZATION',
         'EPISODIC': 'EPISODIC_MEMORY',
+    }
+
+    # 需要的 LTM 策略定义（不包括 EPISODIC，单独处理）
+    required_ltm_strategies = {
+        'ConversationFacts': {'type': 'semanticMemoryStrategy', 'description': 'Extract semantic facts from conversations'},
+        'UserPreferences': {'type': 'userPreferenceMemoryStrategy', 'description': 'Extract user preferences'},
+        'ConversationSummary': {'type': 'summaryMemoryStrategy', 'description': 'Generate conversation summaries'},
     }
 
     try:
@@ -2025,54 +2036,153 @@ def auto_setup_memory_strategies(memory_id: str, region: str) -> dict:
 
                 logger.info(f"Found strategy: {strategy_name} (ID: {strategy_id}) -> {actual_namespace}")
 
+            # 检查是否需要创建缺失的 LTM 策略（不包括 EPISODIC）
+            if create_missing:
+                existing_names = [s['name'] for s in strategies]
+                existing_types = [s['type'] for s in strategies]
+                strategies_to_create = []
+
+                for name, config in required_ltm_strategies.items():
+                    if name not in existing_names:
+                        strategies_to_create.append({
+                            config['type']: {
+                                'name': name,
+                                'description': config['description']
+                            }
+                        })
+
+                if strategies_to_create:
+                    logger.info(f"Creating {len(strategies_to_create)} missing LTM strategies: {[list(s.keys())[0] for s in strategies_to_create]}")
+                    try:
+                        update_response = control_client.update_memory(
+                            memoryId=memory_id,
+                            memoryStrategies={
+                                'addMemoryStrategies': strategies_to_create
+                            }
+                        )
+
+                        # 重新获取策略列表
+                        new_strategies = update_response.get('memory', {}).get('strategies', [])
+                        logger.info(f"After update, memory has {len(new_strategies)} strategies")
+
+                        # 重新处理所有策略
+                        strategies = []
+                        for mem_strategy in new_strategies:
+                            strategy_id = mem_strategy.get('strategyId', '')
+                            strategy_name = mem_strategy.get('name', '')
+                            strategy_type_raw = mem_strategy.get('type', 'SEMANTIC')
+                            strategy_description = mem_strategy.get('description', '')
+                            namespace_patterns = mem_strategy.get('namespaces', [])
+
+                            strategy_type = type_display_map.get(strategy_type_raw, strategy_type_raw)
+
+                            if namespace_patterns:
+                                pattern = namespace_patterns[0]
+                                actual_namespace = pattern.replace('{memoryStrategyId}', strategy_id).replace('{actorId}', actor_id)
+                                if '{sessionId}' in actual_namespace:
+                                    actual_namespace = actual_namespace.replace('/sessions/{sessionId}/', '/')
+                            else:
+                                actual_namespace = f"/strategies/{strategy_id}/actors/{actor_id}/"
+
+                            strategies.append({
+                                'id': strategy_id,
+                                'name': strategy_name,
+                                'type': strategy_type,
+                                'namespace': actual_namespace,
+                                'description': strategy_description or f'{strategy_name} strategy'
+                            })
+
+                    except Exception as create_err:
+                        logger.warning(f"Failed to create missing LTM strategies: {create_err}")
+
+                # 处理 EPISODIC 策略的 reflection 配置
+                # 收集所有非 EPISODIC 策略的 namespace 用于 reflection
+                reflection_namespaces = []
+                episodic_strategy = None
+
+                for s in strategies:
+                    if s['type'] == 'EPISODIC_MEMORY':
+                        episodic_strategy = s
+                    else:
+                        # 收集其他策略的 namespace 用于 reflection
+                        reflection_namespaces.append(s['namespace'])
+
+                logger.info(f"Reflection namespaces for EPISODIC: {reflection_namespaces}")
+
+                # 如果有 reflection namespaces，需要检查/更新 EPISODIC 策略
+                if reflection_namespaces:
+                    try:
+                        if episodic_strategy:
+                            # 删除现有的 EPISODIC 策略，然后重新创建带 reflection 的
+                            logger.info(f"Deleting existing EPISODIC strategy: {episodic_strategy['id']}")
+                            control_client.update_memory(
+                                memoryId=memory_id,
+                                memoryStrategies={
+                                    'deleteMemoryStrategies': [
+                                        {'memoryStrategyId': episodic_strategy['id']}
+                                    ]
+                                }
+                            )
+                            # 等待删除完成
+                            time.sleep(2)
+
+                        # 创建带 reflectionConfiguration 的 EPISODIC 策略
+                        logger.info(f"Creating EPISODIC strategy with reflection to: {reflection_namespaces}")
+                        episodic_response = control_client.update_memory(
+                            memoryId=memory_id,
+                            memoryStrategies={
+                                'addMemoryStrategies': [
+                                    {
+                                        'episodicMemoryStrategy': {
+                                            'name': 'ConversationEpisodes',
+                                            'description': 'Episodic memory with reflection from other LTM strategies',
+                                            'reflectionConfiguration': {
+                                                'namespaces': reflection_namespaces
+                                            }
+                                        }
+                                    }
+                                ]
+                            }
+                        )
+
+                        # 更新 strategies 列表 - 移除旧的 EPISODIC，添加新的
+                        strategies = [s for s in strategies if s['type'] != 'EPISODIC_MEMORY']
+
+                        # 从响应中获取新创建的 EPISODIC 策略信息
+                        new_strategies_list = episodic_response.get('memory', {}).get('strategies', [])
+                        for mem_strategy in new_strategies_list:
+                            if mem_strategy.get('type') == 'EPISODIC':
+                                strategy_id = mem_strategy.get('strategyId', '')
+                                strategy_name = mem_strategy.get('name', '')
+                                namespace_patterns = mem_strategy.get('namespaces', [])
+
+                                if namespace_patterns:
+                                    pattern = namespace_patterns[0]
+                                    actual_namespace = pattern.replace('{memoryStrategyId}', strategy_id).replace('{actorId}', actor_id)
+                                    if '{sessionId}' in actual_namespace:
+                                        actual_namespace = actual_namespace.replace('/sessions/{sessionId}/', '/')
+                                else:
+                                    actual_namespace = f"/episodes/{strategy_id}/actors/{actor_id}/"
+
+                                strategies.append({
+                                    'id': strategy_id,
+                                    'name': strategy_name,
+                                    'type': 'EPISODIC_MEMORY',
+                                    'namespace': actual_namespace,
+                                    'description': 'Episodic memory with reflection',
+                                    'has_reflection': True,
+                                    'reflection_namespaces': reflection_namespaces
+                                })
+                                logger.info(f"Created EPISODIC strategy with reflection: {strategy_id}")
+                                break
+
+                    except Exception as episodic_err:
+                        logger.warning(f"Failed to setup EPISODIC with reflection: {episodic_err}")
+
         except control_client.exceptions.ResourceNotFoundException:
             logger.warning(f"Memory {memory_id} not found")
         except Exception as e:
             logger.warning(f"Failed to get memory details via control plane: {e}")
-
-            # 备选方案：通过数据面板 list_memory_records 发现已有的记录
-            data_client = boto3.client('bedrock-agentcore', region_name=region)
-
-            # 尝试每种可能的策略 namespace 前缀来发现实际使用的
-            strategy_candidates = ['ConversationFacts', 'UserPreferences', 'SessionSummary', 'EpisodicMemory']
-
-            for candidate in strategy_candidates:
-                try:
-                    # 尝试列出该策略类型下的记录
-                    response = data_client.list_memory_records(
-                        memoryId=memory_id,
-                        namespace=f"/strategies/{candidate}",  # 使用前缀匹配
-                        maxResults=10
-                    )
-                    records = response.get('memoryRecords', [])
-
-                    if records:
-                        # 从记录中提取实际的 namespace
-                        for record in records:
-                            namespace = record.get('namespace', '')
-                            if namespace and '/strategies/' in namespace:
-                                # 解析 namespace: /strategies/{strategyId}/actors/{actorId}/
-                                parts = namespace.strip('/').split('/')
-                                if len(parts) >= 4 and parts[0] == 'strategies' and parts[2] == 'actors':
-                                    strategy_id = parts[1]
-                                    base_name = strategy_id.split('-')[0] if '-' in strategy_id else strategy_id
-                                    strategy_type = strategy_type_map.get(base_name, 'SEMANTIC_MEMORY')
-
-                                    # 检查是否已添加（避免重复）
-                                    existing_ids = [s['id'] for s in strategies]
-                                    if strategy_id not in existing_ids:
-                                        strategies.append({
-                                            'id': strategy_id,
-                                            'name': base_name,
-                                            'type': strategy_type,
-                                            'namespace': namespace,
-                                            'description': f'{base_name} strategy'
-                                        })
-                                        logger.info(f"Discovered strategy from records: {strategy_id} -> {namespace}")
-                                break  # 找到一个就够了
-
-                except Exception as list_err:
-                    logger.debug(f"Failed to list records for {candidate}: {list_err}")
 
         # 如果没有发现任何策略，使用默认配置（但标记为未验证）
         if not strategies:
