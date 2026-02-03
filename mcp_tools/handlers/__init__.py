@@ -35,17 +35,7 @@ from .git_tools import (
     git_clone,
 )
 
-from .browser_tools import (
-    browser,
-    browser_navigate,
-    browser_screenshot,
-    browser_click,
-    browser_type,
-    browser_get_text,
-    browser_evaluate,
-    browser_close,
-    BrowserManager,
-)
+# Browser tools removed - use MCP playwright instead
 
 from .search_tools import (
     web_search,

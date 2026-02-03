@@ -162,24 +162,7 @@ tool_search(query="strands long term memory", auto_activate=true)
             "required": ["action"]
         }
     },
-    {
-        "name": "browser",
-        "description": "Unified Browser automation tool (Playwright). Supports: navigate, screenshot, click, type, get_text, evaluate, close.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "action": {"type": "string", "enum": ["navigate", "screenshot", "click", "type", "get_text", "evaluate", "close"], "description": "Browser action"},
-                "url": {"type": "string", "description": "URL to navigate to"},
-                "selector": {"type": "string", "description": "CSS selector for element"},
-                "text": {"type": "string", "description": "Text to type"},
-                "script": {"type": "string", "description": "JavaScript to execute"},
-                "wait_until": {"type": "string", "enum": ["load", "domcontentloaded", "networkidle"], "description": "Wait condition"},
-                "full_page": {"type": "boolean", "description": "Full page screenshot"},
-                "clear": {"type": "boolean", "description": "Clear input before typing"}
-            },
-            "required": ["action"]
-        }
-    },
+    # Browser tool removed - use MCP playwright instead
     {
         "name": "glob",
         "description": "Fast file pattern matching. Returns file paths sorted by modification time.",

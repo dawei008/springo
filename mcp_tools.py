@@ -1,6 +1,6 @@
 """
 MCP Tools Implementation for Springo
-Provides file system, terminal, git, web search, browser automation and other cowork functionality
+Provides file system, terminal, git, and other cowork functionality
 """
 
 import os
@@ -28,15 +28,6 @@ try:
     HAS_REQUESTS = True
 except ImportError:
     HAS_REQUESTS = False
-
-try:
-    from playwright.sync_api import sync_playwright
-    HAS_PLAYWRIGHT = True
-except ImportError:
-    HAS_PLAYWRIGHT = False
-
-# Browser singleton for Playwright
-_browser_manager = None
 
 # Working directory configuration (set by user from UI)
 _working_dir = ""
@@ -423,56 +414,10 @@ Assistant: [Immediately calls the activated tool]
         }
     },
     # =============================================================================
-    # Web Search Tools - REMOVED (use MCP web-search server instead)
+    # Web Search & Browser Tools - REMOVED (use MCP servers instead)
     # =============================================================================
-    # NOTE: web_search and web_fetch removed - use MCP brave_web_search instead
-    # =============================================================================
-    # Browser Tool (Unified - Claude Code pattern)
-    # =============================================================================
-    {
-        "name": "browser",
-        "description": "Unified Browser automation tool (Playwright). Supports: navigate, screenshot, click, type, get_text, evaluate, close.",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "action": {
-                    "type": "string",
-                    "enum": ["navigate", "screenshot", "click", "type", "get_text", "evaluate", "close"],
-                    "description": "Browser action to perform"
-                },
-                "url": {
-                    "type": "string",
-                    "description": "URL to navigate to (for navigate action)"
-                },
-                "selector": {
-                    "type": "string",
-                    "description": "CSS selector for element (for click, type, screenshot, get_text)"
-                },
-                "text": {
-                    "type": "string",
-                    "description": "Text to type (for type action)"
-                },
-                "script": {
-                    "type": "string",
-                    "description": "JavaScript to execute (for evaluate action)"
-                },
-                "wait_until": {
-                    "type": "string",
-                    "enum": ["load", "domcontentloaded", "networkidle"],
-                    "description": "Wait condition for navigate (default: load)"
-                },
-                "full_page": {
-                    "type": "boolean",
-                    "description": "Full page screenshot (for screenshot action)"
-                },
-                "clear": {
-                    "type": "boolean",
-                    "description": "Clear input before typing (default: true)"
-                }
-            },
-            "required": ["action"]
-        }
-    },
+    # NOTE: web_search, web_fetch removed - use MCP brave_web_search instead
+    # NOTE: browser removed - use MCP playwright instead
     # =============================================================================
     # Optimized Tools (Claude Code patterns)
     # =============================================================================
@@ -1886,197 +1831,6 @@ def web_fetch(url: str, selector: str = None) -> Dict[str, Any]:
 
 
 # =============================================================================
-# Browser Automation Tool Implementations (Playwright)
-# =============================================================================
-
-class BrowserManager:
-    """Singleton browser manager for Playwright"""
-    _instance = None
-    _playwright = None
-    _browser = None
-    _page = None
-
-    @classmethod
-    def get_instance(cls):
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-
-    def get_page(self):
-        if not HAS_PLAYWRIGHT:
-            return None, "Playwright not available. Install with: pip install playwright && playwright install chromium"
-
-        try:
-            if self._playwright is None:
-                self._playwright = sync_playwright().start()
-
-            if self._browser is None:
-                self._browser = self._playwright.chromium.launch(headless=True)
-
-            if self._page is None:
-                self._page = self._browser.new_page()
-
-            return self._page, None
-        except Exception as e:
-            return None, str(e)
-
-    def close(self):
-        if self._page:
-            self._page.close()
-            self._page = None
-        if self._browser:
-            self._browser.close()
-            self._browser = None
-        if self._playwright:
-            self._playwright.stop()
-            self._playwright = None
-
-
-def browser_navigate(url: str, wait_until: str = "load") -> Dict[str, Any]:
-    """Navigate browser to URL"""
-    manager = BrowserManager.get_instance()
-    page, error = manager.get_page()
-
-    if error:
-        return {"error": error}
-
-    try:
-        page.goto(url, wait_until=wait_until)
-        return {
-            "success": True,
-            "url": page.url,
-            "title": page.title()
-        }
-    except Exception as e:
-        return {"error": f"Navigation failed: {str(e)}"}
-
-
-def browser_screenshot(selector: str = None, full_page: bool = False) -> Dict[str, Any]:
-    """Take a screenshot"""
-    manager = BrowserManager.get_instance()
-    page, error = manager.get_page()
-
-    if error:
-        return {"error": error}
-
-    try:
-        # Create temp file for screenshot
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-            screenshot_path = f.name
-
-        if selector:
-            element = page.locator(selector)
-            element.screenshot(path=screenshot_path)
-        else:
-            page.screenshot(path=screenshot_path, full_page=full_page)
-
-        # Read and encode as base64
-        with open(screenshot_path, "rb") as f:
-            screenshot_data = base64.b64encode(f.read()).decode("ascii")
-
-        # Clean up temp file
-        os.unlink(screenshot_path)
-
-        return {
-            "success": True,
-            "screenshot": screenshot_data,
-            "encoding": "base64",
-            "format": "png"
-        }
-    except Exception as e:
-        return {"error": f"Screenshot failed: {str(e)}"}
-
-
-def browser_click(selector: str) -> Dict[str, Any]:
-    """Click an element"""
-    manager = BrowserManager.get_instance()
-    page, error = manager.get_page()
-
-    if error:
-        return {"error": error}
-
-    try:
-        page.click(selector)
-        return {"success": True, "selector": selector}
-    except Exception as e:
-        return {"error": f"Click failed: {str(e)}"}
-
-
-def browser_type(selector: str, text: str, clear: bool = True) -> Dict[str, Any]:
-    """Type text into an input"""
-    manager = BrowserManager.get_instance()
-    page, error = manager.get_page()
-
-    if error:
-        return {"error": error}
-
-    try:
-        if clear:
-            page.fill(selector, text)
-        else:
-            page.type(selector, text)
-        return {"success": True, "selector": selector, "text": text}
-    except Exception as e:
-        return {"error": f"Type failed: {str(e)}"}
-
-
-def browser_get_text(selector: str = None) -> Dict[str, Any]:
-    """Get page or element text"""
-    manager = BrowserManager.get_instance()
-    page, error = manager.get_page()
-
-    if error:
-        return {"error": error}
-
-    try:
-        if selector:
-            element = page.locator(selector)
-            text = element.inner_text()
-        else:
-            text = page.inner_text("body")
-
-        # Limit output
-        if len(text) > 50000:
-            text = text[:50000] + "\n... (truncated)"
-
-        return {
-            "success": True,
-            "text": text,
-            "length": len(text)
-        }
-    except Exception as e:
-        return {"error": f"Get text failed: {str(e)}"}
-
-
-def browser_evaluate(script: str) -> Dict[str, Any]:
-    """Execute JavaScript"""
-    manager = BrowserManager.get_instance()
-    page, error = manager.get_page()
-
-    if error:
-        return {"error": error}
-
-    try:
-        result = page.evaluate(script)
-        return {
-            "success": True,
-            "result": result
-        }
-    except Exception as e:
-        return {"error": f"Script execution failed: {str(e)}"}
-
-
-def browser_close() -> Dict[str, Any]:
-    """Close the browser"""
-    try:
-        manager = BrowserManager.get_instance()
-        manager.close()
-        return {"success": True, "message": "Browser closed"}
-    except Exception as e:
-        return {"error": f"Failed to close browser: {str(e)}"}
-
-
-# =============================================================================
 # Unified Tool Handlers (Claude Code pattern: fewer tools, more parameters)
 # =============================================================================
 
@@ -2148,53 +1902,6 @@ def git(action: str, path: str = None, **kwargs) -> Dict[str, Any]:
 
     if action not in handlers:
         return {"error": f"Unknown git action: {action}. Valid actions: {', '.join(handlers.keys())}"}
-
-    return handlers[action]()
-
-
-def browser(action: str, **kwargs) -> Dict[str, Any]:
-    """
-    Unified Browser tool - combines all browser operations into one tool.
-
-    Actions:
-        - navigate: Navigate to URL (url, wait_until)
-        - screenshot: Take screenshot (selector, full_page)
-        - click: Click element (selector)
-        - type: Type text (selector, text, clear)
-        - get_text: Get page/element text (selector)
-        - evaluate: Execute JavaScript (script)
-        - close: Close browser
-    """
-    action = action.lower()
-
-    handlers = {
-        "navigate": lambda: browser_navigate(
-            url=kwargs.get("url", ""),
-            wait_until=kwargs.get("wait_until", "load")
-        ),
-        "screenshot": lambda: browser_screenshot(
-            selector=kwargs.get("selector"),
-            full_page=kwargs.get("full_page", False)
-        ),
-        "click": lambda: browser_click(
-            selector=kwargs.get("selector", "")
-        ),
-        "type": lambda: browser_type(
-            selector=kwargs.get("selector", ""),
-            text=kwargs.get("text", ""),
-            clear=kwargs.get("clear", True)
-        ),
-        "get_text": lambda: browser_get_text(
-            selector=kwargs.get("selector")
-        ),
-        "evaluate": lambda: browser_evaluate(
-            script=kwargs.get("script", "")
-        ),
-        "close": lambda: browser_close()
-    }
-
-    if action not in handlers:
-        return {"error": f"Unknown browser action: {action}. Valid actions: {', '.join(handlers.keys())}"}
 
     return handlers[action]()
 
@@ -3070,19 +2777,10 @@ TOOL_HANDLERS = {
     "git_pull": git_pull,
     "git_push": git_push,
     "git_clone": git_clone,
-    # Web search tools - REMOVED (use MCP web-search server instead)
+    # Web search & Browser tools - REMOVED (use MCP servers instead)
     # "web_search": web_search,  # Use MCP brave_web_search
     # "web_fetch": web_fetch,    # Use MCP fetch
-    # Unified Browser tool (Claude Code pattern)
-    "browser": browser,
-    # Legacy Browser tools (for backward compatibility)
-    "browser_navigate": browser_navigate,
-    "browser_screenshot": browser_screenshot,
-    "browser_click": browser_click,
-    "browser_type": browser_type,
-    "browser_get_text": browser_get_text,
-    "browser_evaluate": browser_evaluate,
-    "browser_close": browser_close,
+    # "browser": browser,        # Use MCP playwright
     # Skill tool
     "use_skill": use_skill,
     # Optimized tools (Claude Code patterns)

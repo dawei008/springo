@@ -1,6 +1,6 @@
 """
 MCP Tools Package
-Provides file system, terminal, git, web search, browser automation and other cowork functionality
+Provides file system, terminal, git, and other cowork functionality
 """
 
 # Config exports
@@ -54,10 +54,7 @@ from .handlers import (
     # Git tools
     git, git_status, git_log, git_diff, git_add, git_commit,
     git_branch, git_checkout, git_pull, git_push, git_clone,
-    # Browser tools
-    browser, browser_navigate, browser_screenshot, browser_click,
-    browser_type, browser_get_text, browser_evaluate, browser_close,
-    BrowserManager,
+    # Browser tools removed - use MCP playwright instead
     # Search tools
     web_search, web_fetch, set_search_config, get_search_config,
     # Task tools
@@ -89,10 +86,7 @@ __all__ = [
     # Git tools
     "git", "git_status", "git_log", "git_diff", "git_add", "git_commit",
     "git_branch", "git_checkout", "git_pull", "git_push", "git_clone",
-    # Browser tools
-    "browser", "browser_navigate", "browser_screenshot", "browser_click",
-    "browser_type", "browser_get_text", "browser_evaluate", "browser_close",
-    "BrowserManager",
+    # Browser tools removed - use MCP playwright instead
     # Search tools
     "web_search", "web_fetch", "set_search_config", "get_search_config",
     # Task tools

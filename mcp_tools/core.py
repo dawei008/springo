@@ -18,9 +18,7 @@ from .handlers import (
     # Git tools
     git, git_status, git_log, git_diff, git_add, git_commit,
     git_branch, git_checkout, git_pull, git_push, git_clone,
-    # Browser tools
-    browser, browser_navigate, browser_screenshot, browser_click,
-    browser_type, browser_get_text, browser_evaluate, browser_close,
+    # Browser tools removed - use MCP playwright instead
     # Search tools
     web_search, web_fetch,
     # Task tools
@@ -64,16 +62,7 @@ TOOL_HANDLERS = {
     "git_pull": git_pull,
     "git_push": git_push,
     "git_clone": git_clone,
-    # Unified Browser tool
-    "browser": browser,
-    # Legacy Browser tools (backward compatibility)
-    "browser_navigate": browser_navigate,
-    "browser_screenshot": browser_screenshot,
-    "browser_click": browser_click,
-    "browser_type": browser_type,
-    "browser_get_text": browser_get_text,
-    "browser_evaluate": browser_evaluate,
-    "browser_close": browser_close,
+    # Browser tools removed - use MCP playwright instead
     # Skill tool
     "use_skill": use_skill,
     # Optimized tools

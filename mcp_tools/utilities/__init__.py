@@ -1,6 +1,6 @@
 """
 MCP Tools Utilities
-Helper functions for path resolution, command execution, and browser management
+Helper functions for path resolution and command execution
 """
 
 from .path_utils import (
