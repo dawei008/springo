@@ -2037,8 +2037,6 @@ def _create_missing_ltm_strategies(control_client, memory_id: str, strategies: l
 
 def _setup_episodic_reflection(control_client, memory_id: str, strategies: list, actor_id: str) -> list:
     """Setup EPISODIC strategy with reflection pointing to other LTM namespaces."""
-    import time
-
     # Collect non-EPISODIC namespaces for reflection
     reflection_namespaces = []
     episodic_strategy = None
@@ -2053,6 +2051,7 @@ def _setup_episodic_reflection(control_client, memory_id: str, strategies: list,
     if not reflection_namespaces:
         return strategies
 
+    deleted_episodic = False
     try:
         # Delete existing EPISODIC if present (AWS API doesn't support modifying reflection)
         if episodic_strategy:
@@ -2061,6 +2060,9 @@ def _setup_episodic_reflection(control_client, memory_id: str, strategies: list,
                 memoryId=memory_id,
                 memoryStrategies={'deleteMemoryStrategies': [{'memoryStrategyId': episodic_strategy['id']}]}
             )
+            deleted_episodic = True
+            # Remove from strategies list after successful deletion
+            strategies = [s for s in strategies if s['type'] != 'EPISODIC_MEMORY']
             time.sleep(2)  # Wait for deletion to complete
 
         # Create EPISODIC with reflectionConfiguration
@@ -2078,8 +2080,7 @@ def _setup_episodic_reflection(control_client, memory_id: str, strategies: list,
             }
         )
 
-        # Update strategies list
-        strategies = [s for s in strategies if s['type'] != 'EPISODIC_MEMORY']
+        # Add new EPISODIC to strategies list
         for mem_strategy in response.get('memory', {}).get('strategies', []):
             if mem_strategy.get('type') == 'EPISODIC':
                 parsed = _parse_memory_strategy(mem_strategy, actor_id, STRATEGY_TYPE_DISPLAY_MAP)
@@ -2091,6 +2092,10 @@ def _setup_episodic_reflection(control_client, memory_id: str, strategies: list,
 
     except Exception as e:
         logger.warning(f"Failed to setup EPISODIC with reflection: {e}")
+        # If we deleted the old EPISODIC but failed to create new one, restore it to avoid data inconsistency
+        if deleted_episodic and episodic_strategy:
+            logger.warning("Restoring deleted EPISODIC strategy to strategies list (creation failed)")
+            strategies.append(episodic_strategy)
 
     return strategies
 
