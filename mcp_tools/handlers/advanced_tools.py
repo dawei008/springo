@@ -10,46 +10,48 @@ from typing import Any, Dict
 from ..session import get_session_state, add_background_agent
 
 
-def task(task_description: str, subagent_type: str = "general", wait_for_result: bool = False) -> Dict[str, Any]:
+def task(description: str, prompt: str, agent_type: str = "general", run_in_background: bool = True) -> Dict[str, Any]:
     """
-    Create a background task for a specialized agent.
+    Launch a background task in a new session.
+    The task will execute asynchronously and results will be returned to the main session.
 
-    This is a placeholder for the task delegation system.
-    In a full implementation, this would spawn a background agent.
+    Args:
+        description: Short description of the task (3-5 words)
+        prompt: Detailed instructions for the task
+        agent_type: Type of agent (explore, research, implement, general)
+        run_in_background: Whether to run in background (default: True)
+
+    Returns:
+        A dict with ui_action: "launch_background_task" for frontend handling
     """
-    state = get_session_state()
+    task_id = f"task_{uuid.uuid4().hex[:8]}"
 
-    task_id = f"agent_{uuid.uuid4().hex[:8]}"
-
-    agent_info = {
-        "id": task_id,
-        "type": subagent_type,
-        "task": task_description,
-        "status": "pending",
-        "created_at": time.time(),
-        "result": None
+    # Agent type configurations
+    AGENT_CONFIGS = {
+        "explore": {"name": "Code Explorer", "description": "Specialized for exploring and understanding code"},
+        "research": {"name": "Researcher", "description": "Specialized for web research and information gathering"},
+        "implement": {"name": "Code Implementer", "description": "Specialized for implementing code changes"},
+        "general": {"name": "General Agent", "description": "General purpose agent with access to all tools"}
     }
 
-    add_background_agent(task_id, agent_info)
+    if agent_type not in AGENT_CONFIGS:
+        return {"error": f"Unknown agent type: {agent_type}. Available: {list(AGENT_CONFIGS.keys())}"}
 
-    if wait_for_result:
-        # In a real implementation, this would wait for the agent to complete
-        # For now, we just return that we're waiting
-        return {
-            "success": True,
-            "task_id": task_id,
-            "status": "waiting",
-            "message": f"Task '{task_id}' created with type '{subagent_type}'. Waiting for result...",
-            "agent_info": agent_info
-        }
+    config = AGENT_CONFIGS[agent_type]
 
+    # Return a structure that triggers background task execution in a new session
     return {
         "success": True,
         "task_id": task_id,
-        "status": "started",
-        "message": f"Background task '{task_id}' started with type '{subagent_type}'.",
-        "agent_info": agent_info,
-        "ui_update": "background_agents"
+        "type": "background_task",
+        "ui_action": "launch_background_task",
+        "description": description,
+        "prompt": prompt,
+        "agent_type": agent_type,
+        "agent_name": config["name"],
+        "create_new_session": True,
+        "session_name": f"Task: {description[:30]}...",
+        "message": f"Launching background task: {description}"
     }
 
 

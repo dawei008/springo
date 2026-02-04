@@ -2591,10 +2591,13 @@ Focus on correct, working implementations."""
 }
 
 
-def task(description: str, prompt: str, agent_type: str = "general", run_in_background: bool = True) -> Dict[str, Any]:
+def subagent_task(description: str, prompt: str, agent_type: str = "general", run_in_background: bool = True) -> Dict[str, Any]:
     """
     Launch a background task in a new session.
     The task will execute asynchronously and results will be returned to the main session.
+
+    NOTE: This function is named subagent_task to avoid shadowing by imports.
+    It's mapped to the 'task' tool name in TOOL_HANDLERS.
     """
     import uuid
 
@@ -2833,8 +2836,8 @@ TOOL_HANDLERS = {
     "exit_plan_mode": exit_plan_mode,
     # P2: Context summarization
     "summarize_context": summarize_context,
-    # P3: Specialized agent task
-    "task": task,
+    # P3: Specialized agent task (uses subagent_task to avoid import shadowing)
+    "task": subagent_task,
     # P4: Cross-session task delegation
     "delegate_task": delegate_task,
 }
