@@ -436,9 +436,9 @@ def messages_api():
 
         if is_streaming:
             return Response(
-                stream_with_context(handle_streaming_response(
+                stream_with_context(safe_sse_generator(handle_streaming_response(
                     bedrock_client, model_id, bedrock_body, original_model
-                )),
+                ))),
                 mimetype='text/event-stream',
                 headers={
                     'Cache-Control': 'no-cache',
@@ -517,7 +517,7 @@ def messages_auto_api():
 
         if is_streaming:
             return Response(
-                stream_with_context(handle_auto_streaming(anthropic_request, max_tool_iterations, compact_model)),
+                stream_with_context(safe_sse_generator(handle_auto_streaming(anthropic_request, max_tool_iterations, compact_model))),
                 mimetype='text/event-stream',
                 headers={
                     'Cache-Control': 'no-cache',
@@ -539,6 +539,34 @@ def messages_auto_api():
 # 使用集中配置的超时和限制值
 SSE_HEARTBEAT_INTERVAL = TIMEOUTS.SSE_HEARTBEAT_INTERVAL
 MAX_PARALLEL_TOOLS = LIMITS.MAX_PARALLEL_TOOLS
+
+
+def safe_sse_generator(generator: Generator) -> Generator:
+    """包装 SSE generator 以处理客户端断开连接
+
+    当客户端断开时（刷新页面、关闭标签、网络中断），
+    GeneratorExit 会被捕获，避免僵尸线程继续占用资源。
+
+    这解决了 Flask 开发服务器中 SSE 连接泄漏的问题：
+    - 客户端断开但 generator 继续运行
+    - 线程被占用无法处理新请求
+    - 多次断开后服务器卡死
+    """
+    try:
+        yield from generator
+    except GeneratorExit:
+        logger.warning("SSE client disconnected - generator cleanup triggered")
+        # 正常返回，不 re-raise，让线程释放
+        return
+    except Exception as e:
+        logger.error(f"SSE generator error: {e}", exc_info=True)
+        # 尝试发送错误事件
+        try:
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'message': str(e)}})}\n\n"
+        except:
+            pass  # 客户端可能已断开
+    finally:
+        logger.debug("SSE generator finished")
 
 
 def execute_tool_with_heartbeat(tool_name: str, tool_input: dict, tool_id: str) -> Generator:
