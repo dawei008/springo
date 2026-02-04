@@ -340,14 +340,14 @@ tool_search(query="strands long term memory", auto_activate=true)
     },
     {
         "name": "task",
-        "description": "Launch a specialized sub-task for complex operations.",
+        "description": "Launch a background agent for complex, multi-step tasks. Use this when: (1) Deep codebase exploration requiring many file reads, (2) Tasks that may take >30 seconds, (3) Research requiring multiple iterations, (4) Parallel independent subtasks. Agent types: 'explore' for code analysis, 'research' for web/info gathering, 'implement' for code changes, 'general' for other tasks. The task runs asynchronously and results are returned when complete.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "description": {"type": "string", "description": "Short task description"},
-                "prompt": {"type": "string", "description": "Detailed instructions"},
-                "agent_type": {"type": "string", "enum": ["explore", "research", "implement", "general"], "description": "Agent type", "default": "general"},
-                "run_in_background": {"type": "boolean", "description": "Run in background", "default": False}
+                "description": {"type": "string", "description": "Short task description (3-5 words)"},
+                "prompt": {"type": "string", "description": "Detailed instructions for the agent"},
+                "agent_type": {"type": "string", "enum": ["explore", "research", "implement", "general"], "description": "Type of specialized agent to use", "default": "general"},
+                "run_in_background": {"type": "boolean", "description": "Run in background (default: true)", "default": True}
             },
             "required": ["description", "prompt"]
         }

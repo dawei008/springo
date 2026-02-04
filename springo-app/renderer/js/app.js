@@ -4309,6 +4309,24 @@ Be concise and helpful in your responses.`;
                     // Without this, tool_use blocks become "orphaned" on reload and get stripped
                     console.log(`[${convId}] Auto mode: ${toolUses.length} tools executed on server`);
 
+                    // Handle special tools that need frontend processing (task, delegate_task)
+                    for (const tu of toolUses) {
+                        if (tu.result && typeof tu.result === 'object') {
+                            // Handle task tool - launch background task in new session
+                            if (tu.name === 'task' && tu.result.ui_action === 'launch_background_task') {
+                                console.log(`[${convId}] AUTO mode: Launching background task for ${tu.name}`);
+                                tu.result = await handleBackgroundTask(convId, tu.result);
+                            }
+                            // Handle delegation tool
+                            if (tu.name === 'delegate_task' && tu.result.ui_action === 'delegate_to_session') {
+                                console.log(`[${convId}] AUTO mode: Handling delegation for ${tu.name}`);
+                                tu.result = await handleDelegation(convId, tu.result);
+                            }
+                            // Handle other special UI actions
+                            handleToolResultUI(tu.name, tu.result, convId);
+                        }
+                    }
+
                     // Build tool_results from toolUses array (results came via SSE tool_result events)
                     const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
                     if (toolsWithResults.length > 0) {
@@ -4854,6 +4872,17 @@ Be concise and helpful in your responses.`;
                         <div class="attachment image-attachment" title="${a.name}">
                             <img src="data:${a.type};base64,${a.data}" class="attachment-thumbnail" alt="${a.name}">
                             <span class="attachment-name">${a.name.length > 20 ? a.name.slice(0, 17) + '...' : a.name}</span>
+                            <span class="remove" onclick="removeAttachment(${i})">×</span>
+                        </div>
+                    `;
+                } else if (a.isTaskResult) {
+                    // Show task result attachment with special style
+                    return `
+                        <div class="attachment task-result-attachment" title="Task: ${escapeHTML(a.name.replace('🔄 ', ''))}">
+                            <svg class="file-icon" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                            </svg>
+                            ${a.name}
                             <span class="remove" onclick="removeAttachment(${i})">×</span>
                         </div>
                     `;
@@ -5876,6 +5905,267 @@ Be concise and helpful in your responses.`;
         // Initialize resize on page load
         document.addEventListener('DOMContentLoaded', initFileBrowserResize);
 
+        // ==================== Right Panel ====================
+        let rightPanelOpen = false;
+        let rightPanelWidth = 280;
+
+        function initRightPanel() {
+            const toggle = document.getElementById('right-panel-toggle');
+            const panel = document.getElementById('right-panel');
+            const resizeHandle = document.getElementById('right-panel-resize');
+
+            if (!toggle || !panel) return;
+
+            // Toggle panel
+            toggle.addEventListener('click', () => {
+                toggleRightPanel();
+            });
+
+            // Keyboard shortcut: Cmd/Ctrl + /
+            document.addEventListener('keydown', (e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+                    e.preventDefault();
+                    toggleRightPanel();
+                }
+            });
+
+            // Tab switching
+            panel.querySelectorAll('.right-panel-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const tabName = tab.dataset.tab;
+                    switchRightPanelTab(tabName);
+                });
+            });
+
+            // Resize handle
+            if (resizeHandle) {
+                let isResizing = false;
+                let startX = 0;
+                let startWidth = 0;
+
+                resizeHandle.addEventListener('mousedown', (e) => {
+                    isResizing = true;
+                    startX = e.clientX;
+                    startWidth = panel.offsetWidth;
+                    resizeHandle.classList.add('dragging');
+                    document.body.style.cursor = 'ew-resize';
+                    document.body.style.userSelect = 'none';
+                    e.preventDefault();
+                });
+
+                document.addEventListener('mousemove', (e) => {
+                    if (!isResizing) return;
+                    const diff = startX - e.clientX;
+                    const newWidth = Math.min(500, Math.max(200, startWidth + diff));
+                    panel.style.width = newWidth + 'px';
+                    rightPanelWidth = newWidth;
+                });
+
+                document.addEventListener('mouseup', () => {
+                    if (isResizing) {
+                        isResizing = false;
+                        resizeHandle.classList.remove('dragging');
+                        document.body.style.cursor = '';
+                        document.body.style.userSelect = '';
+                    }
+                });
+            }
+        }
+
+        function toggleRightPanel() {
+            const toggle = document.getElementById('right-panel-toggle');
+            const panel = document.getElementById('right-panel');
+            if (!panel) return;
+
+            rightPanelOpen = !rightPanelOpen;
+            panel.classList.toggle('hidden', !rightPanelOpen);
+            if (toggle) toggle.classList.toggle('active', rightPanelOpen);
+
+            if (rightPanelOpen) {
+                panel.style.width = rightPanelWidth + 'px';
+                // Update tasks when opening
+                updateRightPanelTasks();
+            }
+        }
+
+        function switchRightPanelTab(tabName) {
+            const panel = document.getElementById('right-panel');
+            if (!panel) return;
+
+            // Update tab buttons
+            panel.querySelectorAll('.right-panel-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.tab === tabName);
+            });
+
+            // Update sections
+            panel.querySelectorAll('.right-panel-section').forEach(section => {
+                const sectionId = section.id.replace('panel-', '');
+                section.classList.toggle('active', sectionId === tabName);
+            });
+        }
+
+        // Update tasks in right panel
+        function updateRightPanelTasks() {
+            const tasksList = document.getElementById('panel-tasks-list');
+            if (!tasksList) return;
+
+            const taskIds = Object.keys(backgroundTasks);
+            const runningTasks = taskIds.filter(id => backgroundTasks[id].status === 'running');
+
+            if (taskIds.length === 0) {
+                tasksList.innerHTML = `
+                    <div class="panel-placeholder">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                        </svg>
+                        <span>No background tasks</span>
+                    </div>
+                `;
+                return;
+            }
+
+            // Sort: running first, then by start time
+            const sortedIds = taskIds.sort((a, b) => {
+                const taskA = backgroundTasks[a];
+                const taskB = backgroundTasks[b];
+                if (taskA.status === 'running' && taskB.status !== 'running') return -1;
+                if (taskB.status === 'running' && taskA.status !== 'running') return 1;
+                return taskB.startedAt - taskA.startedAt;
+            });
+
+            tasksList.innerHTML = sortedIds.map(taskId => {
+                const task = backgroundTasks[taskId];
+                const elapsed = Math.floor((Date.now() - task.startedAt) / 1000);
+                const statusClass = task.status;
+
+                let statusHtml = '';
+                if (task.status === 'running') {
+                    statusHtml = `<div class="spinner"></div><span>${formatDuration(elapsed)}</span>`;
+                } else if (task.status === 'completed') {
+                    const duration = task.completedAt ? Math.floor((task.completedAt - task.startedAt) / 1000) : elapsed;
+                    statusHtml = `<span>✓ Done (${formatDuration(duration)})</span>`;
+                } else if (task.status === 'cancelled') {
+                    const duration = task.completedAt ? Math.floor((task.completedAt - task.startedAt) / 1000) : elapsed;
+                    statusHtml = `<span>⊘ Cancelled (${formatDuration(duration)})</span>`;
+                } else if (task.status === 'error') {
+                    statusHtml = `<span>✗ Failed</span>`;
+                }
+
+                // All tasks can be dragged
+                const isDraggable = true;
+
+                return `
+                    <div class="panel-task-item ${statusClass}" data-task-id="${taskId}" ${isDraggable ? 'draggable="true"' : ''}>
+                        <div class="panel-task-row">
+                            <div class="panel-task-info">
+                                <div class="panel-task-name" title="${escapeHTML(task.description)}">${escapeHTML(task.description)}</div>
+                                <div class="panel-task-status ${statusClass}">${statusHtml}</div>
+                            </div>
+                            <div class="panel-task-actions">
+                                <button class="panel-task-btn goto" data-task-id="${taskId}" title="View session">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                                        <polyline points="15 3 21 3 21 9"/>
+                                        <line x1="10" y1="14" x2="21" y2="3"/>
+                                    </svg>
+                                </button>
+                                ${task.status === 'running' ? `
+                                    <button class="panel-task-btn cancel" data-task-id="${taskId}" title="Cancel">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <line x1="18" y1="6" x2="6" y2="18"/>
+                                            <line x1="6" y1="6" x2="18" y2="18"/>
+                                        </svg>
+                                    </button>
+                                ` : `
+                                    <button class="panel-task-btn cancel" data-task-id="${taskId}" title="Remove">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <line x1="18" y1="6" x2="6" y2="18"/>
+                                            <line x1="6" y1="6" x2="18" y2="18"/>
+                                        </svg>
+                                    </button>
+                                `}
+                            </div>
+                        </div>
+                        ${task.status === 'running' ? '<div class="panel-task-progress"><div class="panel-task-progress-bar" style="width: 100%"></div></div>' : ''}
+                    </div>
+                `;
+            }).join('');
+
+            // Add event delegation for buttons
+            tasksList.querySelectorAll('.panel-task-btn.goto').forEach(btn => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    const taskId = btn.dataset.taskId;
+                    const task = backgroundTasks[taskId];
+                    if (task && task.targetConvId) {
+                        loadConversation(task.targetConvId);
+                    }
+                };
+            });
+
+            tasksList.querySelectorAll('.panel-task-btn.cancel').forEach(btn => {
+                btn.onclick = (e) => {
+                    e.stopPropagation();
+                    const taskId = btn.dataset.taskId;
+                    const task = backgroundTasks[taskId];
+                    if (task) {
+                        if (task.status === 'running') {
+                            cancelBgTask(taskId);
+                        } else {
+                            removeBgTask(taskId);
+                        }
+                    }
+                };
+            });
+
+            // Add drag event handlers for completed tasks
+            tasksList.querySelectorAll('.panel-task-item[draggable="true"]').forEach(item => {
+                item.addEventListener('dragstart', (e) => {
+                    const taskId = item.dataset.taskId;
+                    const task = backgroundTasks[taskId];
+                    if (task) {
+                        item.classList.add('dragging');
+                        e.dataTransfer.effectAllowed = 'copy';
+                        // Use same format as files - JSON array with special task marker
+                        const taskData = [{
+                            isTask: true,
+                            taskId: taskId,
+                            name: task.description,
+                            sessionNumber: task.targetSessionNumber,
+                            targetConvId: task.targetConvId
+                        }];
+                        e.dataTransfer.setData('text/plain', JSON.stringify(taskData));
+                    }
+                });
+
+                item.addEventListener('dragend', () => {
+                    item.classList.remove('dragging');
+                });
+            });
+        }
+
+        // Add task result as attachment (similar to file attachment)
+        function addTaskToAttachments(taskData) {
+            // Check if already attached
+            const alreadyAttached = attachments.some(a => a.taskId === taskData.taskId);
+            if (alreadyAttached) return;
+
+            attachments.push({
+                name: `🔄 ${taskData.name}`,
+                type: 'application/x-task-result',
+                taskId: taskData.taskId,
+                sessionNumber: taskData.sessionNumber,
+                targetConvId: taskData.targetConvId,
+                isTaskResult: true
+            });
+
+            renderAttachments();
+            document.getElementById('send-btn').disabled = false;
+        }
+
+        // Initialize right panel on page load
+        document.addEventListener('DOMContentLoaded', initRightPanel);
+
         // Handle folder click - only opens file browser for browsing
         // Does NOT change session's working directory
         function handleFolderClick(folder, event) {
@@ -6482,22 +6772,31 @@ Be concise and helpful in your responses.`;
             event.preventDefault();
             event.currentTarget.classList.remove('drag-over');
 
-            // Get dragged files
+            // Get dragged data
             const data = event.dataTransfer.getData('text/plain');
             if (!data) return;
 
             try {
-                const files = JSON.parse(data);
-                if (files.length === 0) return;
+                const items = JSON.parse(data);
+                if (items.length === 0) return;
 
-                // Add files to attachments in current conversation
-                selectedFiles = files;
+                // Check if this is a task drop
+                if (items[0].isTask) {
+                    for (const task of items) {
+                        addTaskToAttachments(task);
+                    }
+                    document.getElementById('message-input')?.focus();
+                    return;
+                }
+
+                // Otherwise it's a file drop
+                selectedFiles = items;
                 addSelectedFilesToAttachments();
 
                 // Focus input
                 document.getElementById('message-input')?.focus();
             } catch (e) {
-                console.error('Failed to parse dragged files:', e);
+                console.error('Failed to parse dragged data:', e);
             }
         }
 
@@ -6873,25 +7172,40 @@ Be concise and helpful in your responses.`;
                     result: null
                 };
 
+                // Update panel and start progress tracking
+                updateBgTasksPanel();
+                startBgTasksProgressUpdate();
+
                 // Execute in background - DON'T await!
                 executeSubagentTaskAsync(targetConvId, prompt, task_id, description, sourceConvId)
                     .then(result => {
-                        backgroundTasks[task_id].status = 'completed';
-                        backgroundTasks[task_id].result = result;
-                        backgroundTasks[task_id].completedAt = Date.now();
-                        console.log(`[BackgroundTask] Task ${task_id} completed`);
+                        // Don't overwrite if already cancelled
+                        if (backgroundTasks[task_id].status !== 'cancelled') {
+                            backgroundTasks[task_id].status = 'completed';
+                            backgroundTasks[task_id].result = result;
+                            backgroundTasks[task_id].completedAt = Date.now();
+                            console.log(`[BackgroundTask] Task ${task_id} completed`);
 
-                        // Notify source session via toast
-                        showToast(`后台任务完成: ${description.substring(0, 30)}...`, 'success');
+                            // Auto-inject result into source session if it's idle
+                            injectBackgroundTaskResult(sourceConvId, task_id, result);
+                        } else {
+                            console.log(`[BackgroundTask] Task ${task_id} was cancelled, not injecting result`);
+                        }
 
-                        // Auto-inject result into source session if it's idle
-                        injectBackgroundTaskResult(sourceConvId, task_id, result);
+                        // Update panel
+                        updateBgTasksPanel();
                     })
                     .catch(error => {
-                        backgroundTasks[task_id].status = 'error';
-                        backgroundTasks[task_id].error = error.message;
+                        // Don't overwrite if already cancelled
+                        if (backgroundTasks[task_id].status !== 'cancelled') {
+                            backgroundTasks[task_id].status = 'error';
+                            backgroundTasks[task_id].error = error.message;
+                        }
+                        backgroundTasks[task_id].completedAt = Date.now();
                         console.error(`[BackgroundTask] Task ${task_id} failed:`, error);
-                        showToast(`后台任务失败: ${error.message}`, 'error');
+
+                        // Update panel
+                        updateBgTasksPanel();
                     });
 
                 // Return immediately - don't wait!
@@ -6968,17 +7282,51 @@ Be concise and helpful in your responses.`;
             const sourceRuntime = getConvRuntime(sourceConvId);
             if (!sourceRuntime) return;
 
-            // Only inject if source session is idle (not currently streaming)
-            if (sourceRuntime.isStreaming) {
-                console.log(`[BackgroundTask] Source session busy, result stored for later retrieval`);
-                return;
-            }
-
-            // Add result as a system notification in the conversation
             const task = backgroundTasks[taskId];
             const duration = task.completedAt ? ((task.completedAt - task.startedAt) / 1000).toFixed(1) : '?';
 
-            console.log(`[BackgroundTask] Result available for task ${taskId} (took ${duration}s)`);
+            // Extract the actual output from the result
+            let outputContent = '';
+            if (result && result.result) {
+                // Parse the subagent result XML-like structure
+                const resultStr = typeof result.result === 'string' ? result.result : JSON.stringify(result.result);
+                // Extract content between <output> tags if present
+                const outputMatch = resultStr.match(/<output>([\s\S]*?)<\/output>/);
+                if (outputMatch) {
+                    outputContent = outputMatch[1].trim();
+                } else {
+                    outputContent = resultStr;
+                }
+            }
+
+            // Create a result message to inject
+            const resultMessage = {
+                role: 'assistant',
+                content: `## 后台任务完成 ✓\n\n**任务**: ${task.description}\n**耗时**: ${duration}s\n**会话**: #${task.targetSessionNumber}\n\n---\n\n${outputContent}`,
+                isBackgroundTaskResult: true,
+                taskId: taskId
+            };
+
+            // Only inject if source session is idle (not currently streaming)
+            if (sourceRuntime.isStreaming) {
+                console.log(`[BackgroundTask] Source session busy, will inject when idle`);
+                // Store pending injection
+                if (!sourceRuntime.pendingTaskResults) {
+                    sourceRuntime.pendingTaskResults = [];
+                }
+                sourceRuntime.pendingTaskResults.push(resultMessage);
+                return;
+            }
+
+            // Inject the result message
+            sourceRuntime.messages.push(resultMessage);
+            console.log(`[BackgroundTask] Injected result for task ${taskId} (took ${duration}s)`);
+
+            // Save and re-render if viewing this conversation
+            saveConversation(sourceConvId);
+            if (currentConversationId === sourceConvId) {
+                renderMessages();
+            }
         }
 
         // Get background task status (can be called by Claude)
@@ -7021,6 +7369,79 @@ Be concise and helpful in your responses.`;
         // Expose to window for tool access
         window.getBackgroundTaskStatus = getBackgroundTaskStatus;
         window.listBackgroundTasks = listBackgroundTasks;
+
+        // ==================== Background Tasks Panel UI ====================
+
+        let bgTasksProgressInterval = null;
+
+        // Update background tasks panel (uses right panel)
+        function updateBgTasksPanel() {
+            // Update the right panel tasks section
+            updateRightPanelTasks();
+        }
+
+        // Format duration in human readable format
+        function formatDuration(seconds) {
+            if (seconds < 60) return `${seconds}s`;
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${mins}m ${secs}s`;
+        }
+
+        // Go to task's target session
+        window.gotoTaskSession = function(taskId) {
+            const task = backgroundTasks[taskId];
+            if (task && task.targetConvId) {
+                switchConversation(task.targetConvId);
+            }
+        };
+
+        // Cancel a running background task
+        window.cancelBgTask = function(taskId) {
+            const task = backgroundTasks[taskId];
+            if (!task || task.status !== 'running') return;
+
+            // Stop the target session if streaming
+            const targetRuntime = getConvRuntime(task.targetConvId);
+            if (targetRuntime && targetRuntime.isStreaming) {
+                targetRuntime.isStreaming = false;
+                // Abort the request if possible
+                if (typeof abortControllers !== 'undefined' && abortControllers[task.targetConvId]) {
+                    try {
+                        abortControllers[task.targetConvId].abort();
+                    } catch (e) {}
+                }
+            }
+
+            // Update task status
+            task.status = 'cancelled';
+            task.completedAt = Date.now();
+            task.error = 'User cancelled';
+
+            console.log(`[BackgroundTask] Task ${taskId} cancelled by user`);
+            updateBgTasksPanel();
+        };
+
+        // Remove a completed/failed task from the panel
+        window.removeBgTask = function(taskId) {
+            delete backgroundTasks[taskId];
+            updateBgTasksPanel();
+        };
+
+        // Start progress update interval
+        function startBgTasksProgressUpdate() {
+            if (bgTasksProgressInterval) return;
+            bgTasksProgressInterval = setInterval(() => {
+                const hasRunning = Object.values(backgroundTasks).some(t => t.status === 'running');
+                if (hasRunning) {
+                    updateBgTasksPanel();
+                } else {
+                    // Stop interval if no running tasks
+                    clearInterval(bgTasksProgressInterval);
+                    bgTasksProgressInterval = null;
+                }
+            }, 1000);
+        }
 
         // Format subagent result like Claude Code
         function formatSubagentResult(taskId, description, sessionNum, content) {

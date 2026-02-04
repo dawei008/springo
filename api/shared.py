@@ -52,6 +52,8 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 | Edit existing file | `edit` | write_file (unless rewriting) |
 | Execute commands | `execute_command` | - |
 | Long-running tasks | `execute_command` with run_in_background=true | - |
+| Complex multi-step tasks | `task` (launches background agent) | blocking main session |
+| Deep code exploration | `task` with agent_type="explore" | manual grep/read loops |
 | Track complex tasks | `todo_write` | - |
 | Ask user questions | `ask_user` | - |
 | Plan before coding | `enter_plan_mode` | - |
@@ -65,6 +67,34 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 5. **Use edit for modifications**, write_file for new files
 6. **Reduce round trips** - chain related commands with &&
 7. **Avoid truncation** - keep content under 500 lines per file
+
+## Background Task Tool (task)
+
+Use the `task` tool to launch background agents for complex work that shouldn't block the conversation:
+
+**When to use:**
+- Deep codebase exploration (analyzing architecture, tracing dependencies)
+- Tasks requiring extensive file reading (>10 files)
+- Research tasks that may take multiple iterations
+- Parallel independent subtasks that can run concurrently
+- Long-running analysis (security audit, code review, refactoring planning)
+
+**Agent types:**
+- `explore` - Code exploration and architecture understanding
+- `research` - Web research and information gathering
+- `implement` - Code implementation and modifications
+- `general` - General purpose tasks
+
+**Example:**
+```
+task(
+    description="Analyze authentication flow",
+    prompt="Trace the login flow from frontend to backend, identify all auth-related files",
+    agent_type="explore"
+)
+```
+
+The task runs in a separate session and results are returned when complete.
 """
 
 
