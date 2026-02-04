@@ -17,9 +17,11 @@ const CONFIG = {
     },
     // Timeouts (in milliseconds)
     TIMEOUTS: {
-        API_DEFAULT: 30000,         // 30s for normal API calls
-        FETCH_RETRY: 180000,        // 3 min for fetch with retry
-        STREAMING: 300000,          // 5 min for streaming responses
+        API_DEFAULT: 60000,         // 60s for normal API calls (was 30s)
+        FETCH_RETRY: 300000,        // 5 min for fetch with retry (was 3min)
+        STREAMING: 600000,          // 10 min for streaming responses (was 5min)
+        SSE_HEARTBEAT: 120000,      // 2 min SSE heartbeat timeout (fallback, heartbeat keeps alive)
+        TOOL_EXECUTION: 180000,     // 3 min per tool execution (was 45s)
         HEALTH_CHECK: 30000,        // 30s between health checks
         MEMORY_SYNC: 10000,         // 10s between memory sync checks
         TOAST_DURATION: 5000,       // Toast notification duration

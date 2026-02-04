@@ -49,6 +49,9 @@ from mcp_client import get_mcp_manager, initialize_mcp_servers, get_mcp_tools, c
 # Skill 加载器
 from skill_loader import get_skill_loader
 
+# 集中配置
+from config import TIMEOUTS, LIMITS
+
 # 错误处理模块
 from error_handler import format_error_response, get_user_friendly_message, should_retry, get_http_status
 
@@ -149,8 +152,8 @@ def get_bedrock_client():
         config = Config(
             region_name=AWS_REGION,
             retries={'max_attempts': 3, 'mode': 'adaptive'},
-            connect_timeout=60,
-            read_timeout=600  # 10 分钟 - 支持长时间 tool use
+            connect_timeout=TIMEOUTS.BEDROCK_CONNECT,
+            read_timeout=TIMEOUTS.BEDROCK_READ  # 15 min for long conversations
         )
         return boto3.client('bedrock-runtime', config=config)
 
@@ -533,10 +536,9 @@ def messages_auto_api():
         return Response(json.dumps(error_response), status=http_status, mimetype='application/json')
 
 
-# SSE 心跳间隔（秒）- 防止前端超时断开
-SSE_HEARTBEAT_INTERVAL = 10
-# 最大并行工具数 - 避免资源耗尽
-MAX_PARALLEL_TOOLS = 10
+# 使用集中配置的超时和限制值
+SSE_HEARTBEAT_INTERVAL = TIMEOUTS.SSE_HEARTBEAT_INTERVAL
+MAX_PARALLEL_TOOLS = LIMITS.MAX_PARALLEL_TOOLS
 
 
 def execute_tool_with_heartbeat(tool_name: str, tool_input: dict, tool_id: str) -> Generator:

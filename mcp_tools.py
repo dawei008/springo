@@ -14,6 +14,18 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# 集中配置
+try:
+    from config import TIMEOUTS
+    DEFAULT_COMMAND_TIMEOUT = TIMEOUTS.COMMAND_DEFAULT
+    QUICK_COMMAND_TIMEOUT = TIMEOUTS.COMMAND_QUICK
+    HTTP_REQUEST_TIMEOUT = TIMEOUTS.HTTP_REQUEST
+except ImportError:
+    # Fallback if config not available
+    DEFAULT_COMMAND_TIMEOUT = 300
+    QUICK_COMMAND_TIMEOUT = 30
+    HTTP_REQUEST_TIMEOUT = 60
+
 # Skill loader import
 try:
     from skill_loader import get_skill_loader
@@ -1003,7 +1015,7 @@ _background_tasks = {}
 _task_counter = 0
 
 
-def execute_command(command: str, working_directory: str = None, timeout: int = 120,
+def execute_command(command: str, working_directory: str = None, timeout: int = None,
                    run_in_background: bool = False, description: str = None) -> Dict[str, Any]:
     """
     Execute shell command.
@@ -1011,10 +1023,13 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
     Args:
         command: Shell command to execute
         working_directory: Directory to run command in
-        timeout: Timeout in seconds (default 120s, same as Claude Code)
+        timeout: Timeout in seconds (default from config: 300s for complex tasks)
         run_in_background: If True, run command in background and return task_id
         description: Optional description for background task tracking
     """
+    # Use config default if timeout not specified
+    if timeout is None:
+        timeout = DEFAULT_COMMAND_TIMEOUT
     global _task_counter
 
     try:
@@ -1279,7 +1294,7 @@ def _run_git_command(args: List[str], cwd: str = None) -> Dict[str, Any]:
             ["git"] + args,
             capture_output=True,
             text=True,
-            timeout=120,  # 2 minutes, same as Claude Code
+            timeout=DEFAULT_COMMAND_TIMEOUT,  # Use config timeout
             cwd=cwd
         )
 
@@ -1576,7 +1591,7 @@ def _search_brave(query: str, max_results: int, api_key: str, freshness: str = N
             "https://api.search.brave.com/res/v1/web/search",
             headers=headers,
             params=params,
-            timeout=30
+            timeout=HTTP_REQUEST_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()
@@ -1655,7 +1670,7 @@ def _search_tavily(query: str, max_results: int, api_key: str, freshness: str = 
             "https://api.tavily.com/search",
             headers=headers,
             json=payload,
-            timeout=30
+            timeout=HTTP_REQUEST_TIMEOUT
         )
         response.raise_for_status()
         data = response.json()
@@ -1730,7 +1745,7 @@ def _search_custom(query: str, max_results: int, api_key: str, custom_url: str, 
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=HTTP_REQUEST_TIMEOUT)
         response.raise_for_status()
 
         # Try to parse as JSON
@@ -1801,7 +1816,7 @@ def web_fetch(url: str, selector: str = None) -> Dict[str, Any]:
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         }
-        response = requests.get(url, headers=headers, timeout=30)
+        response = requests.get(url, headers=headers, timeout=HTTP_REQUEST_TIMEOUT)
         response.raise_for_status()
 
         soup = BeautifulSoup(response.text, "html.parser")

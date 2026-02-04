@@ -2915,7 +2915,7 @@
 
         // SSE Stream Parser for handling streaming responses
         // With timeout protection to prevent hanging on large responses
-        async function* parseSSEStream(reader, timeoutMs = 120000) {
+        async function* parseSSEStream(reader, timeoutMs = CONFIG.TIMEOUTS.SSE_HEARTBEAT) {
             const decoder = new TextDecoder();
             let buffer = '';
             let lastActivityTime = Date.now();
@@ -2991,8 +2991,8 @@
             let streamToolInterval = null;  // Local interval for real-time tool updates
             let streamCompleted = false;
 
-            // Watchdog: if no activity for 2 minutes, consider stream dead
-            const STREAM_TIMEOUT_MS = 120000;
+            // Watchdog: SSE heartbeat timeout (backend sends heartbeats to keep alive)
+            const STREAM_TIMEOUT_MS = CONFIG.TIMEOUTS.SSE_HEARTBEAT;
 
             try {
                 for await (const { event, data } of parseSSEStream(reader, STREAM_TIMEOUT_MS)) {
@@ -3230,7 +3230,7 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ name: toolName, input: toolInput })
-                }, 1, 45000); // 1 retry, 45 second timeout (max 90s total)
+                }, 1, CONFIG.TIMEOUTS.TOOL_EXECUTION); // 1 retry, 3 min timeout for complex tools
 
                 const data = await response.json();
                 const result = data.result || data;
