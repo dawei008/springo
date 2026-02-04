@@ -3226,6 +3226,16 @@
         async function executeTool(toolName, toolInput) {
             try {
                 console.log(`[executeTool] Starting: ${toolName}`);
+
+                // Handle frontend-side background task tools directly
+                if (toolName === 'get_background_task_status') {
+                    const taskId = toolInput.task_id;
+                    return window.getBackgroundTaskStatus ? window.getBackgroundTaskStatus(taskId) : { error: 'Background task system not initialized' };
+                }
+                if (toolName === 'list_background_tasks') {
+                    return window.listBackgroundTasks ? { tasks: window.listBackgroundTasks() } : { tasks: [] };
+                }
+
                 const response = await fetchWithRetry(`${BASE_URL}/v1/tools/execute`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -6831,7 +6841,10 @@ Be concise and helpful in your responses.`;
             return newConvId;
         }
 
-        // Handle subagent task from task tool (synchronous - waits for completion like Claude Code)
+        // Background task registry for tracking async tasks
+        const backgroundTasks = {};
+
+        // Handle subagent task from task tool (TRUE ASYNC - doesn't block SSE connection)
         async function handleBackgroundTask(sourceConvId, taskResult) {
             const { task_id, description, prompt, session_name } = taskResult;
 
@@ -6847,22 +6860,63 @@ Be concise and helpful in your responses.`;
                 const targetConvId = createDelegationSession(workDir, convName);
                 const targetSessionNumber = conversations.length;
 
-                console.log(`[Subagent] Starting task ${task_id} in Session #${targetSessionNumber}`);
+                console.log(`[BackgroundTask] Starting task ${task_id} in Session #${targetSessionNumber} (async)`);
 
-                // Execute subagent and WAIT for completion (synchronous like Claude Code)
-                const result = await executeSubagentTask(targetConvId, prompt, task_id, description);
+                // Register the task
+                backgroundTasks[task_id] = {
+                    status: 'running',
+                    sourceConvId,
+                    targetConvId,
+                    targetSessionNumber,
+                    description,
+                    startedAt: Date.now(),
+                    result: null
+                };
 
-                // Return result directly as tool_result (Claude Code subagent format)
-                return result;
+                // Execute in background - DON'T await!
+                executeSubagentTaskAsync(targetConvId, prompt, task_id, description, sourceConvId)
+                    .then(result => {
+                        backgroundTasks[task_id].status = 'completed';
+                        backgroundTasks[task_id].result = result;
+                        backgroundTasks[task_id].completedAt = Date.now();
+                        console.log(`[BackgroundTask] Task ${task_id} completed`);
+
+                        // Notify source session via toast
+                        showToast(`后台任务完成: ${description.substring(0, 30)}...`, 'success');
+
+                        // Auto-inject result into source session if it's idle
+                        injectBackgroundTaskResult(sourceConvId, task_id, result);
+                    })
+                    .catch(error => {
+                        backgroundTasks[task_id].status = 'error';
+                        backgroundTasks[task_id].error = error.message;
+                        console.error(`[BackgroundTask] Task ${task_id} failed:`, error);
+                        showToast(`后台任务失败: ${error.message}`, 'error');
+                    });
+
+                // Return immediately - don't wait!
+                return {
+                    type: "background_task_started",
+                    task_id,
+                    status: "running",
+                    target_session: targetSessionNumber,
+                    description,
+                    message: `Task started in Session #${targetSessionNumber}. Running in background - you can continue working. Use get_background_task_status("${task_id}") to check progress.`
+                };
 
             } catch (error) {
-                console.error(`[Subagent] Error:`, error);
-                return formatSubagentError(task_id, description, error.message);
+                console.error(`[BackgroundTask] Error starting task:`, error);
+                return {
+                    type: "background_task_error",
+                    task_id,
+                    status: "error",
+                    error: error.message
+                };
             }
         }
 
-        // Execute subagent task synchronously and return result
-        async function executeSubagentTask(targetConvId, prompt, taskId, description) {
+        // Execute subagent task asynchronously
+        async function executeSubagentTaskAsync(targetConvId, prompt, taskId, description, sourceConvId) {
             const targetRuntime = getConvRuntime(targetConvId);
             const targetSessionNum = getSessionNumberForConv(targetConvId);
 
@@ -6878,7 +6932,7 @@ Be concise and helpful in your responses.`;
                 updateConversationStatus(targetConvId, 'active');
                 renderConversations();
 
-                // Execute the conversation and WAIT for completion
+                // Execute the conversation
                 await continueConversation(targetConvId);
 
                 // Collect subagent response
@@ -6894,13 +6948,12 @@ Be concise and helpful in your responses.`;
                         : (lastMsg.displayContent || JSON.stringify(lastMsg.content));
                 }
 
-                console.log(`[Subagent] Task ${taskId} completed in Session #${targetSessionNum}`);
+                console.log(`[BackgroundTask] Task ${taskId} completed in Session #${targetSessionNum}`);
 
-                // Return in Claude Code subagent format
                 return formatSubagentResult(taskId, description, targetSessionNum, responseContent);
 
             } catch (error) {
-                console.error(`[Subagent] Error executing task ${taskId}:`, error);
+                console.error(`[BackgroundTask] Error executing task ${taskId}:`, error);
                 return formatSubagentError(taskId, description, error.message);
 
             } finally {
@@ -6909,6 +6962,65 @@ Be concise and helpful in your responses.`;
                 renderConversations();
             }
         }
+
+        // Inject background task result into source session
+        function injectBackgroundTaskResult(sourceConvId, taskId, result) {
+            const sourceRuntime = getConvRuntime(sourceConvId);
+            if (!sourceRuntime) return;
+
+            // Only inject if source session is idle (not currently streaming)
+            if (sourceRuntime.isStreaming) {
+                console.log(`[BackgroundTask] Source session busy, result stored for later retrieval`);
+                return;
+            }
+
+            // Add result as a system notification in the conversation
+            const task = backgroundTasks[taskId];
+            const duration = task.completedAt ? ((task.completedAt - task.startedAt) / 1000).toFixed(1) : '?';
+
+            console.log(`[BackgroundTask] Result available for task ${taskId} (took ${duration}s)`);
+        }
+
+        // Get background task status (can be called by Claude)
+        function getBackgroundTaskStatus(taskId) {
+            const task = backgroundTasks[taskId];
+            if (!task) {
+                return { error: `Unknown task: ${taskId}` };
+            }
+
+            const result = {
+                task_id: taskId,
+                status: task.status,
+                target_session: task.targetSessionNumber,
+                description: task.description,
+                started_at: new Date(task.startedAt).toISOString(),
+                duration_ms: Date.now() - task.startedAt
+            };
+
+            if (task.status === 'completed') {
+                result.completed_at = new Date(task.completedAt).toISOString();
+                result.result = task.result;
+            } else if (task.status === 'error') {
+                result.error = task.error;
+            }
+
+            return result;
+        }
+
+        // List all background tasks
+        function listBackgroundTasks() {
+            return Object.entries(backgroundTasks).map(([taskId, task]) => ({
+                task_id: taskId,
+                status: task.status,
+                target_session: task.targetSessionNumber,
+                description: task.description,
+                duration_ms: Date.now() - task.startedAt
+            }));
+        }
+
+        // Expose to window for tool access
+        window.getBackgroundTaskStatus = getBackgroundTaskStatus;
+        window.listBackgroundTasks = listBackgroundTasks;
 
         // Format subagent result like Claude Code
         function formatSubagentResult(taskId, description, sessionNum, content) {

@@ -568,6 +568,21 @@ Assistant: [Immediately calls the activated tool]
             "properties": {}
         }
     },
+    # Subagent/Frontend background task tools (for task() tool)
+    {
+        "name": "get_background_task_status",
+        "description": "Get the status of a background subagent task started with task() tool. Returns task status, target session, and result if completed.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task_id returned by the task() tool"
+                }
+            },
+            "required": ["task_id"]
+        }
+    },
     {
         "name": "use_skill",
         "description": "__DYNAMIC_SKILL_DESCRIPTION__",  # Placeholder - will be replaced dynamically
@@ -2803,9 +2818,11 @@ TOOL_HANDLERS = {
     "grep": grep_search,
     "edit": edit_file,
     "read_files": read_files,
-    # Background task tools
+    # Background task tools (shell commands)
     "get_task_status": get_task_status,
     "list_background_tasks": list_background_tasks,
+    # Subagent background task tools (handled frontend-side, fallback here)
+    "get_background_task_status": lambda task_id: {"error": "This tool is handled frontend-side. If you see this, the frontend tool handler may not be loaded."},
     # P0: Todo task tracking
     "todo_write": todo_write,
     "todo_read": todo_read,
