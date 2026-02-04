@@ -1,6 +1,43 @@
 const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
 const { spawn } = require('child_process');
+
+// Cache file path: ~/.springo/cache.json
+const CACHE_DIR = path.join(os.homedir(), '.springo');
+const CACHE_FILE = path.join(CACHE_DIR, 'cache.json');
+
+// Cache helper functions
+function ensureCacheDir() {
+    if (!fs.existsSync(CACHE_DIR)) {
+        fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+}
+
+function readCache() {
+    try {
+        ensureCacheDir();
+        if (fs.existsSync(CACHE_FILE)) {
+            const data = fs.readFileSync(CACHE_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('Failed to read cache:', err);
+    }
+    return {};
+}
+
+function writeCache(cache) {
+    try {
+        ensureCacheDir();
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
+        return true;
+    } catch (err) {
+        console.error('Failed to write cache:', err);
+        return false;
+    }
+}
 
 // EPIPE error tracking
 let epipeErrorCount = 0;
@@ -316,6 +353,28 @@ ipcMain.handle('open-external', async (event, url) => {
         console.error('Failed to open external URL:', err);
         return { success: false, error: err.message };
     }
+});
+
+// Disk cache IPC handlers (persists across macOS restarts)
+ipcMain.handle('cache-get', async (event, key) => {
+    const cache = readCache();
+    return cache[key];
+});
+
+ipcMain.handle('cache-set', async (event, key, value) => {
+    const cache = readCache();
+    cache[key] = value;
+    return writeCache(cache);
+});
+
+ipcMain.handle('cache-remove', async (event, key) => {
+    const cache = readCache();
+    delete cache[key];
+    return writeCache(cache);
+});
+
+ipcMain.handle('cache-get-all', async () => {
+    return readCache();
 });
 
 app.whenReady().then(async () => {

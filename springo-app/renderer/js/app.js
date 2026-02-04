@@ -454,10 +454,35 @@
         let projects = JSON.parse(localStorage.getItem('projects') || '[]');
         let currentProjectId = null;
 
-        // Working folders state
-        let workingFolders = JSON.parse(localStorage.getItem('workingFolders') || '[]');
-        let currentWorkingDir = localStorage.getItem('currentWorkingDir') || ''; // 当前选中的工作目录
-        let defaultWorkingFolder = localStorage.getItem('defaultWorkingFolder') || '~/Downloads'; // 默认工作目录，新建会话时自动使用
+        // Working folders state (persisted to disk cache via electronAPI.cache)
+        let workingFolders = [];
+        let currentWorkingDir = '';
+        let defaultWorkingFolder = '~/Downloads';
+
+        // Save workspace state to disk cache
+        async function saveWorkspaceCache() {
+            if (window.electronAPI?.cache) {
+                await window.electronAPI.cache.set('workspace', {
+                    workingFolders,
+                    currentWorkingDir,
+                    defaultWorkingFolder
+                });
+            }
+        }
+
+        // Load workspace state from disk cache
+        async function loadWorkspaceCache() {
+            if (window.electronAPI?.cache) {
+                const cached = await window.electronAPI.cache.get('workspace');
+                if (cached) {
+                    workingFolders = cached.workingFolders || [];
+                    currentWorkingDir = cached.currentWorkingDir || '';
+                    defaultWorkingFolder = cached.defaultWorkingFolder || '~/Downloads';
+                    return true;
+                }
+            }
+            return false;
+        }
 
 
         // Skills state
@@ -517,6 +542,10 @@
                 cleanupInactiveRuntimes();
             }, MEMORY_CONFIG.GC_INTERVAL_MS);
             console.log(`[Memory GC] Started periodic cleanup every ${MEMORY_CONFIG.GC_INTERVAL_MS / 1000}s`);
+
+            // Load workspace cache from disk (persists across macOS restarts)
+            await loadWorkspaceCache();
+            console.log('[Cache] Loaded workspace:', { workingFolders, currentWorkingDir, defaultWorkingFolder });
 
             // Ensure default working folder is in workspace list
             ensureDefaultFolderInWorkspace();
@@ -1730,7 +1759,7 @@
                         // Ensure it's in workspace and set as active
                         ensureDefaultFolderInWorkspace();
                         currentWorkingDir = workingDir;
-                        localStorage.setItem('currentWorkingDir', workingDir);
+                        saveWorkspaceCache();
                         renderWorkingFolders();
                     } else if (workingFolders.length > 0) {
                         // Has workspace folders but no default - show selector dialog
@@ -1753,7 +1782,7 @@
                             // Add selected folder to workspace if not already there
                             if (!workingFolders.includes(workingDir)) {
                                 workingFolders.push(workingDir);
-                                localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+                                saveWorkspaceCache();
                                 renderWorkingFolders();
                                 console.log('Added folder to workspace:', workingDir);
                             }
@@ -4854,7 +4883,7 @@ Be concise and helpful in your responses.`;
             const newDefaultWorkdir = document.getElementById('settings-default-workdir').value.trim();
             if (newDefaultWorkdir && newDefaultWorkdir !== defaultWorkingFolder) {
                 defaultWorkingFolder = newDefaultWorkdir;
-                localStorage.setItem('defaultWorkingFolder', defaultWorkingFolder);
+                saveWorkspaceCache();
                 console.log('Default working directory updated to:', defaultWorkingFolder);
                 // Add to workspace if not already there
                 ensureDefaultFolderInWorkspace();
@@ -5455,7 +5484,7 @@ Be concise and helpful in your responses.`;
 
             if (!isInWorkspace) {
                 workingFolders.unshift(defaultWorkingFolder); // Add to beginning
-                localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+                saveWorkspaceCache();
                 console.log('Added default working folder to workspace:', defaultWorkingFolder);
             }
         }
@@ -5530,7 +5559,7 @@ Be concise and helpful in your responses.`;
         // 选择工作目录
         function selectWorkingDir(folder) {
             currentWorkingDir = folder;
-            localStorage.setItem('currentWorkingDir', folder);
+            saveWorkspaceCache();
 
             // 同时更新当前会话的工作目录
             if (currentConversationId) {
@@ -5560,13 +5589,12 @@ Be concise and helpful in your responses.`;
             // Toggle: if already default, unset it; otherwise set it
             if (defaultWorkingFolder === folder) {
                 defaultWorkingFolder = '';
-                localStorage.removeItem('defaultWorkingFolder');
                 console.log('Default folder cleared');
             } else {
                 defaultWorkingFolder = folder;
-                localStorage.setItem('defaultWorkingFolder', folder);
                 console.log('Default folder set to:', folder);
             }
+            saveWorkspaceCache();
             renderWorkingFolders();
         }
 
@@ -5577,9 +5605,9 @@ Be concise and helpful in your responses.`;
                 if (folders && folders.length > 0) {
                     const folder = folders[0];
                     document.getElementById('settings-default-workdir').value = folder;
-                    // Also update the variable and localStorage immediately
+                    // Also update the variable and save to disk cache
                     defaultWorkingFolder = folder;
-                    localStorage.setItem('defaultWorkingFolder', folder);
+                    saveWorkspaceCache();
                     console.log('Default working directory selected:', folder);
                     // Add to workspace if not already there
                     ensureDefaultFolderInWorkspace();
@@ -5732,7 +5760,7 @@ Be concise and helpful in your responses.`;
                             newFolder = folder;
                         }
                     }
-                    localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+                    saveWorkspaceCache();
                     renderWorkingFolders();
                     // 自动选中最后添加的目录
                     if (newFolder) {
@@ -5746,7 +5774,7 @@ Be concise and helpful in your responses.`;
                     const trimmedPath = path.trim();
                     if (!workingFolders.includes(trimmedPath)) {
                         workingFolders.push(trimmedPath);
-                        localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+                        saveWorkspaceCache();
                         renderWorkingFolders();
                         // 自动选中新添加的目录
                         selectWorkingDir(trimmedPath);
@@ -5758,7 +5786,7 @@ Be concise and helpful in your responses.`;
         function removeWorkingFolder(index, event) {
             event.stopPropagation();
             workingFolders.splice(index, 1);
-            localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+            saveWorkspaceCache();
             renderWorkingFolders();
         }
 
@@ -7327,7 +7355,7 @@ ${content || 'Task completed successfully.'}
         function setAsDefaultAndCreateChat(folder) {
             // 设置为默认工作目录（全局生效）
             defaultWorkingFolder = folder;
-            localStorage.setItem('defaultWorkingFolder', folder);
+            saveWorkspaceCache();
             console.log('Set default working folder:', folder);
             // 更新 workspace 列表显示星标
             renderWorkingFolders();
@@ -7342,7 +7370,7 @@ ${content || 'Task completed successfully.'}
                 // 添加到 workspace
                 if (!workingFolders.includes(newFolder)) {
                     workingFolders.push(newFolder);
-                    localStorage.setItem('workingFolders', JSON.stringify(workingFolders));
+                    saveWorkspaceCache();
                     renderWorkingFolders();
                     console.log('Added folder to workspace:', newFolder);
                 }

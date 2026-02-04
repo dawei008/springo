@@ -12,5 +12,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Open file/folder with system default application
     openPath: (path) => ipcRenderer.invoke('open-path', path),
     // Open URL in default browser (Chrome new tab)
-    openExternal: (url) => ipcRenderer.invoke('open-external', url)
+    openExternal: (url) => ipcRenderer.invoke('open-external', url),
+    // Disk cache API (persists across macOS restarts)
+    cache: {
+        get: (key) => ipcRenderer.invoke('cache-get', key),
+        set: (key, value) => ipcRenderer.invoke('cache-set', key, value),
+        remove: (key) => ipcRenderer.invoke('cache-remove', key),
+        getAll: () => ipcRenderer.invoke('cache-get-all')
+    }
 });
