@@ -45,3 +45,4 @@ nohup.out
 
 # PyInstaller
 *.spec
+Springo-Installer.sh
