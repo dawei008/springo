@@ -2044,19 +2044,21 @@ def _create_missing_ltm_strategies(control_client, memory_id: str, strategies: l
 
 
 def _create_episodic_strategy(control_client, memory_id: str, strategies: list, actor_id: str) -> list:
-    """Create EPISODIC strategy with reflection pointing to other LTM namespaces."""
+    """Create EPISODIC strategy with reflection.
+
+    Note: AWS requires reflection namespaces to be prefixes of the episodic namespace.
+    So we use the episodic's own namespace pattern (without session) for reflection.
+    """
     # Check if EPISODIC already exists
     if any(s['type'] == 'EPISODIC' for s in strategies):
         logger.info("EPISODIC strategy already exists")
         return strategies
 
-    # Collect non-EPISODIC namespaces for reflection
-    reflection_namespaces = [s['namespace'] for s in strategies if s['type'] != 'EPISODIC']
-    if not reflection_namespaces:
-        logger.warning("No other strategies found for EPISODIC reflection")
-        return strategies
+    # EPISODIC namespace includes sessions, reflection namespace is a prefix (without sessions)
+    episodic_namespace = '/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}/'
+    reflection_namespace = '/strategies/{memoryStrategyId}/actors/{actorId}/'
 
-    logger.info(f"Creating EPISODIC strategy with reflection namespaces: {reflection_namespaces}")
+    logger.info(f"Creating EPISODIC strategy with reflection namespace: {reflection_namespace}")
     try:
         response = control_client.update_memory(
             memoryId=memory_id,
@@ -2064,8 +2066,8 @@ def _create_episodic_strategy(control_client, memory_id: str, strategies: list, 
                 'addMemoryStrategies': [{
                     'episodicMemoryStrategy': {
                         'name': 'ConversationEpisodes',
-                        'namespaces': ['/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}/'],
-                        'reflectionConfiguration': {'namespaces': reflection_namespaces}
+                        'namespaces': [episodic_namespace],
+                        'reflectionConfiguration': {'namespaces': [reflection_namespace]}
                     }
                 }]
             }
