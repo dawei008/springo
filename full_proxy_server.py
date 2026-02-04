@@ -2000,14 +2000,16 @@ def _parse_strategies_list(memory_strategies: list, actor_id: str, type_display_
 
 
 # Strategy type display mapping (used by auto_setup_memory_strategies)
+# AgentCore Memory supports 4 strategy types: SEMANTIC, USER_PREFERENCE, SUMMARIZATION, EPISODIC
 STRATEGY_TYPE_DISPLAY_MAP = {
-    'SEMANTIC': 'SEMANTIC_MEMORY',
+    'SEMANTIC': 'SEMANTIC',
     'USER_PREFERENCE': 'USER_PREFERENCE',
     'SUMMARIZATION': 'SUMMARIZATION',
-    'EPISODIC': 'EPISODIC_MEMORY',
+    'EPISODIC': 'EPISODIC',
 }
 
-# Required LTM strategies (excluding EPISODIC which is handled separately)
+# Required LTM strategies (4 types supported by AgentCore Memory)
+# Note: EPISODIC requires reflectionConfiguration and is created separately
 REQUIRED_LTM_STRATEGIES = {
     'ConversationFacts': {'type': 'semanticMemoryStrategy', 'description': 'Extract semantic facts from conversations'},
     'UserPreferences': {'type': 'userPreferenceMemoryStrategy', 'description': 'Extract user preferences'},
@@ -2041,79 +2043,50 @@ def _create_missing_ltm_strategies(control_client, memory_id: str, strategies: l
         return strategies
 
 
-def _setup_episodic_reflection(control_client, memory_id: str, strategies: list, actor_id: str) -> list:
-    """Setup EPISODIC strategy with reflection pointing to other LTM namespaces."""
-    # Collect non-EPISODIC namespaces for reflection
-    reflection_namespaces = []
-    episodic_strategy = None
-    for s in strategies:
-        if s['type'] == 'EPISODIC_MEMORY':
-            episodic_strategy = s
-        else:
-            reflection_namespaces.append(s['namespace'])
-
-    logger.info(f"Reflection namespaces for EPISODIC: {reflection_namespaces}")
-
-    if not reflection_namespaces:
+def _create_episodic_strategy(control_client, memory_id: str, strategies: list, actor_id: str) -> list:
+    """Create EPISODIC strategy with reflection pointing to other LTM namespaces."""
+    # Check if EPISODIC already exists
+    if any(s['type'] == 'EPISODIC' for s in strategies):
+        logger.info("EPISODIC strategy already exists")
         return strategies
 
-    deleted_episodic = False
-    try:
-        # Delete existing EPISODIC if present (AWS API doesn't support modifying reflection)
-        if episodic_strategy:
-            logger.info(f"Deleting existing EPISODIC strategy: {episodic_strategy['id']}")
-            control_client.update_memory(
-                memoryId=memory_id,
-                memoryStrategies={'deleteMemoryStrategies': [{'memoryStrategyId': episodic_strategy['id']}]}
-            )
-            deleted_episodic = True
-            # Remove from strategies list after successful deletion
-            strategies = [s for s in strategies if s['type'] != 'EPISODIC_MEMORY']
-            time.sleep(2)  # Wait for deletion to complete
+    # Collect non-EPISODIC namespaces for reflection
+    reflection_namespaces = [s['namespace'] for s in strategies if s['type'] != 'EPISODIC']
+    if not reflection_namespaces:
+        logger.warning("No other strategies found for EPISODIC reflection")
+        return strategies
 
-        # Create EPISODIC with reflectionConfiguration
-        logger.info(f"Creating EPISODIC strategy with reflection")
+    logger.info(f"Creating EPISODIC strategy with reflection namespaces: {reflection_namespaces}")
+    try:
         response = control_client.update_memory(
             memoryId=memory_id,
             memoryStrategies={
                 'addMemoryStrategies': [{
                     'episodicMemoryStrategy': {
                         'name': 'ConversationEpisodes',
-                        'description': 'Episodic memory with reflection from other LTM strategies',
+                        'namespaces': ['/strategies/{memoryStrategyId}/actors/{actorId}/sessions/{sessionId}/'],
                         'reflectionConfiguration': {'namespaces': reflection_namespaces}
                     }
                 }]
             }
         )
-
-        # Add new EPISODIC to strategies list
-        for mem_strategy in response.get('memory', {}).get('strategies', []):
-            if mem_strategy.get('type') == 'EPISODIC':
-                parsed = _parse_memory_strategy(mem_strategy, actor_id, STRATEGY_TYPE_DISPLAY_MAP)
-                parsed['has_reflection'] = True
-                parsed['reflection_namespaces'] = reflection_namespaces
-                strategies.append(parsed)
-                logger.info(f"Created EPISODIC strategy with reflection: {parsed['id']}")
-                break
-
+        new_strategies = response.get('memory', {}).get('strategies', [])
+        logger.info(f"Created EPISODIC strategy, memory now has {len(new_strategies)} strategies")
+        return _parse_strategies_list(new_strategies, actor_id, STRATEGY_TYPE_DISPLAY_MAP)
     except Exception as e:
-        logger.warning(f"Failed to setup EPISODIC with reflection: {e}")
-        # If we deleted the old EPISODIC but failed to create new one, restore it to avoid data inconsistency
-        if deleted_episodic and episodic_strategy:
-            logger.warning("Restoring deleted EPISODIC strategy to strategies list (creation failed)")
-            strategies.append(episodic_strategy)
-
-    return strategies
+        logger.warning(f"Failed to create EPISODIC strategy: {e}")
+        return strategies
 
 
 def auto_setup_memory_strategies(memory_id: str, region: str, create_missing: bool = True) -> dict:
     """
     Auto-setup Memory LTM strategies.
 
-    1. Get existing strategies
-    2. Create missing strategies (semantic, summary, userPreference) if needed
-    3. Create EPISODIC strategy with reflection pointing to other strategies
-    4. Return all strategies with actual namespaces
+    AgentCore Memory supports 4 strategy types:
+    1. SEMANTIC (ConversationFacts) - Extract semantic facts from conversations
+    2. USER_PREFERENCE (UserPreferences) - Extract user preferences
+    3. SUMMARIZATION (ConversationSummary) - Generate conversation summaries
+    4. EPISODIC (ConversationEpisodes) - Capture interactions as structured episodes with reflections
     """
     actor_id = "springo"
     strategies = []
@@ -2134,7 +2107,7 @@ def auto_setup_memory_strategies(memory_id: str, region: str, create_missing: bo
 
             if create_missing:
                 strategies = _create_missing_ltm_strategies(control_client, memory_id, strategies, actor_id)
-                strategies = _setup_episodic_reflection(control_client, memory_id, strategies, actor_id)
+                strategies = _create_episodic_strategy(control_client, memory_id, strategies, actor_id)
 
         except control_client.exceptions.ResourceNotFoundException:
             logger.warning(f"Memory {memory_id} not found")
@@ -2142,13 +2115,14 @@ def auto_setup_memory_strategies(memory_id: str, region: str, create_missing: bo
             logger.warning(f"Failed to get memory details via control plane: {e}")
 
         # 如果没有发现任何策略，使用默认配置（但标记为未验证）
+        # AgentCore Memory supports 4 strategy types
         if not strategies:
             logger.warning("No strategies discovered, using default configuration")
             default_strategies = [
-                {'type': 'SEMANTIC_MEMORY', 'name': 'ConversationFacts', 'description': 'Extract semantic facts from conversations'},
+                {'type': 'SEMANTIC', 'name': 'ConversationFacts', 'description': 'Extract semantic facts from conversations'},
                 {'type': 'USER_PREFERENCE', 'name': 'UserPreferences', 'description': 'Extract user preferences'},
-                {'type': 'SUMMARIZATION', 'name': 'SessionSummary', 'description': 'Summarize conversation sessions'},
-                {'type': 'EPISODIC_MEMORY', 'name': 'EpisodicMemory', 'description': 'Store episodic memories'},
+                {'type': 'SUMMARIZATION', 'name': 'ConversationSummary', 'description': 'Generate conversation summaries'},
+                {'type': 'EPISODIC', 'name': 'ConversationEpisodes', 'description': 'Capture interactions as structured episodes'},
             ]
             for strategy_type in default_strategies:
                 strategies.append({
