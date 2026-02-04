@@ -23,6 +23,8 @@ import time
 import uuid
 import logging
 import os
+import threading
+import queue
 from datetime import datetime
 from typing import Generator
 from flask import Flask, request, Response, stream_with_context
@@ -531,6 +533,56 @@ def messages_auto_api():
         return Response(json.dumps(error_response), status=http_status, mimetype='application/json')
 
 
+# SSE 心跳间隔（秒）- 防止前端超时断开
+SSE_HEARTBEAT_INTERVAL = 10
+
+
+def execute_tool_with_heartbeat(tool_name: str, tool_input: dict, tool_id: str) -> Generator:
+    """在后台线程执行工具，同时发送心跳保持 SSE 连接活跃
+
+    Yields:
+        - heartbeat events (every 10s during execution)
+        - final result event when done
+    """
+    from mcp_tools import execute_tool
+
+    result_queue = queue.Queue()
+    start_time = time.time()
+
+    def run_tool():
+        try:
+            result = execute_tool(tool_name, tool_input)
+            result_queue.put(('success', result))
+        except Exception as e:
+            result_queue.put(('error', {"error": str(e)}))
+
+    # Start tool execution in background thread
+    thread = threading.Thread(target=run_tool, daemon=True)
+    thread.start()
+
+    # Send heartbeats while waiting for result
+    heartbeat_count = 0
+    while True:
+        try:
+            # Check for result with short timeout
+            status, result = result_queue.get(timeout=SSE_HEARTBEAT_INTERVAL)
+            # Tool completed
+            elapsed = time.time() - start_time
+            logger.info(f"Tool {tool_name} completed in {elapsed:.2f}s")
+            yield ('result', result)
+            return
+        except queue.Empty:
+            # No result yet, send heartbeat
+            heartbeat_count += 1
+            elapsed = time.time() - start_time
+            yield ('heartbeat', {
+                'tool_id': tool_id,
+                'tool_name': tool_name,
+                'elapsed_seconds': round(elapsed, 1),
+                'heartbeat_count': heartbeat_count
+            })
+
+
 def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 1000, compact_model: str = "claude-haiku-4-5-20251001") -> Generator:
     """处理流式响应并自动执行工具
 
@@ -769,11 +821,18 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
             # 发送工具开始执行事件
             yield f"event: tool_executing\ndata: {json.dumps({'type': 'tool_executing', 'id': tool_id, 'name': tool_name})}\n\n"
 
-            # 执行工具
-            try:
-                result = execute_tool(tool_name, tool_input)
-            except Exception as e:
-                result = {"error": str(e)}
+            # 执行工具（带心跳，防止 SSE 超时）
+            result = None
+            for event_type, event_data in execute_tool_with_heartbeat(tool_name, tool_input, tool_id):
+                if event_type == 'heartbeat':
+                    # 发送心跳保持连接活跃
+                    yield f"event: heartbeat\ndata: {json.dumps({'type': 'heartbeat', **event_data})}\n\n"
+                elif event_type == 'result':
+                    result = event_data
+                    break
+
+            if result is None:
+                result = {"error": "Tool execution failed without result"}
 
             # Handle large tool results (like Claude Code)
             result_str = json.dumps(result) if isinstance(result, dict) else str(result)

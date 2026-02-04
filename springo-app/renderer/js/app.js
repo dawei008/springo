@@ -3101,6 +3101,19 @@
                             }
                             break;
 
+                        case 'heartbeat':
+                            // SSE heartbeat to keep connection alive during long tool execution
+                            console.log(`[${convId}] Heartbeat: ${data.tool_name} running for ${data.elapsed_seconds}s`);
+                            // Update tool elapsed time in panel
+                            if (currentConversationId === convId) {
+                                const heartbeatTool = toolUses.find(tu => tu.id === data.tool_id);
+                                if (heartbeatTool) {
+                                    heartbeatTool.elapsed = data.elapsed_seconds;
+                                    updateInlineChatToolPanel(toolUses);
+                                }
+                            }
+                            break;
+
                         case 'tool_execution_complete':
                             console.log(`[${convId}] All ${data.count} tools executed on server`);
                             // Stop elapsed time update interval
