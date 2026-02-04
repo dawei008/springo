@@ -535,6 +535,8 @@ def messages_auto_api():
 
 # SSE 心跳间隔（秒）- 防止前端超时断开
 SSE_HEARTBEAT_INTERVAL = 10
+# 最大并行工具数 - 避免资源耗尽
+MAX_PARALLEL_TOOLS = 10
 
 
 def execute_tool_with_heartbeat(tool_name: str, tool_input: dict, tool_id: str) -> Generator:
@@ -581,6 +583,148 @@ def execute_tool_with_heartbeat(tool_name: str, tool_input: dict, tool_id: str) 
                 'elapsed_seconds': round(elapsed, 1),
                 'heartbeat_count': heartbeat_count
             })
+
+
+def execute_tools_parallel(tool_uses: list, ctx_manager, session_id: str) -> Generator:
+    """并行执行多个工具，实时返回结果和心跳
+
+    Args:
+        tool_uses: 工具调用列表 [{'id': ..., 'name': ..., 'input': ...}, ...]
+        ctx_manager: 上下文管理器（用于保存大型结果）
+        session_id: 会话 ID
+
+    Yields:
+        ('executing', tool_info) - 工具开始执行
+        ('heartbeat', heartbeat_info) - 心跳（工具仍在运行）
+        ('result', result_info) - 工具执行完成
+        ('all_complete', results) - 所有工具完成
+    """
+    from mcp_tools import execute_tool
+
+    if not tool_uses:
+        yield ('all_complete', [])
+        return
+
+    # 限制并行数量
+    num_tools = len(tool_uses)
+    parallel_count = min(num_tools, MAX_PARALLEL_TOOLS)
+    logger.info(f"Executing {num_tools} tools in parallel (max {parallel_count})")
+
+    # 结果队列：(tool_id, status, result)
+    result_queue = queue.Queue()
+    # 跟踪运行中的工具
+    running_tools = {}
+    completed_results = {}
+    start_time = time.time()
+
+    def run_single_tool(tool_id, tool_name, tool_input):
+        """在线程中执行单个工具"""
+        try:
+            result = execute_tool(tool_name, tool_input)
+            result_queue.put((tool_id, 'success', result))
+        except Exception as e:
+            result_queue.put((tool_id, 'error', {"error": str(e)}))
+
+    # 启动所有工具线程
+    for tool_use in tool_uses:
+        tool_id = tool_use.get("id")
+        tool_name = tool_use.get("name")
+        tool_input = tool_use.get("input", {})
+
+        running_tools[tool_id] = {
+            'name': tool_name,
+            'input': tool_input,
+            'start_time': time.time()
+        }
+
+        # 发送开始执行事件
+        yield ('executing', {'id': tool_id, 'name': tool_name})
+
+        # 启动线程
+        thread = threading.Thread(
+            target=run_single_tool,
+            args=(tool_id, tool_name, tool_input),
+            daemon=True
+        )
+        thread.start()
+
+    # 等待所有工具完成，同时发送心跳
+    heartbeat_count = 0
+    while running_tools:
+        try:
+            # 等待结果，超时则发送心跳
+            tool_id, status, result = result_queue.get(timeout=SSE_HEARTBEAT_INTERVAL)
+
+            tool_info = running_tools.pop(tool_id, {})
+            tool_name = tool_info.get('name', 'unknown')
+            elapsed = time.time() - tool_info.get('start_time', start_time)
+
+            # 处理大型结果
+            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
+            result_size = len(result_str.encode('utf-8'))
+
+            if result_size > ctx_manager.MAX_INLINE_OUTPUT_SIZE:
+                result_info = ctx_manager.save_tool_result(session_id, tool_id, result_str, tool_name)
+                logger.info(f"Large tool result saved: {tool_name} ({result_size:,} bytes)")
+
+                if not result_info.get('inline'):
+                    result_str = json.dumps({
+                        "result_truncated": True,
+                        "file_path": result_info.get('file_path'),
+                        "size": result_size,
+                        "preview": result_info.get('preview', result_str[:500]),
+                        "message": f"Result saved to file ({result_size:,} bytes)."
+                    })
+
+            # 保存结果
+            completed_results[tool_id] = {
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": result_str
+            }
+
+            # 发送完成事件
+            try:
+                sse_result = json.loads(result_str) if isinstance(result_str, str) else result_str
+            except:
+                sse_result = result_str
+
+            yield ('result', {
+                'tool_use_id': tool_id,
+                'tool_name': tool_name,
+                'result': sse_result,
+                'elapsed': round(elapsed, 2)
+            })
+
+            logger.info(f"Tool {tool_name} completed in {elapsed:.2f}s ({len(running_tools)} still running)")
+
+        except queue.Empty:
+            # 超时，发送心跳
+            heartbeat_count += 1
+            total_elapsed = time.time() - start_time
+
+            # 为每个运行中的工具发送心跳
+            for tool_id, info in running_tools.items():
+                tool_elapsed = time.time() - info.get('start_time', start_time)
+                yield ('heartbeat', {
+                    'tool_id': tool_id,
+                    'tool_name': info.get('name', 'unknown'),
+                    'elapsed_seconds': round(tool_elapsed, 1),
+                    'heartbeat_count': heartbeat_count,
+                    'running_count': len(running_tools)
+                })
+
+    # 按原始顺序返回结果
+    ordered_results = []
+    for tool_use in tool_uses:
+        tool_id = tool_use.get("id")
+        if tool_id in completed_results:
+            ordered_results.append(completed_results[tool_id])
+
+    total_time = time.time() - start_time
+    logger.info(f"All {num_tools} tools completed in {total_time:.2f}s (parallel execution)")
+
+    yield ('all_complete', ordered_results)
 
 
 def handle_auto_streaming(anthropic_request: dict, max_iterations: int = 1000, compact_model: str = "claude-haiku-4-5-20251001") -> Generator:
@@ -805,70 +949,34 @@ User's original request: {active_skill.get('user_request', '(not specified)')}
         tools_for_event = [{'id': t['id'], 'name': t['name'], 'input': t.get('input', {})} for t in tool_uses]
         yield f"event: tool_execution_start\ndata: {json.dumps({'type': 'tool_execution_start', 'tools': tools_for_event})}\n\n"
 
-        tool_results = []
+        # Log search tool calls for debugging
         for tool_use in tool_uses:
-            tool_id = tool_use.get("id")
-            tool_name = tool_use.get("name")
-            tool_input = tool_use.get("input", {})
-
-            # Log search tool calls for debugging
+            tool_name = tool_use.get("name", "")
             if 'search' in tool_name.lower():
                 logger.info(f"🔍 SEARCH TOOL CALL: {tool_name}")
-                logger.info(f"   Query: {tool_input.get('query', 'N/A')}")
-                logger.info(f"   Freshness: {tool_input.get('freshness', 'NOT SET')}")
-                logger.info(f"   Full params: {json.dumps(tool_input)}")
+                logger.info(f"   Query: {tool_use.get('input', {}).get('query', 'N/A')}")
+                logger.info(f"   Freshness: {tool_use.get('input', {}).get('freshness', 'NOT SET')}")
 
-            # 发送工具开始执行事件
-            yield f"event: tool_executing\ndata: {json.dumps({'type': 'tool_executing', 'id': tool_id, 'name': tool_name})}\n\n"
+        # 并行执行所有工具（带心跳防止超时）
+        session_id = anthropic_request.get('session_id', f"auto_{uuid.uuid4().hex[:8]}")
+        tool_results = []
 
-            # 执行工具（带心跳，防止 SSE 超时）
-            result = None
-            for event_type, event_data in execute_tool_with_heartbeat(tool_name, tool_input, tool_id):
-                if event_type == 'heartbeat':
-                    # 发送心跳保持连接活跃
-                    yield f"event: heartbeat\ndata: {json.dumps({'type': 'heartbeat', **event_data})}\n\n"
-                elif event_type == 'result':
-                    result = event_data
-                    break
+        for event_type, event_data in execute_tools_parallel(tool_uses, ctx_manager, session_id):
+            if event_type == 'executing':
+                # 工具开始执行
+                yield f"event: tool_executing\ndata: {json.dumps({'type': 'tool_executing', 'id': event_data['id'], 'name': event_data['name']})}\n\n"
 
-            if result is None:
-                result = {"error": "Tool execution failed without result"}
+            elif event_type == 'heartbeat':
+                # 发送心跳保持连接活跃
+                yield f"event: heartbeat\ndata: {json.dumps({'type': 'heartbeat', **event_data})}\n\n"
 
-            # Handle large tool results (like Claude Code)
-            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
-            result_size = len(result_str.encode('utf-8'))
+            elif event_type == 'result':
+                # 工具完成，发送结果
+                yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': event_data['tool_use_id'], 'tool_name': event_data['tool_name'], 'result': event_data['result']})}\n\n"
 
-            # If result exceeds 30KB, save to file and return reference
-            if result_size > ctx_manager.MAX_INLINE_OUTPUT_SIZE:
-                # Get session_id from request context or generate one
-                session_id = anthropic_request.get('session_id', f"auto_{uuid.uuid4().hex[:8]}")
-                result_info = ctx_manager.save_tool_result(session_id, tool_id, result_str, tool_name)
-                logger.info(f"Large tool result saved: {tool_name} ({result_size:,} bytes) -> {result_info.get('file_path', 'inline')}")
-
-                # Use truncated content for API, but full result for frontend event
-                if not result_info.get('inline'):
-                    result_str = json.dumps({
-                        "result_truncated": True,
-                        "file_path": result_info.get('file_path'),
-                        "size": result_size,
-                        "preview": result_info.get('preview', result_str[:500]),
-                        "message": f"Result saved to file ({result_size:,} bytes). Use /v1/tool-results/{session_id}/{tool_id} to retrieve full content."
-                    })
-
-            # 发送工具完成事件 - 使用截断后的结果，避免发送超大 SSE 事件
-            # 注意：result_str 可能已被截断（如果 > 30KB），这是正确的行为
-            # 前端如需完整数据可通过 /v1/tool-results/{session_id}/{tool_id} 获取
-            try:
-                sse_result = json.loads(result_str) if isinstance(result_str, str) else result_str
-            except:
-                sse_result = result_str
-            yield f"event: tool_result\ndata: {json.dumps({'type': 'tool_result', 'tool_use_id': tool_id, 'tool_name': tool_name, 'result': sse_result})}\n\n"
-
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tool_id,
-                "content": result_str
-            })
+            elif event_type == 'all_complete':
+                # 所有工具完成
+                tool_results = event_data
 
         yield f"event: tool_execution_complete\ndata: {json.dumps({'type': 'tool_execution_complete', 'count': len(tool_results)})}\n\n"
 
