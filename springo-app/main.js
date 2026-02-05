@@ -7,6 +7,8 @@ const { spawn } = require('child_process');
 // Cache file path: ~/.springo/cache.json
 const CACHE_DIR = path.join(os.homedir(), '.springo');
 const CACHE_FILE = path.join(CACHE_DIR, 'cache.json');
+// Scheduled tasks file: ~/.springo/scheduled_tasks.json (separate from cache, survives cache clear)
+const SCHEDULES_FILE = path.join(CACHE_DIR, 'scheduled_tasks.json');
 
 // Cache helper functions
 function ensureCacheDir() {
@@ -35,6 +37,31 @@ function writeCache(cache) {
         return true;
     } catch (err) {
         console.error('Failed to write cache:', err);
+        return false;
+    }
+}
+
+// Scheduled tasks helper functions (independent from cache)
+function readScheduledTasks() {
+    try {
+        ensureCacheDir();
+        if (fs.existsSync(SCHEDULES_FILE)) {
+            const data = fs.readFileSync(SCHEDULES_FILE, 'utf8');
+            return JSON.parse(data);
+        }
+    } catch (err) {
+        console.error('Failed to read scheduled tasks:', err);
+    }
+    return {};
+}
+
+function writeScheduledTasks(tasks) {
+    try {
+        ensureCacheDir();
+        fs.writeFileSync(SCHEDULES_FILE, JSON.stringify(tasks, null, 2), 'utf8');
+        return true;
+    } catch (err) {
+        console.error('Failed to write scheduled tasks:', err);
         return false;
     }
 }
@@ -375,6 +402,15 @@ ipcMain.handle('cache-remove', async (event, key) => {
 
 ipcMain.handle('cache-get-all', async () => {
     return readCache();
+});
+
+// Scheduled tasks IPC handlers (separate file, survives cache clear)
+ipcMain.handle('schedules-get', async () => {
+    return readScheduledTasks();
+});
+
+ipcMain.handle('schedules-set', async (event, tasks) => {
+    return writeScheduledTasks(tasks);
 });
 
 app.whenReady().then(async () => {

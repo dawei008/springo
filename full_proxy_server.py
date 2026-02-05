@@ -2846,6 +2846,46 @@ def remove_mcp_server(server_name):
         )
 
 
+@app.route('/v1/mcp/servers/<server_name>/refresh', methods=['POST'])
+def refresh_mcp_server(server_name):
+    """Refresh tool registration for a running MCP server (hot-load)"""
+    try:
+        manager = get_mcp_manager()
+
+        # Check if server is running
+        if server_name not in manager.servers:
+            return Response(
+                json.dumps({"error": f"Server {server_name} is not running"}),
+                status=400,
+                mimetype='application/json'
+            )
+
+        server = manager.servers[server_name]
+
+        # Re-cache and re-register tools
+        tools_count = 0
+        if server.tools:
+            manager.cache_server_tools(server_name, server.get_tool_definitions())
+            manager._register_server_tools_deferred(server_name, server)
+            tools_count = len(server.tools)
+
+        return Response(
+            json.dumps({
+                "success": True,
+                "server": server_name,
+                "tools_registered": tools_count
+            }),
+            mimetype='application/json'
+        )
+    except Exception as e:
+        logger.error(f"Refresh MCP server error: {e}")
+        return Response(
+            json.dumps({"error": str(e)}),
+            status=500,
+            mimetype='application/json'
+        )
+
+
 # ==================== API Info ====================
 
 @app.route('/', methods=['GET'])

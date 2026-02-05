@@ -19,5 +19,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         set: (key, value) => ipcRenderer.invoke('cache-set', key, value),
         remove: (key) => ipcRenderer.invoke('cache-remove', key),
         getAll: () => ipcRenderer.invoke('cache-get-all')
+    },
+    // Scheduled tasks API (separate file, survives cache clear)
+    schedules: {
+        get: () => ipcRenderer.invoke('schedules-get'),
+        set: (tasks) => ipcRenderer.invoke('schedules-set', tasks)
     }
 });

@@ -27,6 +27,8 @@ from .handlers import (
     enter_plan_mode, exit_plan_mode, summarize_context,
     # Advanced tools
     task, delegate_task,
+    # Scheduler tools
+    scheduler,
 )
 
 # Skill loader import
@@ -90,6 +92,8 @@ TOOL_HANDLERS = {
     "delegate_task": delegate_task,
     # Tool search
     "tool_search": tool_search,
+    # Scheduler
+    "scheduler": scheduler,
 }
 
 

@@ -229,6 +229,7 @@
                 <div class="right-panel-resize" id="right-panel-resize"></div>
                 <div class="right-panel-tabs">
                     <button class="right-panel-tab active" data-tab="tasks">Tasks</button>
+                    <button class="right-panel-tab" data-tab="schedules">Schedules</button>
                     <button class="right-panel-tab" data-tab="files">Files</button>
                 </div>
                 <div class="right-panel-content">
@@ -239,6 +240,18 @@
                                     <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
                                 </svg>
                                 <span>No background tasks</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="right-panel-section" id="panel-schedules">
+                        <div class="panel-schedules-list" id="panel-schedules-list">
+                            <div class="panel-placeholder">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <polyline points="12 6 12 12 16 14"/>
+                                </svg>
+                                <span>No scheduled tasks</span>
+                                <span class="panel-placeholder-hint">Ask Claude to create reminders or scheduled tasks</span>
                             </div>
                         </div>
                     </div>

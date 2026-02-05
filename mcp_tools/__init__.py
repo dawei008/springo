@@ -63,6 +63,8 @@ from .handlers import (
     enter_plan_mode, exit_plan_mode, summarize_context,
     # Advanced tools
     task, delegate_task,
+    # Scheduler tools
+    scheduler,
 )
 
 __all__ = [
@@ -95,4 +97,6 @@ __all__ = [
     "enter_plan_mode", "exit_plan_mode", "summarize_context",
     # Advanced tools
     "task", "delegate_task",
+    # Scheduler tools
+    "scheduler",
 ]

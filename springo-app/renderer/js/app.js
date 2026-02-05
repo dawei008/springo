@@ -3015,7 +3015,10 @@
                                     input: {}
                                 };
                                 currentToolInput = '';
-                                console.log(`[${convId}] Stream: tool_use started - ${block.name}`);
+                                // Skip logging for scheduler (silent operation)
+                                if (block.name !== 'scheduler') {
+                                    console.log(`[${convId}] Stream: tool_use started - ${block.name}`);
+                                }
                             }
                             break;
 
@@ -3026,7 +3029,10 @@
                                 onTextUpdate(textContent, toolUses, false);
                             } else if (delta.type === 'input_json_delta' && currentToolUse) {
                                 currentToolInput += delta.partial_json;
-                                console.log(`[${convId}] input_json_delta for ${currentToolUse.name}: +${delta.partial_json.length} chars`);
+                                // Skip logging for scheduler (silent operation)
+                                if (currentToolUse.name !== 'scheduler') {
+                                    console.log(`[${convId}] input_json_delta for ${currentToolUse.name}: +${delta.partial_json.length} chars`);
+                                }
                             }
                             break;
 
@@ -3034,13 +3040,19 @@
                             if (currentToolUse) {
                                 try {
                                     currentToolUse.input = JSON.parse(currentToolInput || '{}');
-                                    console.log(`[${convId}] Parsed input for ${currentToolUse.name}:`, JSON.stringify(currentToolUse.input).substring(0, 100));
+                                    // Skip logging for scheduler (silent operation)
+                                    if (currentToolUse.name !== 'scheduler') {
+                                        console.log(`[${convId}] Parsed input for ${currentToolUse.name}:`, JSON.stringify(currentToolUse.input).substring(0, 100));
+                                    }
                                 } catch (e) {
                                     console.error(`[${convId}] Failed to parse tool input: ${e.message}, raw: ${currentToolInput.substring(0, 100)}`);
                                     currentToolUse.input = {};
                                 }
                                 toolUses.push(currentToolUse);
-                                console.log(`[${convId}] Stream: tool_use complete - ${currentToolUse.name}`);
+                                // Skip logging for scheduler (silent operation)
+                                if (currentToolUse.name !== 'scheduler') {
+                                    console.log(`[${convId}] Stream: tool_use complete - ${currentToolUse.name}`);
+                                }
                                 currentToolUse = null;
                                 currentToolInput = '';
                                 onTextUpdate(textContent, toolUses, false);
@@ -3053,7 +3065,10 @@
 
                         // Server-side auto tool execution events
                         case 'tool_execution_start':
-                            console.log(`[${convId}] Server executing tools:`, data.tools?.map(t => t.name));
+                            // Skip logging if only scheduler tool
+                            if (!data.tools?.every(t => t.name === 'scheduler')) {
+                                console.log(`[${convId}] Server executing tools:`, data.tools?.map(t => t.name));
+                            }
                             // Add tools to inline panel in running state
                             if (currentConversationId === convId && data.tools) {
                                 for (const tool of data.tools) {
@@ -3075,7 +3090,10 @@
                             break;
 
                         case 'tool_executing':
-                            console.log(`[${convId}] Executing: ${data.name}`);
+                            // Skip logging for scheduler (silent operation)
+                            if (data.name !== 'scheduler') {
+                                console.log(`[${convId}] Executing: ${data.name}`);
+                            }
                             // Update tool status to running and refresh panel
                             if (currentConversationId === convId) {
                                 const executingTool = toolUses.find(tu => tu.id === data.id);
@@ -3088,11 +3106,41 @@
 
                         case 'tool_result':
                             // Backend sends: tool_use_id, tool_name, result
-                            console.log(`[${convId}] Tool result: ${data.tool_name}`);
+                            // Skip logging for scheduler (silent operation)
+                            if (data.tool_name !== 'scheduler') {
+                                console.log(`[${convId}] Tool result: ${data.tool_name}`);
+                            }
+
+                            // Inject actual task list for scheduler list action
+                            let resultData = data.result;
+                            if (data.tool_name === 'scheduler' && resultData?.ui_update === 'schedules_panel' && !resultData?.task && !resultData?.action) {
+                                // This is a list action - inject actual tasks
+                                const taskList = Object.values(scheduledTasks)
+                                    .sort((a, b) => (a.num || 0) - (b.num || 0))
+                                    .map(t => ({
+                                        num: t.num || '?',
+                                        id: t.id,
+                                        name: t.name,
+                                        type: t.scheduleType,
+                                        schedule: t.scheduleValue,
+                                        enabled: t.enabled,
+                                        status: t.status || 'pending',
+                                        nextRun: t.nextRun ? new Date(t.nextRun).toLocaleString() : null
+                                    }));
+                                resultData = {
+                                    ...resultData,
+                                    tasks: taskList,
+                                    task_count: taskList.length,
+                                    message: taskList.length > 0
+                                        ? `Found ${taskList.length} scheduled task(s). Use num to reference tasks.`
+                                        : 'No scheduled tasks'
+                                };
+                            }
+
                             // Store result in toolUses array for chat display
                             const matchingTool = toolUses.find(tu => tu.id === data.tool_use_id);
                             if (matchingTool) {
-                                matchingTool.result = data.result;
+                                matchingTool.result = resultData;
                                 matchingTool.status = 'complete';
                             }
                             // Update inline panel immediately to show completion
@@ -5986,6 +6034,9 @@ Be concise and helpful in your responses.`;
                 // Update tasks when opening
                 updateRightPanelTasks();
             }
+
+            // Update overdue notification positions
+            updateOverdueNotificationPositions();
         }
 
         function switchRightPanelTab(tabName) {
@@ -7392,7 +7443,7 @@ Be concise and helpful in your responses.`;
         window.gotoTaskSession = function(taskId) {
             const task = backgroundTasks[taskId];
             if (task && task.targetConvId) {
-                switchConversation(task.targetConvId);
+                loadConversation(task.targetConvId);
             }
         };
 
@@ -7781,6 +7832,911 @@ ${content || 'Task completed successfully.'}
             setTimeout(() => banner.remove(), 10000);
         }
 
+        // ==================== Scheduler Engine ====================
+        // Manages scheduled/delayed tasks with cron support
+
+        // Scheduler state (persisted via electronAPI.schedules - separate file, survives cache clear)
+        let scheduledTasks = {};
+        let schedulerJobs = {};  // Active cron/timer jobs
+        let nextTaskNum = 1;     // Auto-increment task number for easy reference
+
+        // Load Croner library for cron parsing (lightweight, browser-compatible)
+        // Using Croner: https://github.com/Hexagon/croner
+        // Note: Library exports global as 'Cron'
+        const cronerScript = document.createElement('script');
+        cronerScript.src = 'js/croner.min.js';  // Local copy for reliability
+        cronerScript.onload = () => initScheduler();
+        cronerScript.onerror = () => {
+            // Fallback to CDN
+            const cdnScript = document.createElement('script');
+            cdnScript.src = 'https://cdn.jsdelivr.net/npm/croner@8/dist/croner.umd.min.js';
+            cdnScript.onload = () => initScheduler();
+            cdnScript.onerror = () => initScheduler();  // Still init for delay/once tasks
+            document.head.appendChild(cdnScript);
+        };
+        document.head.appendChild(cronerScript);
+
+        // Initialize scheduler - load saved tasks and start jobs
+        async function initScheduler() {
+            // Load saved tasks from dedicated file (survives cache clear)
+            if (window.electronAPI?.schedules) {
+                const saved = await window.electronAPI.schedules.get();
+                if (saved && typeof saved === 'object') {
+                    scheduledTasks = saved;
+                }
+            }
+
+            // Assign numbers to tasks that don't have them, then calculate next
+            let maxNum = 0;
+            const tasksNeedingNum = [];
+            for (const task of Object.values(scheduledTasks)) {
+                if (task.num) {
+                    maxNum = Math.max(maxNum, task.num);
+                } else {
+                    tasksNeedingNum.push(task);
+                }
+            }
+            // Assign numbers to tasks without them (sorted by creation time)
+            tasksNeedingNum.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+            for (const task of tasksNeedingNum) {
+                maxNum++;
+                task.num = maxNum;
+            }
+            nextTaskNum = maxNum + 1;
+            if (tasksNeedingNum.length > 0) {
+                saveScheduledTasks();  // Save the assigned numbers
+            }
+
+            const now = Date.now();
+            const overdueTasks = [];
+
+            // Check for overdue tasks and start non-overdue ones
+            for (const taskId of Object.keys(scheduledTasks)) {
+                const task = scheduledTasks[taskId];
+                if (!task.enabled) continue;
+                // Skip already completed/failed/skipped tasks
+                if (task.status === 'completed' || task.status === 'failed' || task.status === 'skipped') continue;
+
+                // Check if task is overdue (for delay and once types)
+                if ((task.scheduleType === 'delay' || task.scheduleType === 'once') && task.nextRun && task.nextRun < now) {
+                    overdueTasks.push(taskId);
+                } else {
+                    startScheduledJob(taskId);
+                }
+            }
+
+            // Show overdue task notifications
+            for (const taskId of overdueTasks) {
+                showOverdueTaskNotification(taskId);
+            }
+
+            // Update UI
+            updateSchedulesPanel();
+        }
+
+        // Show notification for overdue task
+        function showOverdueTaskNotification(taskId) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            const notification = document.createElement('div');
+            notification.className = 'overdue-task-notification';
+            notification.dataset.taskId = taskId;
+
+            // Calculate how long overdue
+            const now = Date.now();
+            const overdueMs = now - task.nextRun;
+            const overdueText = formatOverdueTime(overdueMs);
+
+            notification.innerHTML = `
+                <div class="overdue-task-header">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                    </svg>
+                    <span>Task Overdue</span>
+                </div>
+                <div class="overdue-task-content">
+                    <div class="overdue-task-name">${escapeHtml(task.name)}</div>
+                    <div class="overdue-task-time">Overdue by ${overdueText}</div>
+                </div>
+                <div class="overdue-task-actions">
+                    <button class="overdue-btn execute" data-action="execute">Execute</button>
+                    <button class="overdue-btn reschedule" data-action="reschedule">Reschedule</button>
+                    <button class="overdue-btn skip" data-action="skip">Skip</button>
+                </div>
+            `;
+
+            // Add click handlers
+            notification.querySelectorAll('.overdue-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    handleOverdueTask(taskId, btn.dataset.action);
+                });
+            });
+
+            document.body.appendChild(notification);
+            updateOverdueNotificationPositions();
+        }
+
+        // Update overdue notification positions based on panel state
+        function updateOverdueNotificationPositions() {
+            const notifications = document.querySelectorAll('.overdue-task-notification');
+            if (notifications.length === 0) return;
+
+            const panel = document.getElementById('right-panel');
+            const panelOpen = panel && !panel.classList.contains('hidden');
+            const panelWidth = panelOpen ? (panel.offsetWidth || 280) : 0;
+
+            // Position: 10px from panel edge (or window edge if panel closed)
+            const rightPos = panelWidth + 10;
+
+            notifications.forEach(n => {
+                n.style.right = rightPos + 'px';
+            });
+        }
+
+        // Format overdue time
+        function formatOverdueTime(ms) {
+            const minutes = Math.floor(ms / 60000);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+
+            if (days > 0) return `${days}d ${hours % 24}h`;
+            if (hours > 0) return `${hours}h ${minutes % 60}m`;
+            return `${minutes}m`;
+        }
+
+        // Handle overdue task action
+        window.handleOverdueTask = async function(taskId, action) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            // Remove notification
+            const notification = document.querySelector(`.overdue-task-notification[data-task-id="${taskId}"]`);
+            if (notification) notification.remove();
+
+            if (action === 'execute') {
+                // Execute immediately (task will be marked as completed in executeScheduledTask)
+                await executeScheduledTask(taskId);
+            } else if (action === 'reschedule') {
+                // Show reschedule dialog
+                showRescheduleDialog(taskId);
+            } else if (action === 'skip') {
+                // Mark as skipped
+                task.status = 'skipped';
+                task.completedAt = Date.now();
+                saveScheduledTasks();
+            }
+
+            updateSchedulesPanel();
+        };
+
+        // Show reschedule dialog
+        function showRescheduleDialog(taskId) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            const dialog = document.createElement('div');
+            dialog.className = 'reschedule-dialog-overlay';
+            dialog.innerHTML = `
+                <div class="reschedule-dialog">
+                    <div class="reschedule-dialog-header">Reschedule: ${escapeHtml(task.name)}</div>
+                    <div class="reschedule-dialog-options">
+                        <button data-minutes="5">5 min</button>
+                        <button data-minutes="15">15 min</button>
+                        <button data-minutes="30">30 min</button>
+                        <button data-minutes="60">1 hour</button>
+                    </div>
+                    <button class="reschedule-dialog-cancel">Cancel</button>
+                </div>
+            `;
+
+            // Add click handlers
+            dialog.querySelectorAll('.reschedule-dialog-options button').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    rescheduleTask(taskId, parseInt(btn.dataset.minutes));
+                });
+            });
+
+            dialog.querySelector('.reschedule-dialog-cancel').addEventListener('click', () => {
+                dialog.remove();
+            });
+
+            document.body.appendChild(dialog);
+        }
+
+        // Reschedule task
+        window.rescheduleTask = function(taskId, minutes) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            // Update next run time
+            task.nextRun = Date.now() + minutes * 60 * 1000;
+            task.scheduleType = 'delay';
+            task.scheduleValue = String(minutes);
+            saveScheduledTasks();
+
+            // Start the job
+            startScheduledJob(taskId);
+
+            // Close dialog
+            document.querySelector('.reschedule-dialog-overlay')?.remove();
+
+            // Show confirmation
+            showScheduleToast(task.name, `in ${minutes} min`);
+
+            updateSchedulesPanel();
+        };
+
+        // Save scheduled tasks to disk (separate file, survives cache clear)
+        async function saveScheduledTasks() {
+            if (window.electronAPI?.schedules) {
+                await window.electronAPI.schedules.set(scheduledTasks);
+            }
+        }
+
+        // Create a new scheduled task from tool result
+        // Find task by ID or numeric index
+        function findTaskId(idOrNum) {
+            if (!idOrNum) return null;
+            // If it's already a full ID, return it
+            if (scheduledTasks[idOrNum]) return idOrNum;
+            // Try to find by numeric index
+            const num = parseInt(idOrNum);
+            if (!isNaN(num)) {
+                const task = Object.values(scheduledTasks).find(t => t.num === num);
+                if (task) return task.id;
+            }
+            return idOrNum;  // Return as-is, let caller handle not found
+        }
+
+        function handleSchedulerToolResult(result) {
+            if (!result.success) return;
+
+            if (result.action === 'cancel' && result.task_id) {
+                // Cancel task (support numeric ID)
+                const taskId = findTaskId(result.task_id);
+                cancelScheduledTask(taskId);
+            } else if (result.action === 'update' && result.task_id && result.updates) {
+                // Update task (support numeric ID)
+                const taskId = findTaskId(result.task_id);
+                updateScheduledTask(taskId, result.updates);
+            } else if (result.task) {
+                // Create new task with numeric index
+                const task = result.task;
+                task.num = nextTaskNum++;
+                scheduledTasks[task.id] = task;
+                saveScheduledTasks();
+                startScheduledJob(task.id);
+                updateSchedulesPanel();
+
+                // Auto-open panel and switch to Schedules tab
+                const panel = document.getElementById('right-panel');
+                if (panel?.classList.contains('hidden')) {
+                    toggleRightPanel();
+                }
+                switchRightPanelTab('schedules');
+                // No toast on success - silent creation
+            }
+        }
+
+        // Start a scheduled job (cron, delay, or once)
+        function startScheduledJob(taskId) {
+            const task = scheduledTasks[taskId];
+            if (!task || !task.enabled) return;
+
+            // Stop existing job if any
+            stopScheduledJob(taskId);
+
+            const { scheduleType, scheduleValue } = task;
+
+            if (scheduleType === 'cron') {
+                // Use Cron (croner library) for cron expressions
+                if (typeof Cron !== 'undefined') {
+                    try {
+                        const job = new Cron(scheduleValue, () => {
+                            executeScheduledTask(taskId);
+                        });
+                        schedulerJobs[taskId] = { type: 'cron', job };
+
+                        // Update next run time
+                        const nextRun = job.nextRun();
+                        if (nextRun) {
+                            task.nextRun = nextRun.getTime();
+                            saveScheduledTasks();
+                        }
+                    } catch (e) {
+                        // Invalid cron expression - silently fail
+                    }
+                }
+
+            } else if (scheduleType === 'delay') {
+                // Delay in minutes
+                const minutes = parseInt(scheduleValue);
+                if (isNaN(minutes) || minutes <= 0) return;
+
+                const now = Date.now();
+                const triggerAt = task.nextRun || (now + minutes * 60 * 1000);
+                const delay = Math.max(0, triggerAt - now);
+
+                // If delay is 0 and triggerAt is in the past, show overdue notification
+                if (delay === 0 && triggerAt < now) {
+                    showOverdueTaskNotification(taskId);
+                    return;
+                }
+
+                const timerId = setTimeout(async () => {
+                    await executeScheduledTask(taskId);
+                    delete schedulerJobs[taskId];
+                    updateSchedulesPanel();
+                }, delay);
+
+                schedulerJobs[taskId] = { type: 'delay', timerId };
+                task.nextRun = triggerAt;
+                saveScheduledTasks();
+
+            } else if (scheduleType === 'once') {
+                // Specific datetime (ISO format)
+                const targetTime = new Date(scheduleValue).getTime();
+                if (isNaN(targetTime)) return;
+
+                const now = Date.now();
+                const delay = Math.max(0, targetTime - now);
+
+                if (delay === 0 && targetTime < now) {
+                    // Already passed - show overdue notification instead of auto-completing
+                    showOverdueTaskNotification(taskId);
+                    return;
+                }
+
+                const timerId = setTimeout(async () => {
+                    await executeScheduledTask(taskId);
+                    delete schedulerJobs[taskId];
+                    updateSchedulesPanel();
+                }, delay);
+
+                schedulerJobs[taskId] = { type: 'once', timerId };
+                task.nextRun = targetTime;
+                saveScheduledTasks();
+            }
+
+            updateSchedulesPanel();
+        }
+
+        // Stop a scheduled job
+        function stopScheduledJob(taskId) {
+            const job = schedulerJobs[taskId];
+            if (!job) return;
+
+            if (job.type === 'cron' && job.job) {
+                job.job.stop();
+            } else if ((job.type === 'delay' || job.type === 'once') && job.timerId) {
+                clearTimeout(job.timerId);
+            }
+
+            delete schedulerJobs[taskId];
+        }
+
+        // Execute a scheduled task
+        async function executeScheduledTask(taskId) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            // Update last run time
+            task.lastRun = Date.now();
+
+            // Update next run for cron tasks
+            if (task.scheduleType === 'cron' && schedulerJobs[taskId]?.job) {
+                const nextRun = schedulerJobs[taskId].job.nextRun();
+                task.nextRun = nextRun ? nextRun.getTime() : null;
+            } else {
+                // For delay/once tasks, mark as completed
+                task.status = 'completed';
+                task.completedAt = Date.now();
+            }
+
+            saveScheduledTasks();
+            updateSchedulesPanel();
+
+            // Execute the prompt and track result
+            let targetConvId = null;
+            let success = false;
+            let errorMsg = null;
+
+            try {
+                if (task.createSession) {
+                    // Create a new session for execution
+                    targetConvId = createDelegationSession('', `Scheduled: ${task.name}`);
+                    await sendMessageToSession(targetConvId, task.prompt);
+                } else {
+                    // Send to current session
+                    targetConvId = currentConversationId;
+                    if (targetConvId) {
+                        await sendMessageToSession(targetConvId, task.prompt);
+                    }
+                }
+                success = true;
+                task.outputConvId = targetConvId;  // Store output session for viewing
+            } catch (e) {
+                errorMsg = e.message || 'Unknown error';
+                success = false;
+                task.status = 'failed';
+                task.errorMsg = errorMsg;
+            }
+
+            saveScheduledTasks();
+            updateSchedulesPanel();
+
+            // Only show reminder notification on failure
+            if (!success && task.notifyOnTrigger) {
+                showScheduleReminder(task.name, task.prompt, success, errorMsg, targetConvId);
+            }
+        }
+
+        // Show persistent schedule reminder notification
+        function showScheduleReminder(taskName, taskPrompt, success = true, errorMsg = null, convId = null) {
+            // Remove existing reminder if any
+            const existing = document.querySelector('.schedule-reminder');
+            if (existing) existing.remove();
+
+            const reminder = document.createElement('div');
+            reminder.className = `schedule-reminder ${success ? '' : 'error'}`;
+
+            // Icon based on success/error
+            const icon = success
+                ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'
+                : '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+
+            // Build content
+            const statusText = success ? '' : `<span class="schedule-reminder-error">${escapeHtml(errorMsg)}</span>`;
+            const viewBtnHtml = success && convId
+                ? `<button class="schedule-reminder-view">View</button>`
+                : '';
+
+            reminder.innerHTML = `
+                <div class="schedule-reminder-icon">${icon}</div>
+                <div class="schedule-reminder-content">
+                    <div class="schedule-reminder-title">${escapeHtml(taskName)}</div>
+                    <div class="schedule-reminder-prompt">${escapeHtml(taskPrompt)}</div>
+                    ${statusText}
+                </div>
+                ${viewBtnHtml}
+                <button class="schedule-reminder-confirm">OK</button>
+            `;
+
+            // Add click handlers
+            const viewBtn = reminder.querySelector('.schedule-reminder-view');
+            if (viewBtn && convId) {
+                viewBtn.addEventListener('click', () => {
+                    loadConversation(convId);
+                    reminder.remove();
+                });
+            }
+
+            const confirmBtn = reminder.querySelector('.schedule-reminder-confirm');
+            if (confirmBtn) {
+                confirmBtn.addEventListener('click', () => {
+                    reminder.remove();
+                });
+            }
+
+            document.body.appendChild(reminder);
+
+            // Auto-remove after 5 minutes
+            setTimeout(() => {
+                if (reminder.parentElement) {
+                    reminder.remove();
+                }
+            }, 5 * 60 * 1000);
+        }
+
+        // Show schedule creation toast (matches app accent color)
+        function showScheduleToast(taskName, scheduleDesc) {
+            // Remove existing schedule toast if any
+            const existing = document.querySelector('.schedule-toast');
+            if (existing) existing.remove();
+
+            const toast = document.createElement('div');
+            toast.className = 'schedule-toast';
+            toast.innerHTML = `
+                <svg class="schedule-toast-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <div class="schedule-toast-content">
+                    <span class="schedule-toast-title">${escapeHtml(taskName)}</span>
+                    <span class="schedule-toast-desc">${escapeHtml(scheduleDesc)}</span>
+                </div>
+                <button class="schedule-toast-close" onclick="this.parentElement.remove()">&times;</button>
+            `;
+
+            document.body.appendChild(toast);
+
+            // Auto-remove after 4 seconds
+            setTimeout(() => {
+                if (toast.parentElement) {
+                    toast.classList.add('schedule-toast-fade-out');
+                    setTimeout(() => toast.remove(), 300);
+                }
+            }, 4000);
+        }
+
+        // Send a message to a specific session
+        async function sendMessageToSession(convId, message) {
+            const runtime = getConvRuntime(convId);
+            if (!runtime) return;
+
+            // Add user message
+            runtime.messages.push({
+                role: 'user',
+                content: message,
+                isScheduled: true
+            });
+
+            // If viewing this conversation, render
+            if (currentConversationId === convId) {
+                renderMessages();
+            }
+
+            // Execute
+            runtime.isStreaming = true;
+            updateConversationStatus(convId, 'active');
+
+            try {
+                await continueConversation(convId);
+            } finally {
+                runtime.isStreaming = false;
+                updateConversationStatus(convId, 'idle');
+            }
+        }
+
+        // Cancel a scheduled task
+        function cancelScheduledTask(taskId) {
+            stopScheduledJob(taskId);
+            delete scheduledTasks[taskId];
+            saveScheduledTasks();
+            updateSchedulesPanel();
+        }
+
+        // Update a scheduled task
+        function updateScheduledTask(taskId, updates) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            // Apply updates
+            Object.assign(task, updates);
+
+            // Restart job if schedule changed
+            if (updates.scheduleType || updates.scheduleValue) {
+                stopScheduledJob(taskId);
+                if (task.enabled) {
+                    startScheduledJob(taskId);
+                }
+            } else if ('enabled' in updates) {
+                if (updates.enabled) {
+                    startScheduledJob(taskId);
+                } else {
+                    stopScheduledJob(taskId);
+                }
+            }
+
+            saveScheduledTasks();
+            updateSchedulesPanel();
+        }
+
+        // Toggle task enabled state
+        window.toggleScheduledTask = function(taskId) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            task.enabled = !task.enabled;
+
+            if (task.enabled) {
+                startScheduledJob(taskId);
+            } else {
+                stopScheduledJob(taskId);
+            }
+
+            saveScheduledTasks();
+            updateSchedulesPanel();
+        };
+
+        // Delete a scheduled task
+        window.deleteScheduledTask = function(taskId) {
+            const task = scheduledTasks[taskId];
+            if (!task) return;
+
+            stopScheduledJob(taskId);
+            delete scheduledTasks[taskId];
+            saveScheduledTasks();
+            updateSchedulesPanel();
+        };
+
+        // Pulse the right panel toggle icon (heartbeat effect)
+        function pulseRightPanelIcon() {
+            const toggle = document.getElementById('right-panel-toggle');
+            if (!toggle) return;
+
+            // Add pulse class
+            toggle.classList.add('panel-pulse');
+
+            // Remove after animation completes
+            setTimeout(() => {
+                toggle.classList.remove('panel-pulse');
+            }, 600);
+        }
+
+        // Update the Schedules panel UI
+        function updateSchedulesPanel() {
+            const list = document.getElementById('panel-schedules-list');
+            if (!list) return;
+
+            const taskIds = Object.keys(scheduledTasks);
+
+            // Pulse the right panel icon to indicate change
+            pulseRightPanelIcon();
+
+            if (taskIds.length === 0) {
+                list.innerHTML = `
+                    <div class="panel-placeholder">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12 6 12 12 16 14"/>
+                        </svg>
+                        <span>No scheduled tasks</span>
+                        <span class="panel-placeholder-hint">Ask Claude to create reminders or scheduled tasks</span>
+                    </div>
+                `;
+                return;
+            }
+
+            // Separate today's tasks from older tasks
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayStart = today.getTime();
+
+            const todayTasks = [];
+            const olderTasks = [];
+
+            taskIds.forEach(taskId => {
+                const task = scheduledTasks[taskId];
+                const taskTime = task.completedAt || task.createdAt || task.nextRun || 0;
+                if (taskTime >= todayStart) {
+                    todayTasks.push(taskId);
+                } else {
+                    olderTasks.push(taskId);
+                }
+            });
+
+            // Sort today's tasks: pending first, then by next run/completed time
+            const sortTasks = (ids) => ids.sort((a, b) => {
+                const taskA = scheduledTasks[a];
+                const taskB = scheduledTasks[b];
+                // Pending tasks first
+                const aCompleted = taskA.status === 'completed' || taskA.status === 'failed' || taskA.status === 'skipped';
+                const bCompleted = taskB.status === 'completed' || taskB.status === 'failed' || taskB.status === 'skipped';
+                if (aCompleted !== bCompleted) return aCompleted ? 1 : -1;
+                // Then by time
+                const timeA = taskA.completedAt || taskA.nextRun || Infinity;
+                const timeB = taskB.completedAt || taskB.nextRun || Infinity;
+                return timeA - timeB;
+            });
+
+            sortTasks(todayTasks);
+            sortTasks(olderTasks);
+
+            let html = '';
+
+            // Render today's tasks
+            if (todayTasks.length > 0) {
+                html += todayTasks.map(taskId => renderScheduleItem(taskId)).join('');
+            }
+
+            // Render older tasks (collapsed)
+            if (olderTasks.length > 0) {
+                html += `
+                    <div class="schedule-older-section">
+                        <div class="schedule-older-header" onclick="toggleOlderTasks()">
+                            <svg class="schedule-older-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polyline points="6 9 12 15 18 9"/>
+                            </svg>
+                            <span>Older (${olderTasks.length})</span>
+                        </div>
+                        <div class="schedule-older-list collapsed">
+                            ${olderTasks.map(taskId => renderScheduleItem(taskId)).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            list.innerHTML = html;
+        }
+
+        // Toggle older tasks visibility
+        window.toggleOlderTasks = function() {
+            const olderList = document.querySelector('.schedule-older-list');
+            const arrow = document.querySelector('.schedule-older-arrow');
+            if (olderList) {
+                olderList.classList.toggle('collapsed');
+                arrow?.classList.toggle('expanded');
+            }
+        };
+
+        // Render a single schedule item
+        function renderScheduleItem(taskId) {
+            const task = scheduledTasks[taskId];
+            const clockIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+            const calendarIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>';
+            const checkIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 12 11 14 15 10"/></svg>';
+            const errorIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
+            const skipIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
+
+            // Determine icon and status
+            let icon, statusClass, statusText;
+            if (task.status === 'completed') {
+                icon = checkIcon;
+                statusClass = 'completed';
+                statusText = 'Completed';
+            } else if (task.status === 'failed') {
+                icon = errorIcon;
+                statusClass = 'failed';
+                statusText = 'Failed';
+            } else if (task.status === 'skipped') {
+                icon = skipIcon;
+                statusClass = 'skipped';
+                statusText = 'Skipped';
+            } else {
+                icon = task.scheduleType === 'cron' ? calendarIcon : clockIcon;
+                statusClass = task.enabled ? 'enabled' : 'disabled';
+                statusText = '';
+            }
+
+            const scheduleDesc = formatScheduleDescription(task);
+            const isFinished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
+
+            // Time display
+            let timeDisplay;
+            if (isFinished && task.completedAt) {
+                const completedDate = new Date(task.completedAt);
+                timeDisplay = completedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else {
+                timeDisplay = formatNextRun(task.nextRun);
+            }
+
+            // View icon for completed tasks with output (in actions area)
+            const viewBtn = (task.status === 'completed' && task.outputConvId)
+                ? `<button class="schedule-action-btn" onclick="loadConversation('${task.outputConvId}')" title="View Output">
+                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                           <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                           <circle cx="12" cy="12" r="3"/>
+                       </svg>
+                   </button>`
+                : '';
+
+            // Toggle only for non-finished tasks
+            const toggleHtml = !isFinished
+                ? `<label class="schedule-toggle">
+                       <input type="checkbox" ${task.enabled ? 'checked' : ''} onchange="toggleScheduledTask('${taskId}')">
+                       <span class="toggle-slider"></span>
+                   </label>`
+                : `<span class="schedule-status-badge ${statusClass}">${statusText}</span>`;
+
+            const taskNum = task.num ? `#${task.num}` : '';
+
+            return `
+                <div class="panel-schedule-item ${statusClass}" data-task-id="${taskId}">
+                    <div class="schedule-header">
+                        <span class="schedule-num">${taskNum}</span>
+                        <span class="schedule-icon">${icon}</span>
+                        <span class="schedule-name">${escapeHtml(task.name)}</span>
+                        ${toggleHtml}
+                    </div>
+                    <div class="schedule-details">
+                        <span class="schedule-description">${scheduleDesc}</span>
+                        <span class="schedule-next">${timeDisplay}</span>
+                    </div>
+                    <div class="schedule-actions">
+                        ${viewBtn}
+                        <button class="schedule-delete-btn" onclick="deleteScheduledTask('${taskId}')" title="Delete">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Format schedule description for display
+        function formatScheduleDescription(task) {
+            const { scheduleType, scheduleValue } = task;
+
+            if (scheduleType === 'cron') {
+                return describeCron(scheduleValue);
+            } else if (scheduleType === 'delay') {
+                const mins = parseInt(scheduleValue);
+                if (mins < 60) return `After ${mins} minute${mins > 1 ? 's' : ''}`;
+                const hrs = Math.floor(mins / 60);
+                const rem = mins % 60;
+                return rem > 0 ? `After ${hrs}h ${rem}m` : `After ${hrs} hour${hrs > 1 ? 's' : ''}`;
+            } else if (scheduleType === 'once') {
+                const dt = new Date(scheduleValue);
+                return `Once at ${dt.toLocaleString()}`;
+            }
+            return scheduleValue;
+        }
+
+        // Describe cron expression in human readable form
+        function describeCron(cron) {
+            const parts = cron.split(' ');
+            if (parts.length !== 5) return `Cron: ${cron}`;
+
+            const [minute, hour, day, month, weekday] = parts;
+
+            // Every N minutes
+            if (minute.startsWith('*/')) {
+                const n = parseInt(minute.slice(2));
+                return `Every ${n} minute${n > 1 ? 's' : ''}`;
+            }
+
+            // Every minute
+            if (minute === '*' && hour === '*') {
+                return 'Every minute';
+            }
+
+            // Daily at specific time
+            if (minute !== '*' && hour !== '*' && day === '*' && month === '*' && weekday === '*') {
+                const h = parseInt(hour);
+                const m = parseInt(minute);
+                return `Daily at ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+            }
+
+            // Weekly
+            if (weekday !== '*' && day === '*') {
+                const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                const dayName = days[parseInt(weekday)] || weekday;
+                const h = parseInt(hour);
+                const m = parseInt(minute);
+                if (!isNaN(h) && !isNaN(m)) {
+                    return `Every ${dayName} at ${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                }
+                return `Every ${dayName}`;
+            }
+
+            return `Cron: ${cron}`;
+        }
+
+        // Format next run time
+        function formatNextRun(nextRun) {
+            if (!nextRun) return '';
+
+            const now = Date.now();
+            const diff = nextRun - now;
+
+            if (diff < 0) return 'Overdue';
+
+            if (diff < 60000) {
+                return `In ${Math.round(diff / 1000)}s`;
+            } else if (diff < 3600000) {
+                return `In ${Math.round(diff / 60000)}m`;
+            } else if (diff < 86400000) {
+                const hrs = Math.floor(diff / 3600000);
+                const mins = Math.round((diff % 3600000) / 60000);
+                return mins > 0 ? `In ${hrs}h ${mins}m` : `In ${hrs}h`;
+            } else {
+                const date = new Date(nextRun);
+                return `Next: ${date.toLocaleDateString()} ${date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}`;
+            }
+        }
+
+        // Start periodic update for next run times (every minute)
+        setInterval(() => {
+            if (Object.keys(scheduledTasks).length > 0) {
+                updateSchedulesPanel();
+            }
+        }, 60000);
+
         // ==================== Tool Result UI Handler ====================
 
         function handleToolResultUI(toolName, result, convId = null) {
@@ -7819,6 +8775,11 @@ ${content || 'Task completed successfully.'}
             // Delegation result - update conversation list to show badges
             if (result.type === 'delegate_task') {
                 renderConversations();
+            }
+
+            // Scheduler tool result
+            if (result.ui_update === 'schedules_panel') {
+                handleSchedulerToolResult(result);
             }
         }
 

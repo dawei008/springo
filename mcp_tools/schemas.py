@@ -367,5 +367,77 @@ tool_search(query="strands long term memory", auto_activate=true)
             },
             "required": ["task"]
         }
+    },
+    {
+        "name": "scheduler",
+        "description": """Create and manage scheduled or delayed tasks. Use this when users want to:
+- Set reminders ("提醒我...", "remind me...")
+- Schedule recurring tasks ("每天...", "every day...")
+- Delay execution ("N分钟后...", "in N minutes...")
+- Plan future actions ("明天...", "tomorrow...")
+
+Actions:
+- create: Create a new scheduled task
+- list: List all scheduled tasks
+- cancel: Cancel/delete a scheduled task
+- update: Update an existing task
+
+Schedule types:
+- cron: Recurring schedule (e.g., "0 9 * * *" for 9am daily)
+- delay: Execute after N minutes (e.g., "30" for 30 minutes)
+- once: Execute at specific time (ISO format, e.g., "2026-02-06T15:00:00")
+
+Examples:
+- "每天早上9点" → schedule_type="cron", schedule_value="0 9 * * *"
+- "每周一" → schedule_type="cron", schedule_value="0 9 * * 1"
+- "30分钟后" → schedule_type="delay", schedule_value="30"
+- "明天下午3点" → schedule_type="once", schedule_value="2026-02-06T15:00:00" """,
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "list", "cancel", "update"],
+                    "description": "Action to perform"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Task name/description"
+                },
+                "schedule_type": {
+                    "type": "string",
+                    "enum": ["cron", "delay", "once"],
+                    "description": "cron=recurring, delay=after N minutes, once=at specific time"
+                },
+                "schedule_value": {
+                    "type": "string",
+                    "description": "Cron expression (e.g., '0 9 * * *'), minutes to delay (e.g., '30'), or ISO datetime (e.g., '2026-02-06T15:00:00')"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The prompt/task to execute when triggered"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Task ID for cancel/update actions"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Whether task is enabled (for update)",
+                    "default": True
+                },
+                "notify_on_trigger": {
+                    "type": "boolean",
+                    "description": "Show notification when task triggers",
+                    "default": True
+                },
+                "create_session": {
+                    "type": "boolean",
+                    "description": "Create new session for task execution",
+                    "default": True
+                }
+            },
+            "required": ["action"]
+        }
     }
 ]

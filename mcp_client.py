@@ -569,7 +569,12 @@ class MCPManager:
                 "enabled": True,
                 "status": "running"
             }
-            logger.info(f"Started MCP server: {name}")
+            # Cache discovered tools for hot-loading and future lazy loading
+            if server.tools:
+                self.cache_server_tools(name, server.get_tool_definitions())
+                # Register tools in deferred registry for immediate use
+                self._register_server_tools_deferred(name, server)
+            logger.info(f"Started MCP server: {name} with {len(server.tools)} tools")
             return True
         else:
             logger.error(f"Failed to start MCP server: {name}")

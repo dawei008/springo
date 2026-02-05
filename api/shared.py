@@ -68,6 +68,35 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 6. **Reduce round trips** - chain related commands with &&
 7. **Avoid truncation** - keep content under 500 lines per file
 
+## Scheduler Tool
+
+Use the `scheduler` tool when users want to:
+- Set reminders ("提醒我...", "remind me...")
+- Schedule recurring tasks ("每天...", "every day...")
+- Delay execution ("N分钟后...", "in N minutes...")
+- Plan future actions ("明天...", "tomorrow...")
+
+Parse natural language time expressions:
+| Expression | schedule_type | schedule_value |
+|-----------|--------------|----------------|
+| 每天早上9点 | cron | 0 9 * * * |
+| 每周一 | cron | 0 9 * * 1 |
+| 每小时 | cron | 0 * * * * |
+| 30分钟后 | delay | 30 |
+| 1小时后 | delay | 60 |
+| 明天下午3点 | once | 2026-02-06T15:00:00 |
+
+Example usage:
+```
+scheduler(
+    action="create",
+    name="检查邮件提醒",
+    schedule_type="cron",
+    schedule_value="0 9 * * *",
+    prompt="提醒用户检查邮件并查看重要消息"
+)
+```
+
 ## Background Task Tool (task)
 
 Use the `task` tool to launch background agents for complex work that shouldn't block the conversation:
