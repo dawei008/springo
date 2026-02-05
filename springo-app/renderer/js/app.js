@@ -2547,7 +2547,7 @@
                 const isTaskResult = m.isTaskResult || false;
 
                 let extraClass = '';
-                let avatar = 'C';
+                let avatar = '🐕';
                 let label = 'Springo';
 
                 if (isDelegationResult) {
@@ -2559,7 +2559,7 @@
                     avatar = '📋';
                     label = 'Task Result';
                 } else if (m.role === 'user') {
-                    avatar = 'U';
+                    avatar = '👤';
                     label = 'You';
                 }
 
