@@ -108,6 +108,15 @@ claude-cowork-bedrock-proxy/
 
 ## 开发规范
 
+### UI/UX 规范
+
+> **禁止使用 Emoji**：在 Springo 的所有 UI 界面和代码中，**禁止使用 emoji 字符**。应使用 SVG 图标替代。
+>
+> - 聊天头像：使用 SVG 图标（参考 `app.js` 中的 `dogIcon`、`userIcon` 定义）
+> - 状态指示：使用 SVG 图标或 CSS 样式
+> - 按钮图标：使用 SVG 或 Unicode 符号（如 `↻`、`×`）
+> - 系统提示词已配置禁止 Claude 在回复中使用 emoji
+
 ### 后端服务器
 - 端口：`8080`
 - 健康检查：`GET /health`
@@ -118,6 +127,7 @@ claude-cowork-bedrock-proxy/
 - 所有前端代码在 `springo-app/renderer/index.html`
 - 使用 CSS 变量进行主题管理
 - API 基础 URL：`BASE_URL` 变量
+- 图标使用 SVG（参考 `index.html` 中的 welcome-icon 样式）
 
 ### 工具开发
 - 工具定义在 `mcp_tools.py` 的 `TOOL_DEFINITIONS` 列表

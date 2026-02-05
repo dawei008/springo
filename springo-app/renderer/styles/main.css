@@ -1416,6 +1416,11 @@
             font-size: 14px;
         }
 
+        .message-avatar svg {
+            width: 18px;
+            height: 18px;
+        }
+
         .message-user .message-avatar {
             background: var(--accent);
             color: white;

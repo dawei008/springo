@@ -40,6 +40,10 @@ BEDROCK_MODEL_MAPPING = {
 
 DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
 
+## Response Style
+
+**IMPORTANT: Do NOT use emoji in your responses.** Keep your responses clean and professional without emoji characters. Use plain text formatting instead.
+
 ## Tool Selection Guidelines
 
 | Task | Best Tool | Avoid |

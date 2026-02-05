@@ -2547,19 +2547,25 @@
                 const isTaskResult = m.isTaskResult || false;
 
                 let extraClass = '';
-                let avatar = '🐕';
+                // SVG icons for avatars (matching welcome icon style)
+                const dogIcon = '<svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="50" cy="38" rx="22" ry="20"/><path d="M28 35 C15 38, 8 55, 12 72 C14 78, 18 80, 22 78 C28 75, 30 65, 30 55"/><path d="M72 35 C85 38, 92 55, 88 72 C86 78, 82 80, 78 78 C72 75, 70 65, 70 55"/><circle cx="40" cy="35" r="3" fill="currentColor"/><circle cx="60" cy="35" r="3" fill="currentColor"/><ellipse cx="50" cy="48" rx="5" ry="4" fill="currentColor"/><path d="M45 52 Q50 58, 55 52"/></svg>';
+                const userIcon = '<svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="50" cy="35" r="18"/><path d="M20 90 C20 65 35 55 50 55 C65 55 80 65 80 90"/></svg>';
+                const delegationIcon = '<svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M70 30 L30 50 L70 70"/><path d="M30 50 L80 50"/></svg>';
+                const taskIcon = '<svg viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><rect x="20" y="15" width="60" height="70" rx="5"/><line x1="35" y1="35" x2="65" y2="35"/><line x1="35" y1="50" x2="65" y2="50"/><line x1="35" y1="65" x2="55" y2="65"/></svg>';
+
+                let avatar = dogIcon;
                 let label = 'Springo';
 
                 if (isDelegationResult) {
                     extraClass = ' delegation-result';
-                    avatar = '↩';
+                    avatar = delegationIcon;
                     label = 'Delegation Result';
                 } else if (isTaskResult) {
                     extraClass = ' task-result';
-                    avatar = '📋';
+                    avatar = taskIcon;
                     label = 'Task Result';
                 } else if (m.role === 'user') {
-                    avatar = '👤';
+                    avatar = userIcon;
                     label = 'You';
                 }
 
