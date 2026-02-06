@@ -26,7 +26,7 @@ import os
 import threading
 import queue
 from datetime import datetime
-from typing import Generator
+from typing import Generator, List, Dict
 from flask import Flask, request, Response, stream_with_context
 import boto3
 from botocore.config import Config
@@ -176,6 +176,10 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 - Wrong: `workspace/file.txt` (relative path)
 
 The working directory will be provided below. Use it to construct absolute paths.
+
+## Springo Configuration Directory
+
+Springo's configuration directory is `~/.springo/`.
 
 ## Tool Selection Guidelines
 
@@ -2663,6 +2667,483 @@ def s3_sync_session(session_id):
             status=500,
             mimetype='application/json'
         )
+
+
+# ==================== News Feed API ====================
+
+# Cache for news results (avoid repeated API calls)
+_news_cache = {
+    'news': [],
+    'topics': [],
+    'timestamp': None,
+    'task_id': None,
+    'status': 'idle'  # idle, running, completed, error
+}
+_news_cache_lock = threading.Lock()
+
+NEWS_TASK_PROMPT = """You are a news curator assistant. Your task is to fetch PERSONALIZED news based on user's memory.
+
+## Step 1: Get User Preferences from Memory (REQUIRED)
+
+First, activate the memory skill and get user preferences:
+
+1. Use `use_skill` tool:
+   - skill_name: "memory"
+   - user_request: "get user preferences"
+
+2. Run memory script:
+   ```bash
+   python ~/.springo/skills/memory/scripts/memory.py get USER_PREFERENCE --limit 10
+   ```
+
+## Step 2: Extract Topics from Memory (IMPORTANT!)
+
+The memory returns JSON with "categories" field containing user interests.
+Example memory format:
+```json
+{
+  "content": "{\"preference\":\"...\",\"categories\":[\"AWS\",\"software development\",\"AI\"]}",
+  ...
+}
+```
+
+**Extract topics from the "categories" arrays across all memory records.**
+
+Common category patterns to look for:
+- Technology: AWS, cloud computing, Kubernetes, DevOps
+- AI/ML: machine learning, LLM, agents, AI development
+- Programming: Python, JavaScript, system architecture
+- Specific products: Bedrock, AgentCore, Anthropic, OpenAI
+
+**PRIORITIZE memory-based topics over defaults!**
+Only use default topics if memory is empty or has no clear categories.
+
+## Step 3: Search for News
+
+Search for news based on extracted topics (3-4 topics).
+
+Use `web-search__brave_news_search` tool with:
+- query: topic keyword (in Chinese if user prefers Chinese based on memory context)
+- count: 5
+- freshness: "pd"
+
+## Step 4: Return Structured Results
+
+Return ONLY a JSON object:
+
+```json
+{
+    "language": "zh" or "en",
+    "topics": ["topic1", "topic2", "topic3"],
+    "news": [
+        {
+            "title": "新闻标题",
+            "description": "简介",
+            "url": "https://...",
+            "source": "来源",
+            "publishedAt": "时间",
+            "topic": "相关主题"
+        }
+    ]
+}
+```
+
+Return 8-12 news items.
+
+Default topics ONLY if memory is empty:
+- OpenAI/ChatGPT
+- Anthropic/Claude
+- AWS/云计算
+- AI Agent
+
+CRITICAL: Your FINAL response must be ONLY the JSON object, no other text.
+5. All strings must be properly quoted"""
+
+
+@app.route('/v1/news/fetch', methods=['GET'])
+def fetch_news():
+    """
+    Fetch personalized news using Claude Agent task.
+    The agent reads user interests from LTM and searches for relevant news.
+    """
+    global _news_cache
+
+    # Check for force refresh
+    force_refresh = request.args.get('force', 'false').lower() == 'true'
+
+    with _news_cache_lock:
+        # Check if a task is already running - always return loading status
+        if _news_cache['status'] == 'running':
+            return Response(
+                json.dumps({
+                    "success": True,
+                    "news": _news_cache.get('news', []),
+                    "topics": _news_cache.get('topics', []),
+                    "status": "loading",
+                    "message": "News is being fetched..."
+                }),
+                mimetype='application/json'
+            )
+
+        # Check if we have recent cached results (within 5 minutes), unless force refresh
+        if not force_refresh and _news_cache['timestamp']:
+            age = (datetime.now() - _news_cache['timestamp']).total_seconds()
+            if age < 300 and _news_cache['news']:  # 5 minutes cache
+                logger.info(f"Returning cached news ({len(_news_cache['news'])} items, {age:.0f}s old)")
+                return Response(
+                    json.dumps({
+                        "success": True,
+                        "news": _news_cache['news'],
+                        "topics": _news_cache['topics'],
+                        "timestamp": _news_cache['timestamp'].isoformat(),
+                        "cached": True
+                    }),
+                    mimetype='application/json'
+                )
+
+    # Start a background task to fetch news (if we reach here, not running and no valid cache)
+    try:
+        task_id = _start_news_fetch_task()
+        return Response(
+            json.dumps({
+                "success": True,
+                "news": _news_cache.get('news', []),
+                "topics": _news_cache.get('topics', []),
+                "status": "loading",
+                "task_id": task_id,
+                "message": "Fetching personalized news..."
+            }),
+            mimetype='application/json'
+        )
+    except Exception as e:
+        logger.error(f"Failed to start news fetch task: {e}")
+        return Response(
+            json.dumps({
+                "success": False,
+                "error": str(e),
+                "news": [],
+                "topics": []
+            }),
+            status=500,
+            mimetype='application/json'
+        )
+
+
+def _start_news_fetch_task() -> str:
+    """Start a background task to fetch news using Claude."""
+    global _news_cache
+
+    with _news_cache_lock:
+        _news_cache['status'] = 'running'
+
+    task_id = f"news_{uuid.uuid4().hex[:8]}"
+
+    def run_task():
+        global _news_cache
+        try:
+            logger.info(f"Starting news fetch task: {task_id}")
+
+            # Call Claude to fetch news
+            result = _execute_news_agent_task()
+
+            with _news_cache_lock:
+                if result:
+                    news_items = result.get('news', [])
+                    # Ensure news is a list, not a string
+                    if isinstance(news_items, str):
+                        try:
+                            news_items = json.loads(news_items)
+                        except:
+                            news_items = []
+                    if not isinstance(news_items, list):
+                        news_items = []
+
+                    _news_cache['news'] = news_items
+                    _news_cache['topics'] = result.get('topics', [])
+                    _news_cache['timestamp'] = datetime.now()
+                    _news_cache['status'] = 'completed'
+                    logger.info(f"News fetch completed: {len(_news_cache['news'])} items")
+                else:
+                    _news_cache['status'] = 'error'
+                    logger.warning("News fetch returned no results")
+
+        except Exception as e:
+            logger.error(f"News fetch task error: {e}")
+            with _news_cache_lock:
+                _news_cache['status'] = 'error'
+
+    # Run in background thread
+    thread = threading.Thread(target=run_task, daemon=True)
+    thread.start()
+
+    return task_id
+
+
+def _execute_news_agent_task() -> Dict:
+    """Execute the news fetch task using internal API (inherits system prompt and all tools)."""
+    import requests
+
+    try:
+        logger.info("News agent starting via internal API...")
+
+        # Phase 1: Use internal API to gather news (with skills and tools)
+        request_body = {
+            "model": "claude-sonnet-4-5-20250929",  # Use Sonnet for speed
+            "max_tokens": 8192,
+            "messages": [
+                {"role": "user", "content": NEWS_TASK_PROMPT}
+            ],
+            "stream": False  # Non-streaming for background task
+        }
+
+        response = requests.post(
+            "http://127.0.0.1:8080/v1/messages-auto",
+            json=request_body,
+            headers={
+                "Content-Type": "application/json",
+                "anthropic-version": "2023-06-01"
+            },
+            timeout=300  # 5 minute timeout
+        )
+
+        if response.status_code != 200:
+            logger.error(f"News agent API error: {response.status_code} - {response.text[:500]}")
+            return None
+
+        result = response.json()
+
+        # Extract text content from Phase 1
+        raw_news_text = ""
+        content = result.get('content', [])
+        for block in content:
+            if block.get('type') == 'text':
+                raw_news_text = block.get('text', '')
+                break
+
+        if not raw_news_text:
+            logger.warning("News agent returned no text content")
+            return None
+
+        logger.info(f"News agent Phase 1 complete, raw response length: {len(raw_news_text)}")
+
+        # Phase 2: Use Structured Output to format the result
+        return _format_news_with_structured_output(raw_news_text)
+
+    except requests.exceptions.Timeout:
+        logger.error("News agent task timed out")
+        return None
+    except Exception as e:
+        logger.error(f"News agent task error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return None
+
+
+# JSON Schema for structured news output
+NEWS_OUTPUT_SCHEMA = {
+    "name": "format_news_output",
+    "description": "Format news search results into structured JSON",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "language": {
+                "type": "string",
+                "enum": ["zh", "en"],
+                "description": "Language of the news content"
+            },
+            "topics": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of topics searched"
+            },
+            "news": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "News title"},
+                        "description": {"type": "string", "description": "Brief description"},
+                        "url": {"type": "string", "description": "Article URL"},
+                        "source": {"type": "string", "description": "News source"},
+                        "publishedAt": {"type": "string", "description": "Publication time"},
+                        "topic": {"type": "string", "description": "Related topic"}
+                    },
+                    "required": ["title", "url", "topic"]
+                },
+                "description": "List of news items"
+            }
+        },
+        "required": ["language", "topics", "news"]
+    }
+}
+
+
+def _format_news_with_structured_output(raw_text: str) -> Dict:
+    """Use Bedrock Structured Output to format news into JSON."""
+    try:
+        bedrock_client = get_bedrock_client()
+        model_id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+        # Use tool_choice to force structured output
+        response = bedrock_client.invoke_model(
+            modelId=model_id,
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4096,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"""Extract and format the news items from the following text into structured JSON.
+
+Raw news data:
+{raw_text}
+
+Use the format_news_output tool to return the structured result. Include all news items found."""
+                    }
+                ],
+                "tools": [NEWS_OUTPUT_SCHEMA],
+                "tool_choice": {"type": "tool", "name": "format_news_output"}
+            }),
+            contentType="application/json",
+            accept="application/json"
+        )
+
+        result = json.loads(response['body'].read())
+        content = result.get('content', [])
+        logger.info(f"Structured output response: stop_reason={result.get('stop_reason')}, blocks={len(content)}")
+
+        # Extract structured output from tool_use block
+        for block in content:
+            if block.get('type') == 'tool_use' and block.get('name') == 'format_news_output':
+                news_data = block.get('input', {})
+                # Handle case where input might be a string
+                if isinstance(news_data, str):
+                    news_data = json.loads(news_data)
+                # Add IDs to news items
+                news_items = news_data.get('news', [])
+                for i, item in enumerate(news_items):
+                    if isinstance(item, dict) and 'id' not in item:
+                        item['id'] = f"news_{uuid.uuid4().hex[:8]}"
+                logger.info(f"Structured output: {len(news_items)} news items")
+                return news_data
+
+        logger.warning("No structured output found in response")
+        # Fallback to text parsing
+        return _parse_news_response(raw_text)
+
+    except Exception as e:
+        logger.error(f"Structured output formatting failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        # Fallback to text parsing
+        return _parse_news_response(raw_text)
+
+
+def _parse_news_response(text: str) -> Dict:
+    """Parse the news JSON response from Claude."""
+    try:
+        # Try to find JSON in the response
+        import re
+
+        logger.info(f"News response to parse (first 300 chars): {text[:300]}...")
+
+        # Look for JSON block in markdown code fence
+        json_match = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL)
+        if json_match:
+            text = json_match.group(1)
+            logger.info(f"Found JSON in code fence, length: {len(text)}")
+        else:
+            # Try to find JSON object directly - look for the outermost braces
+            json_start = text.find('{')
+            # Find matching closing brace by counting
+            if json_start != -1:
+                depth = 0
+                json_end = -1
+                for i, c in enumerate(text[json_start:], json_start):
+                    if c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0:
+                            json_end = i
+                            break
+                if json_end != -1:
+                    text = text[json_start:json_end + 1]
+                    logger.info(f"Extracted JSON from {json_start} to {json_end}, length: {len(text)}")
+
+        # Try to parse as JSON
+        result = json.loads(text.strip())
+
+        # Validate structure
+        if 'news' in result and isinstance(result['news'], list):
+            # Add IDs to news items
+            for item in result['news']:
+                if 'id' not in item:
+                    item['id'] = f"news_{uuid.uuid4().hex[:8]}"
+            return result
+
+        return None
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse news response as JSON: {e}")
+        # Log around the error position for debugging
+        error_pos = getattr(e, 'pos', 0)
+        if error_pos > 0:
+            start = max(0, error_pos - 50)
+            end = min(len(text), error_pos + 50)
+            logger.warning(f"JSON error context: ...{text[start:end]}...")
+        logger.warning(f"Text to parse (first 500 chars): {text[:500]}...")
+
+        # Try to fix common JSON issues
+        try:
+            import re
+            fixed_text = text
+
+            # Remove trailing commas before ] or }
+            fixed_text = re.sub(r',\s*([}\]])', r'\1', fixed_text)
+            # Remove comments
+            fixed_text = re.sub(r'//.*$', '', fixed_text, flags=re.MULTILINE)
+            # Fix unescaped quotes in strings (common issue)
+            # This is tricky - try to find strings with unescaped quotes
+            # For now, just try to escape quotes that appear after a colon and before a comma/}
+            fixed_text = re.sub(r':\s*"([^"]*)"([^",}\]]*)"', r': "\1\2"', fixed_text)
+            # Remove control characters
+            fixed_text = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', fixed_text)
+
+            # Try parsing again
+            result = json.loads(fixed_text.strip())
+            if 'news' in result and isinstance(result['news'], list):
+                for item in result['news']:
+                    if 'id' not in item:
+                        item['id'] = f"news_{uuid.uuid4().hex[:8]}"
+                logger.info(f"Successfully parsed fixed JSON with {len(result['news'])} items")
+                return result
+        except Exception as fix_error:
+            logger.warning(f"JSON fix attempt also failed: {fix_error}")
+
+        # Last resort: try to extract valid news items manually
+        try:
+            # Find all news-like objects
+            news_pattern = r'\{\s*"title"\s*:\s*"[^"]+"\s*,\s*"description"\s*:\s*"[^"]*"\s*,\s*"url"\s*:\s*"[^"]+"\s*,\s*"source"\s*:\s*"[^"]*"\s*,\s*"publishedAt"\s*:\s*"[^"]*"\s*,\s*"topic"\s*:\s*"[^"]*"\s*\}'
+            matches = re.findall(news_pattern, text, re.DOTALL)
+            if matches:
+                news_items = []
+                for m in matches:
+                    try:
+                        item = json.loads(m)
+                        item['id'] = f"news_{uuid.uuid4().hex[:8]}"
+                        news_items.append(item)
+                    except:
+                        pass
+                if news_items:
+                    logger.info(f"Extracted {len(news_items)} news items via regex")
+                    return {"news": news_items, "topics": [], "language": "zh"}
+        except Exception as regex_error:
+            logger.warning(f"Regex extraction also failed: {regex_error}")
+
+        return None
+
+
 
 
 @app.route('/v1/config/working-dir', methods=['GET', 'POST'])

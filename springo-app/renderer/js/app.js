@@ -6208,7 +6208,7 @@ Be concise and helpful in your responses.`;
             if (alreadyAttached) return;
 
             attachments.push({
-                name: `🔄 ${taskData.name}`,
+                name: `${taskData.name}`,
                 type: 'application/x-task-result',
                 taskId: taskData.taskId,
                 sessionNumber: taskData.sessionNumber,
@@ -6220,8 +6220,244 @@ Be concise and helpful in your responses.`;
             document.getElementById('send-btn').disabled = false;
         }
 
+        // Add news to input field for asking about
+        function addNewsToInput(newsData) {
+            const input = document.getElementById('message-input');
+            if (!input) return;
+
+            // Format news as a reference in the input
+            const newsRef = `[${newsData.title}](${newsData.url})`;
+
+            // Insert at cursor position or append
+            if (input.value) {
+                input.value = input.value + '\n\n' + newsRef;
+            } else {
+                input.value = newsRef;
+            }
+
+            // Trigger input event to resize textarea
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+
+            // Enable send button
+            document.getElementById('send-btn').disabled = false;
+        }
+
         // Initialize right panel on page load
         document.addEventListener('DOMContentLoaded', initRightPanel);
+
+        // ==================== News Panel ====================
+        let newsItems = [];
+        let newsLastUpdated = null;
+        let newsRefreshInterval = null;
+        const NEWS_REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
+
+        function initNewsPanel() {
+            // Load news on startup
+            refreshNews();
+
+            // Set up hourly auto-refresh
+            newsRefreshInterval = setInterval(refreshNews, NEWS_REFRESH_INTERVAL);
+        }
+
+        let newsPollingTimer = null;
+
+        async function refreshNews(force = false) {
+            const list = document.getElementById('panel-news-list');
+            const updatedEl = document.getElementById('news-updated');
+            const refreshBtn = document.querySelector('.news-refresh-btn');
+
+            if (!list) return;
+
+            // Show loading state
+            if (refreshBtn) refreshBtn.classList.add('spinning');
+
+            // Only show loading placeholder if we have no cached news
+            if (newsItems.length === 0) {
+                list.innerHTML = `
+                    <div class="panel-placeholder">
+                        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                            <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 12h10"/>
+                        </svg>
+                        <span>Loading personalized news...</span>
+                        <span class="news-hint">Reading your interests from memory...</span>
+                    </div>
+                `;
+            }
+
+            try {
+                const url = force ? `${BASE_URL}/v1/news/fetch?force=true` : `${BASE_URL}/v1/news/fetch`;
+                const response = await fetch(url);
+                const data = await response.json();
+
+                // Handle async loading status
+                if (data.status === 'loading') {
+                    // Task is running, poll for results
+                    if (updatedEl) {
+                        updatedEl.textContent = 'Fetching personalized news...';
+                    }
+                    // Start polling if not already
+                    if (!newsPollingTimer) {
+                        newsPollingTimer = setTimeout(() => {
+                            newsPollingTimer = null;
+                            refreshNews();
+                        }, 3000); // Poll every 3 seconds
+                    }
+                    // Show cached news if available
+                    if (data.news && data.news.length > 0) {
+                        newsItems = data.news;
+                        updateNewsPanel();
+                    }
+                    return; // Keep spinner spinning
+                }
+
+                // Clear polling timer
+                if (newsPollingTimer) {
+                    clearTimeout(newsPollingTimer);
+                    newsPollingTimer = null;
+                }
+
+                if (refreshBtn) refreshBtn.classList.remove('spinning');
+
+                if (data.success && data.news && data.news.length > 0) {
+                    newsItems = data.news;
+                    newsLastUpdated = new Date(data.timestamp) || new Date();
+                    updateNewsPanel();
+                    if (updatedEl) {
+                        const cached = data.cached ? ' (cached)' : '';
+                        updatedEl.textContent = `Updated: ${newsLastUpdated.toLocaleTimeString()}${cached}`;
+                    }
+                    // Show topics
+                    if (data.topics && data.topics.length > 0) {
+                        console.log('News topics from LTM:', data.topics);
+                    }
+                } else if (data.success && (!data.news || data.news.length === 0)) {
+                    list.innerHTML = `
+                        <div class="panel-placeholder">
+                            <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                                <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 12h10"/>
+                            </svg>
+                            <span>No news available</span>
+                            <span class="news-hint">Configure LTM in Settings to personalize</span>
+                        </div>
+                    `;
+                    if (updatedEl) {
+                        updatedEl.textContent = `Checked: ${new Date().toLocaleTimeString()}`;
+                    }
+                } else {
+                    list.innerHTML = `
+                        <div class="news-error">
+                            <span>Failed to load news</span>
+                            <span class="news-hint">${data.error || 'Unknown error'}</span>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                if (refreshBtn) refreshBtn.classList.remove('spinning');
+                if (newsPollingTimer) {
+                    clearTimeout(newsPollingTimer);
+                    newsPollingTimer = null;
+                }
+                console.error('News fetch error:', err);
+                list.innerHTML = `
+                    <div class="news-error">
+                        <span>Network error</span>
+                        <span class="news-hint">Check if the server is running</span>
+                    </div>
+                `;
+            }
+        }
+
+        function updateNewsPanel() {
+            const list = document.getElementById('panel-news-list');
+            if (!list || newsItems.length === 0) return;
+
+            list.innerHTML = newsItems.map((item, index) => `
+                <div class="news-item" draggable="true" data-news-index="${index}">
+                    <div class="news-item-header">
+                        <div class="news-item-topic">${escapeHTML(item.topic || 'News')}</div>
+                        <div class="news-drag-hint" title="Drag to chat">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" opacity="0.4">
+                                <circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/>
+                                <circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <a href="${escapeHTML(item.url)}" class="news-item-title" target="_blank"
+                       onclick="openExternalLink('${escapeHTML(item.url)}'); return false;">
+                        ${escapeHTML(item.title)}
+                    </a>
+                    <div class="news-item-desc">${escapeHTML(item.description || '')}</div>
+                    <div class="news-item-meta">
+                        <span class="news-item-source">${escapeHTML(item.source || 'Unknown')}</span>
+                        <span class="news-item-time">${formatNewsTime(item.publishedAt)}</span>
+                    </div>
+                </div>
+            `).join('');
+
+            // Add drag event handlers for news items
+            list.querySelectorAll('.news-item[draggable="true"]').forEach(item => {
+                item.addEventListener('dragstart', (e) => {
+                    const newsIndex = parseInt(item.dataset.newsIndex);
+                    const news = newsItems[newsIndex];
+                    if (news) {
+                        item.classList.add('dragging');
+                        e.dataTransfer.effectAllowed = 'copy';
+                        // Set drag data - news info as JSON
+                        const newsData = [{
+                            isNews: true,
+                            title: news.title,
+                            description: news.description,
+                            url: news.url,
+                            source: news.source,
+                            topic: news.topic
+                        }];
+                        e.dataTransfer.setData('text/plain', JSON.stringify(newsData));
+                    }
+                });
+
+                item.addEventListener('dragend', () => {
+                    item.classList.remove('dragging');
+                });
+            });
+        }
+
+        function formatNewsTime(timeStr) {
+            if (!timeStr) return '';
+
+            // If it's already a relative time string (e.g., "2 hours ago")
+            if (timeStr.includes('ago') || timeStr.includes('hour') || timeStr.includes('day') || timeStr.includes('minute')) {
+                return timeStr;
+            }
+
+            // Try to parse as date
+            try {
+                const date = new Date(timeStr);
+                if (isNaN(date.getTime())) return timeStr;
+
+                const now = new Date();
+                const diff = now - date;
+                const hours = Math.floor(diff / (1000 * 60 * 60));
+                const days = Math.floor(hours / 24);
+
+                if (hours < 1) return 'Just now';
+                if (hours < 24) return `${hours}h ago`;
+                if (days < 7) return `${days}d ago`;
+                return date.toLocaleDateString();
+            } catch {
+                return timeStr;
+            }
+        }
+
+        function openExternalLink(url) {
+            if (window.electronAPI?.openExternal) {
+                window.electronAPI.openExternal(url);
+            } else {
+                window.open(url, '_blank');
+            }
+        }
+
+        // Initialize news panel on page load
+        document.addEventListener('DOMContentLoaded', initNewsPanel);
 
         // Handle folder click - only opens file browser for browsing
         // Does NOT change session's working directory
@@ -6841,6 +7077,15 @@ Be concise and helpful in your responses.`;
                 if (items[0].isTask) {
                     for (const task of items) {
                         addTaskToAttachments(task);
+                    }
+                    document.getElementById('message-input')?.focus();
+                    return;
+                }
+
+                // Check if this is a news drop
+                if (items[0].isNews) {
+                    for (const news of items) {
+                        addNewsToInput(news);
                     }
                     document.getElementById('message-input')?.focus();
                     return;
@@ -8497,7 +8742,8 @@ ${content || 'Task completed successfully.'}
                 return;
             }
 
-            // Separate today's tasks from older tasks
+            // Separate active tasks from older (expired/completed) tasks
+            const now = Date.now();
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const todayStart = today.getTime();
@@ -8507,11 +8753,39 @@ ${content || 'Task completed successfully.'}
 
             taskIds.forEach(taskId => {
                 const task = scheduledTasks[taskId];
-                const taskTime = task.completedAt || task.createdAt || task.nextRun || 0;
-                if (taskTime >= todayStart) {
-                    todayTasks.push(taskId);
-                } else {
+                const isCompleted = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
+
+                // Determine if task should be in "Older" section
+                let isOlder = false;
+
+                if (task.type === 'cron') {
+                    // Cron tasks: older only if disabled AND no future runs
+                    // Active cron tasks with future nextRun are never "older"
+                    if (task.nextRun && task.nextRun > now) {
+                        isOlder = false; // Has future run, keep in active
+                    } else if (isCompleted && task.completedAt && task.completedAt < todayStart) {
+                        isOlder = true; // Completed before today
+                    }
+                } else if (task.type === 'once') {
+                    // Once tasks: older if scheduled time has passed and completed
+                    if (isCompleted) {
+                        // Use completedAt time to determine if older
+                        isOlder = task.completedAt && task.completedAt < todayStart;
+                    } else if (task.scheduledAt && task.scheduledAt < todayStart) {
+                        // Pending but scheduled time was before today
+                        isOlder = true;
+                    }
+                } else if (task.type === 'delay') {
+                    // Delay tasks: older if completed before today
+                    if (isCompleted) {
+                        isOlder = task.completedAt && task.completedAt < todayStart;
+                    }
+                }
+
+                if (isOlder) {
                     olderTasks.push(taskId);
+                } else {
+                    todayTasks.push(taskId);
                 }
             });
 
@@ -8605,7 +8879,24 @@ ${content || 'Task completed successfully.'}
             let timeDisplay;
             if (isFinished && task.completedAt) {
                 const completedDate = new Date(task.completedAt);
-                timeDisplay = completedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const now = new Date();
+                const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+                const taskDay = new Date(completedDate.getFullYear(), completedDate.getMonth(), completedDate.getDate());
+
+                const timeStr = completedDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                if (taskDay.getTime() === today.getTime()) {
+                    // Today: just show time
+                    timeDisplay = timeStr;
+                } else if (taskDay.getTime() === yesterday.getTime()) {
+                    // Yesterday
+                    timeDisplay = `Yesterday ${timeStr}`;
+                } else {
+                    // Older: show date
+                    const dateStr = `${completedDate.getMonth() + 1}/${completedDate.getDate()}`;
+                    timeDisplay = `${dateStr} ${timeStr}`;
+                }
             } else {
                 timeDisplay = formatNextRun(task.nextRun);
             }
