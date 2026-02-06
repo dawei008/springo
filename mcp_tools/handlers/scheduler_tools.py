@@ -22,7 +22,10 @@ def scheduler(
     task_id: str = "",
     enabled: bool = True,
     notify_on_trigger: bool = True,
-    create_session: bool = True
+    create_session: bool = True,
+    working_directory: str = "",
+    max_executions: int = None,
+    end_date: str = ""
 ) -> Dict[str, Any]:
     """
     Unified scheduler tool for creating and managing scheduled tasks.
@@ -37,6 +40,9 @@ def scheduler(
         enabled: Whether task is enabled (for update)
         notify_on_trigger: Show toast when triggered
         create_session: Create new session for execution
+        working_directory: Working directory for task execution
+        max_executions: Maximum number of executions for cron tasks
+        end_date: End date for cron tasks (ISO format)
     """
     if action == "create":
         return _create_scheduled_task(
@@ -45,7 +51,10 @@ def scheduler(
             schedule_value=schedule_value,
             prompt=prompt,
             notify_on_trigger=notify_on_trigger,
-            create_session=create_session
+            create_session=create_session,
+            working_directory=working_directory,
+            max_executions=max_executions,
+            end_date=end_date
         )
     elif action == "list":
         return _list_scheduled_tasks()
@@ -72,7 +81,10 @@ def _create_scheduled_task(
     schedule_value: str,
     prompt: str,
     notify_on_trigger: bool = True,
-    create_session: bool = True
+    create_session: bool = True,
+    working_directory: str = "",
+    max_executions: int = None,
+    end_date: str = ""
 ) -> Dict[str, Any]:
     """Create a new scheduled task"""
     if not name:
@@ -108,8 +120,17 @@ def _create_scheduled_task(
         "lastRun": None,
         "nextRun": next_run,
         "notifyOnTrigger": notify_on_trigger,
-        "createSession": create_session
+        "createSession": create_session,
+        "workingDirectory": working_directory,
+        "executionCount": 0
     }
+
+    # Add termination conditions for cron tasks
+    if schedule_type == "cron":
+        if max_executions:
+            task["maxExecutions"] = max_executions
+        if end_date:
+            task["endDate"] = end_date
 
     # Format human-readable schedule description
     schedule_desc = _format_schedule_description(schedule_type, schedule_value, next_run)

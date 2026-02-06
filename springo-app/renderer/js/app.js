@@ -4130,7 +4130,13 @@
                 // Dynamic time is injected into the first user message by the backend
                 const systemPrompt = `You are Springo, a helpful AI assistant with access to various tools.
 
-**IMPORTANT: Do NOT use emojis in your responses or generated files.** Keep all output clean and text-based.
+## CRITICAL RULE - NO EMOJIS (STRICTLY ENFORCED)
+
+**ABSOLUTELY DO NOT use any emojis, emoticons, or unicode symbols in your responses.** This is a strict requirement:
+- NO emoji characters (😀, 📁, ✅, ❌, 🎉, ✨, 📝, etc.)
+- NO unicode symbols (✓, ✗, •, →, ★, etc.)
+- Use plain text only: "Done", "Error", "Success", "-", "->", "*"
+- This applies to ALL responses and ALL generated files
 
 IMPORTANT: When answering questions about current events, recent news, technical documentation, or anything that requires up-to-date information:
 1. ALWAYS use the available tools to search for information first
@@ -8357,6 +8363,15 @@ ${content || 'Task completed successfully.'}
                 // Create new task with numeric index
                 const task = result.task;
                 task.num = nextTaskNum++;
+
+                // Inject current session's working directory if not already set
+                if (!task.workingDirectory && currentConversationId) {
+                    const runtime = getConvRuntime(currentConversationId);
+                    if (runtime?.workingDir) {
+                        task.workingDirectory = runtime.workingDir;
+                    }
+                }
+
                 scheduledTasks[task.id] = task;
                 saveScheduledTasks();
                 startScheduledJob(task.id);
@@ -8474,17 +8489,14 @@ ${content || 'Task completed successfully.'}
             const task = scheduledTasks[taskId];
             if (!task) return;
 
-            // Update last run time
+            // Update last run time and set status to running
             task.lastRun = Date.now();
+            task.status = 'running';
 
             // Update next run for cron tasks
             if (task.scheduleType === 'cron' && schedulerJobs[taskId]?.job) {
                 const nextRun = schedulerJobs[taskId].job.nextRun();
                 task.nextRun = nextRun ? nextRun.getTime() : null;
-            } else {
-                // For delay/once tasks, mark as completed
-                task.status = 'completed';
-                task.completedAt = Date.now();
             }
 
             saveScheduledTasks();
@@ -8497,8 +8509,9 @@ ${content || 'Task completed successfully.'}
 
             try {
                 if (task.createSession) {
-                    // Create a new session for execution
-                    targetConvId = createDelegationSession('', `Scheduled: ${task.name}`);
+                    // Create a new session for execution with task's working directory
+                    const workDir = task.workingDirectory || '';
+                    targetConvId = createDelegationSession(workDir, `Scheduled: ${task.name}`);
                     await sendMessageToSession(targetConvId, task.prompt);
                 } else {
                     // Send to current session
@@ -8509,11 +8522,51 @@ ${content || 'Task completed successfully.'}
                 }
                 success = true;
                 task.outputConvId = targetConvId;  // Store output session for viewing
+
+                // Track execution count
+                task.executionCount = (task.executionCount || 0) + 1;
+
+                // Determine final status based on task type and termination conditions
+                if (task.scheduleType === 'cron') {
+                    // Check termination conditions for cron tasks
+                    let shouldTerminate = false;
+
+                    // Check max executions
+                    if (task.maxExecutions && task.executionCount >= task.maxExecutions) {
+                        shouldTerminate = true;
+                    }
+
+                    // Check end date
+                    if (task.endDate && Date.now() >= new Date(task.endDate).getTime()) {
+                        shouldTerminate = true;
+                    }
+
+                    if (shouldTerminate) {
+                        task.status = 'completed';
+                        task.completedAt = Date.now();
+                        stopScheduledJob(taskId);
+                    } else {
+                        // Cron task continues - reset to enabled status
+                        task.status = 'enabled';
+                    }
+                } else {
+                    // One-time tasks (delay/once) are completed
+                    task.status = 'completed';
+                    task.completedAt = Date.now();
+                }
             } catch (e) {
                 errorMsg = e.message || 'Unknown error';
                 success = false;
-                task.status = 'failed';
-                task.errorMsg = errorMsg;
+                // For cron tasks, a single failure doesn't stop the task
+                if (task.scheduleType === 'cron') {
+                    task.status = 'enabled';
+                    task.lastError = errorMsg;
+                    task.executionCount = (task.executionCount || 0) + 1;
+                } else {
+                    task.status = 'failed';
+                    task.completedAt = Date.now();
+                    task.errorMsg = errorMsg;
+                }
             }
 
             saveScheduledTasks();
@@ -8789,17 +8842,30 @@ ${content || 'Task completed successfully.'}
                 }
             });
 
-            // Sort today's tasks: pending first, then by next run/completed time
+            // Sort today's tasks: running first, then pending, then by trigger time (newest first)
             const sortTasks = (ids) => ids.sort((a, b) => {
                 const taskA = scheduledTasks[a];
                 const taskB = scheduledTasks[b];
-                // Pending tasks first
-                const aCompleted = taskA.status === 'completed' || taskA.status === 'failed' || taskA.status === 'skipped';
-                const bCompleted = taskB.status === 'completed' || taskB.status === 'failed' || taskB.status === 'skipped';
-                if (aCompleted !== bCompleted) return aCompleted ? 1 : -1;
-                // Then by time
-                const timeA = taskA.completedAt || taskA.nextRun || Infinity;
-                const timeB = taskB.completedAt || taskB.nextRun || Infinity;
+
+                // Running tasks first
+                if (taskA.status === 'running' && taskB.status !== 'running') return -1;
+                if (taskB.status === 'running' && taskA.status !== 'running') return 1;
+
+                // Then pending tasks
+                const aFinished = taskA.status === 'completed' || taskA.status === 'failed' || taskA.status === 'skipped';
+                const bFinished = taskB.status === 'completed' || taskB.status === 'failed' || taskB.status === 'skipped';
+                if (aFinished !== bFinished) return aFinished ? 1 : -1;
+
+                // For finished tasks: sort by trigger time (lastRun), newest first
+                if (aFinished && bFinished) {
+                    const timeA = taskA.lastRun || taskA.completedAt || 0;
+                    const timeB = taskB.lastRun || taskB.completedAt || 0;
+                    return timeB - timeA;  // Descending (newest first)
+                }
+
+                // For pending tasks: sort by next run time (soonest first)
+                const timeA = taskA.nextRun || Infinity;
+                const timeB = taskB.nextRun || Infinity;
                 return timeA - timeB;
             });
 
@@ -8853,8 +8919,14 @@ ${content || 'Task completed successfully.'}
             const skipIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="8" y1="12" x2="16" y2="12"/></svg>';
 
             // Determine icon and status
+            const runningIcon = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spinning"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>';
+
             let icon, statusClass, statusText;
-            if (task.status === 'completed') {
+            if (task.status === 'running') {
+                icon = runningIcon;
+                statusClass = 'running';
+                statusText = 'Running';
+            } else if (task.status === 'completed') {
                 icon = checkIcon;
                 statusClass = 'completed';
                 statusText = 'Completed';
@@ -8921,12 +8993,26 @@ ${content || 'Task completed successfully.'}
 
             const taskNum = task.num ? `#${task.num}` : '';
 
+            // Execution count display for cron tasks
+            let execCountHtml = '';
+            if (task.scheduleType === 'cron') {
+                const count = task.executionCount || 0;
+                if (task.maxExecutions) {
+                    // Show progress: 0/3, 1/3, 2/3, 3/3
+                    execCountHtml = `<span class="schedule-exec-count">${count}/${task.maxExecutions}</span>`;
+                } else if (count > 0) {
+                    // Show count only if executed at least once
+                    execCountHtml = `<span class="schedule-exec-count">x${count}</span>`;
+                }
+            }
+
             return `
                 <div class="panel-schedule-item ${statusClass}" data-task-id="${taskId}">
                     <div class="schedule-header">
                         <span class="schedule-num">${taskNum}</span>
                         <span class="schedule-icon">${icon}</span>
                         <span class="schedule-name">${escapeHtml(task.name)}</span>
+                        ${execCountHtml}
                         ${toggleHtml}
                     </div>
                     <div class="schedule-details">

@@ -161,9 +161,14 @@ def get_bedrock_client():
 # Default system prompt with tool usage guidelines
 DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
 
-## Communication Style
+## CRITICAL RULE - NO EMOJIS (STRICTLY ENFORCED)
 
-**IMPORTANT: Do NOT use emojis in your responses or generated files.** Keep all output clean and text-based. No emoticons, no unicode symbols like checkmarks or crosses.
+**ABSOLUTELY DO NOT use any emojis, emoticons, or unicode symbols in your responses.** This is a strict requirement:
+- NO emoji characters (😀, 📁, ✅, ❌, 🎉, ✨, 📝, etc.)
+- NO unicode symbols (✓, ✗, •, →, ★, etc.)
+- Use plain text only: "Done", "Error", "Success", "-", "->", "*"
+- This applies to ALL responses and ALL generated files
+- Violation of this rule is considered a critical error
 
 ## CRITICAL: Always Use Absolute Paths
 

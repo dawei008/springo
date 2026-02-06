@@ -955,7 +955,12 @@
             color: #9ca3af;
         }
 
-        /* Completed/Failed/Skipped item styling */
+        .schedule-status-badge.running {
+            background: rgba(245, 158, 11, 0.15);
+            color: #f59e0b;
+        }
+
+        /* Completed/Failed/Skipped/Running item styling */
         .panel-schedule-item.completed .schedule-icon {
             color: #22c55e;
         }
@@ -968,10 +973,29 @@
             color: #9ca3af;
         }
 
+        .panel-schedule-item.running .schedule-icon {
+            color: #f59e0b;
+        }
+
+        .panel-schedule-item.running .schedule-icon svg {
+            animation: spin 1.5s linear infinite;
+        }
+
         .panel-schedule-item.completed,
         .panel-schedule-item.failed,
         .panel-schedule-item.skipped {
             opacity: 0.7;
+        }
+
+        /* Execution count badge for cron tasks */
+        .schedule-exec-count {
+            font-size: 10px;
+            padding: 1px 5px;
+            border-radius: 8px;
+            background: rgba(99, 102, 241, 0.15);
+            color: #6366f1;
+            margin-left: auto;
+            margin-right: 8px;
         }
 
         /* Older Tasks Section */
@@ -1047,7 +1071,7 @@
         }
 
         .news-refresh-btn:hover {
-            background: var(--bg-secondary);
+            background: transparent;
             color: var(--accent);
         }
 

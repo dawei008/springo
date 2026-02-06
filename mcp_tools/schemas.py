@@ -370,28 +370,25 @@ tool_search(query="strands long term memory", auto_activate=true)
     },
     {
         "name": "scheduler",
-        "description": """Create and manage scheduled or delayed tasks. Use this when users want to:
-- Set reminders ("提醒我...", "remind me...")
-- Schedule recurring tasks ("每天...", "every day...")
-- Delay execution ("N分钟后...", "in N minutes...")
-- Plan future actions ("明天...", "tomorrow...")
+        "description": """Create scheduled or delayed tasks.
 
-Actions:
-- create: Create a new scheduled task
-- list: List all scheduled tasks
-- cancel: Cancel/delete a scheduled task
-- update: Update an existing task
+**CRITICAL: For repeated reminders, create exactly ONE cron task. NEVER call this tool multiple times.**
 
-Schedule types:
-- cron: Recurring schedule (e.g., "0 9 * * *" for 9am daily)
-- delay: Execute after N minutes (e.g., "30" for 30 minutes)
-- once: Execute at specific time (ISO format, e.g., "2026-02-06T15:00:00")
+When user says "每N分钟提醒我X，共Y次":
+- Call scheduler ONCE with: schedule_type="cron", schedule_value="*/N * * * *", max_executions=Y
+- DO NOT create Y separate tasks!
 
-Examples:
-- "每天早上9点" → schedule_type="cron", schedule_value="0 9 * * *"
-- "每周一" → schedule_type="cron", schedule_value="0 9 * * 1"
-- "30分钟后" → schedule_type="delay", schedule_value="30"
-- "明天下午3点" → schedule_type="once", schedule_value="2026-02-06T15:00:00" """,
+Cron format: "minute hour day month weekday"
+- "*/2 * * * *" = every 2 minutes
+- "*/30 * * * *" = every 30 minutes
+- "0 * * * *" = every hour
+- "0 9 * * *" = daily 9am
+
+**Required examples:**
+- "每2分钟提醒喝水，共3次" → ONE call: schedule_type="cron", schedule_value="*/2 * * * *", max_executions=3
+- "每小时提醒休息，到18点" → ONE call: schedule_type="cron", schedule_value="0 * * * *", end_date="2026-02-06T18:00:00"
+- "30分钟后提醒" → schedule_type="delay", schedule_value="30"
+- "明天3点" → schedule_type="once", schedule_value="2026-02-07T15:00:00" """,
         "input_schema": {
             "type": "object",
             "properties": {
@@ -435,6 +432,18 @@ Examples:
                     "type": "boolean",
                     "description": "Create new session for task execution",
                     "default": True
+                },
+                "working_directory": {
+                    "type": "string",
+                    "description": "Working directory for task execution. If not specified, inherits from current session."
+                },
+                "max_executions": {
+                    "type": "integer",
+                    "description": "Maximum number of executions for cron tasks. Task stops after reaching this count."
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "End date for cron tasks (ISO format, e.g., '2026-02-10T18:00:00'). Task stops after this date."
                 }
             },
             "required": ["action"]
