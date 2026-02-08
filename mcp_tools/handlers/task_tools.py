@@ -156,11 +156,11 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
     3. Activate the best matching tool
     """
     try:
-        from tool_registry import get_tool_registry
-        from mcp_client import get_mcp_manager
+        from api.services.tool_registry import get_tool_registry
+        from api.services.mcp_client import get_external_mcp_manager
 
         registry = get_tool_registry()
-        manager = get_mcp_manager()
+        manager = get_external_mcp_manager()
 
         def activate_tool_with_server(tool_name: str) -> Dict[str, Any]:
             """Activate a tool by starting its server if needed"""

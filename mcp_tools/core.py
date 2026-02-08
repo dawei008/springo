@@ -102,11 +102,11 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
     # Check if it's an MCP tool (format: server__toolname)
     if "__" in tool_name:
         try:
-            from tool_registry import get_tool_registry
-            from mcp_client import call_mcp_tool, get_mcp_manager
+            from api.services.tool_registry import get_tool_registry
+            from api.services.mcp_client import call_mcp_tool, get_external_mcp_manager
 
             registry = get_tool_registry()
-            manager = get_mcp_manager()
+            manager = get_external_mcp_manager()
 
             # Extract server name from tool name
             server_name = tool_name.split("__")[0]
@@ -208,11 +208,11 @@ Call with skill_name and optionally user_request. The skill will provide detaile
 
     # Add MCP tools (lazy loading pattern with caching)
     try:
-        from tool_registry import get_tool_registry
-        from mcp_client import get_mcp_manager
+        from api.services.tool_registry import get_tool_registry
+        from api.services.mcp_client import get_external_mcp_manager
 
         registry = get_tool_registry()
-        manager = get_mcp_manager()
+        manager = get_external_mcp_manager()
 
         # Get active tools (already loaded from running servers)
         active_mcp_tools = registry.get_active_tools()
@@ -232,17 +232,19 @@ Call with skill_name and optionally user_request. The skill will provide detaile
         # Get cached tools from previous server discoveries
         cached_tools = manager.get_cached_tools()
 
-        for server_name, server_tools in cached_tools.items():
+        for tool_def in cached_tools:
+            tool_name = tool_def.get('name', '')
+            # Extract server name from tool name (format: server__toolname)
+            server_name = tool_name.split('__')[0] if '__' in tool_name else ''
             if server_name in enabled_server_names:
-                for tool_def in server_tools:
-                    # Don't add if already active (server is running and tool is loaded)
-                    if tool_def['name'] not in active_tool_names:
-                        # Add note that this tool will auto-activate
-                        placeholder_tool = copy.deepcopy(tool_def)
-                        if "(Auto-loads" not in placeholder_tool.get('description', ''):
-                            placeholder_tool['description'] = placeholder_tool.get('description', '') + " (Auto-loads on first use)"
-                        tools.append(placeholder_tool)
-                        active_tool_names.add(tool_def['name'])  # Prevent duplicates
+                # Don't add if already active (server is running and tool is loaded)
+                if tool_name not in active_tool_names:
+                    # Add note that this tool will auto-activate
+                    placeholder_tool = copy.deepcopy(tool_def)
+                    if "(Auto-loads" not in placeholder_tool.get('description', ''):
+                        placeholder_tool['description'] = placeholder_tool.get('description', '') + " (Auto-loads on first use)"
+                    tools.append(placeholder_tool)
+                    active_tool_names.add(tool_name)  # Prevent duplicates
 
         # Also list all available servers in tool_search for discovery of other tools
         deferred = registry.get_deferred_tools()
@@ -261,7 +263,7 @@ Call with skill_name and optionally user_request. The skill will provide detaile
                 desc = s.get('description', '')
                 running = s.get('running', False)
                 tools_count = s.get('tools', 0)
-                cached_count = len(cached_tools.get(name, []))
+                cached_count = sum(1 for t in cached_tools if t.get('name', '').startswith(name + '__'))
                 if running:
                     status = f"({tools_count} tools)"
                 elif cached_count > 0:
