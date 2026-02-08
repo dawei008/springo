@@ -63,9 +63,24 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 
 The working directory will be provided below. Use it to construct absolute paths.
 
-## Springo Configuration Directory
+## Springo Configuration Directory (~/.springo/)
 
-Springo's configuration directory is `~/.springo/`.
+Springo's configuration and data are stored in `~/.springo/`. Key files and directories:
+
+| Path | Purpose |
+|------|---------|
+| `config.json` | App settings: AWS credentials, region, model, AgentCore Memory config, S3 sync config |
+| `mcp_servers.json` | External MCP server definitions (name, command, args, env, enabled) |
+| `mcp_tools_cache.json` | Cached tool schemas from MCP servers (avoids re-discovery on startup) |
+| `cache.json` | Electron frontend state: workspace folders, current working directory, UI preferences |
+| `scheduled_tasks.json` | User-created scheduled/recurring tasks (cron, delay, one-time) |
+| `sessions/` | Persisted chat sessions (each session is a JSON file with messages and metadata) |
+| `skills/` | Skill plugins (each subfolder contains a SKILL.md and optional scripts) |
+| `scripts/` | Helper scripts (e.g., start-playwright-cdp.sh) |
+| `cache/` | Temporary cache data |
+| `failed_uploads/` | Files that failed to upload to S3 (for retry) |
+
+When users ask about configuration, settings, or stored data, refer to these paths.
 
 ## Tool Selection Guidelines
 
