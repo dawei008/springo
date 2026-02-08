@@ -268,8 +268,11 @@
                                 </svg>
                             </button>
                         </div>
-                        <div class="news-topics-input">
-                            <input type="text" id="news-custom-topics" placeholder="e.g. AWS, AI Agent, Kubernetes..." spellcheck="false">
+                        <div class="news-interests" id="news-interests">
+                            <div class="news-interests-label">Your Interests</div>
+                            <div class="news-interests-tags" id="news-interests-tags">
+                                <span class="news-interest-hint">Say "我关注..." in chat to add interests</span>
+                            </div>
                         </div>
                         <div class="news-updated" id="news-updated"></div>
                         <div id="panel-news-list">
@@ -284,12 +287,32 @@
                     <div class="right-panel-section" id="panel-terminal">
                         <div class="terminal-panel">
                             <div class="terminal-panel-header">
+                                <div class="terminal-mode-tabs">
+                                    <button class="terminal-mode-tab active" data-mode="local" onclick="switchTerminalMode('local')">Local</button>
+                                    <button class="terminal-mode-tab" data-mode="ssh" onclick="switchTerminalMode('ssh')">SSH</button>
+                                </div>
                                 <div class="terminal-cwd" id="terminal-cwd">~/</div>
                                 <div class="terminal-panel-actions">
                                     <button class="terminal-panel-btn" onclick="clearTerminal()" title="Clear">
                                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
                                     </button>
                                 </div>
+                            </div>
+                            <div class="ssh-connect-form" id="ssh-connect-form" style="display:none">
+                                <div class="ssh-form-row">
+                                    <input type="text" id="ssh-host" class="ssh-input" placeholder="Host (e.g. ec2-xx.compute.amazonaws.com)">
+                                    <input type="number" id="ssh-port" class="ssh-input ssh-port-input" value="22" min="1" max="65535">
+                                </div>
+                                <div class="ssh-form-row">
+                                    <input type="text" id="ssh-username" class="ssh-input" placeholder="Username (e.g. ec2-user)">
+                                    <input type="text" id="ssh-key-path" class="ssh-input" placeholder="Key path (e.g. ~/.ssh/id_rsa)">
+                                </div>
+                                <div class="ssh-form-row">
+                                    <input type="password" id="ssh-password" class="ssh-input" placeholder="Password (if no key)">
+                                    <button class="ssh-connect-btn" id="ssh-connect-btn" onclick="sshConnect()">Connect</button>
+                                </div>
+                                <div class="ssh-status" id="ssh-status"></div>
+                                <div class="ssh-connections" id="ssh-connections"></div>
                             </div>
                             <div class="terminal-panel-output" id="terminal-panel-output"></div>
                             <div class="terminal-panel-input-row">

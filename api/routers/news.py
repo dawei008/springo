@@ -146,6 +146,14 @@ async def _execute_news_agent_task(model: str = None, custom_topics: str = None)
             prompt += f"\n\n## IMPORTANT: User-Specified Topics\nThe user has explicitly requested news about: {custom_topics}\nThese topics have HIGHEST PRIORITY. Always include them in your search queries, in addition to any topics from memory."
             logger.info(f"News agent with custom topics: {custom_topics}")
 
+        # Add user interests from saved preferences
+        from ..services.interests import get_interests
+        user_interests = get_interests()
+        if user_interests:
+            interest_str = ", ".join(user_interests)
+            prompt += f"\n\n## User's Saved Interests (IMPORTANT)\nThe user has explicitly saved these interests: {interest_str}\nThese should be included as search topics alongside any topics from memory."
+            logger.info(f"News agent with saved interests: {interest_str}")
+
         logger.info(f"News agent starting via internal API (model={model})...")
 
         request_body = {
@@ -553,3 +561,32 @@ async def fetch_news(
             "news": [],
             "topics": []
         }
+
+
+# ============ Interest Endpoints ============
+
+@router.get("/news/interests")
+async def get_interests_endpoint():
+    """Get user interests."""
+    from ..services.interests import get_interests
+    interests = get_interests()
+    return {"success": True, "interests": interests}
+
+
+@router.post("/news/interests")
+async def add_interests_endpoint(body: dict):
+    """Add user interests."""
+    from ..services.interests import add_interests
+    new_interests = body.get("interests", [])
+    if not new_interests:
+        raise HTTPException(status_code=400, detail="No interests provided")
+    interests = add_interests(new_interests)
+    return {"success": True, "interests": interests}
+
+
+@router.delete("/news/interests/{interest}")
+async def remove_interest_endpoint(interest: str):
+    """Remove a user interest."""
+    from ..services.interests import remove_interest
+    interests = remove_interest(interest)
+    return {"success": True, "interests": interests}

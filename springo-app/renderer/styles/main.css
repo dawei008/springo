@@ -1079,29 +1079,59 @@
             animation: spin 1s linear infinite;
         }
 
-        .news-topics-input {
+        .news-interests {
             padding: 8px 12px;
             border-bottom: 1px solid var(--border);
         }
 
-        .news-topics-input input {
-            width: 100%;
-            padding: 6px 10px;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            font-size: 12px;
-            color: var(--text-primary);
-            background: var(--bg-secondary);
-            outline: none;
-            box-sizing: border-box;
-        }
-
-        .news-topics-input input:focus {
-            border-color: var(--accent);
-        }
-
-        .news-topics-input input::placeholder {
+        .news-interests-label {
+            font-size: 10px;
             color: var(--text-tertiary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+
+        .news-interests-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            min-height: 24px;
+            align-items: center;
+        }
+
+        .news-interest-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            background: var(--accent-light, rgba(191, 90, 60, 0.1));
+            color: var(--accent);
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 500;
+        }
+
+        .news-interest-remove {
+            border: none;
+            background: none;
+            color: var(--accent);
+            cursor: pointer;
+            font-size: 14px;
+            padding: 0 2px;
+            opacity: 0.6;
+            line-height: 1;
+        }
+
+        .news-interest-remove:hover {
+            opacity: 1;
+        }
+
+        .news-interest-hint {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            font-style: italic;
         }
 
         .news-updated {
@@ -5339,4 +5369,239 @@
 
 .terminal-panel-output::-webkit-scrollbar-thumb:hover {
     background: #3b4261;
+}
+
+/* ============ Terminal SSH Styles ============ */
+
+.terminal-mode-tabs {
+    display: flex;
+    gap: 2px;
+    background: #13141c;
+    border-radius: 4px;
+    padding: 2px;
+}
+
+.terminal-mode-tab {
+    padding: 3px 10px;
+    border: none;
+    background: transparent;
+    color: #565f89;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.15s;
+}
+
+.terminal-mode-tab:hover {
+    color: #c0caf5;
+}
+
+.terminal-mode-tab.active {
+    background: #292e42;
+    color: #7aa2f7;
+}
+
+.ssh-connect-form {
+    padding: 8px 12px;
+    background: #16161e;
+    border-bottom: 1px solid #292e42;
+}
+
+.ssh-form-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+.ssh-form-row:last-of-type {
+    margin-bottom: 4px;
+}
+
+.ssh-input {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid #292e42;
+    border-radius: 4px;
+    background: #1a1b26;
+    color: #c0caf5;
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
+    outline: none;
+}
+
+.ssh-input:focus {
+    border-color: #7aa2f7;
+}
+
+.ssh-input::placeholder {
+    color: #565f89;
+}
+
+.ssh-port-input {
+    max-width: 60px;
+    flex: 0;
+}
+
+.ssh-connect-btn {
+    padding: 5px 14px;
+    border: none;
+    border-radius: 4px;
+    background: #7aa2f7;
+    color: #1a1b26;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s;
+}
+
+.ssh-connect-btn:hover {
+    background: #89b4fa;
+}
+
+.ssh-status {
+    font-size: 10px;
+    padding: 2px 0;
+    min-height: 14px;
+}
+
+.ssh-status.connected {
+    color: #9ece6a;
+}
+
+.ssh-status.connecting {
+    color: #e0af68;
+}
+
+.ssh-status.error {
+    color: #f7768e;
+}
+
+.ssh-connections {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 4px;
+}
+
+.ssh-connection-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    background: #292e42;
+    border-radius: 3px;
+    font-size: 10px;
+    color: #565f89;
+    border: 1px solid transparent;
+}
+
+.ssh-connection-item.active {
+    border-color: #7aa2f7;
+    color: #7aa2f7;
+}
+
+.ssh-conn-name {
+    cursor: pointer;
+}
+
+.ssh-conn-name:hover {
+    color: #c0caf5;
+}
+
+.ssh-disconnect-btn {
+    border: none;
+    background: none;
+    color: #565f89;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 2px;
+}
+
+.ssh-disconnect-btn:hover {
+    color: #f7768e;
+}
+
+/* ============ Inline Tasks Collapse ============ */
+
+.inline-tasks-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.inline-tasks-chevron {
+    font-size: 12px;
+    transition: transform 0.2s ease;
+    display: inline-block;
+    color: var(--text-tertiary);
+}
+
+.inline-tasks-chevron.collapsed {
+    transform: rotate(-90deg);
+}
+
+.inline-tasks.collapsed .inline-tasks-list {
+    display: none;
+}
+
+.inline-tasks-progress.all-done {
+    color: var(--success, #27ae60);
+    font-weight: 600;
+}
+
+.inline-tasks.collapsed {
+    opacity: 0.8;
+}
+
+.inline-tasks.collapsed .inline-tasks-header {
+    margin-bottom: 0;
+}
+
+/* ============ Agent Card Expandable Detail ============ */
+
+.team-agent-card {
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.team-agent-card:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.team-agent-card.expanded {
+    grid-column: 1 / -1;
+}
+
+.team-agent-detail {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.agent-detail-content {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+}
+
+.agent-detail-content code {
+    background: var(--bg-tertiary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
+    font-size: 11px;
+}
+
+.agent-detail-content strong {
+    color: var(--text-primary);
+    font-weight: 600;
 }

@@ -3591,7 +3591,7 @@
             const agentCards = agents.map(a => {
                 const cfg = TEAM_ROLE_CONFIG[a.role] || TEAM_ROLE_CONFIG.explorer;
                 return `
-                    <div class="team-agent-card" data-agent-id="${a.agent_id}" data-team-id="${teamId}" style="--agent-color: ${cfg.color}">
+                    <div class="team-agent-card" data-agent-id="${a.agent_id}" data-team-id="${teamId}" style="--agent-color: ${cfg.color}; cursor:pointer" onclick="toggleAgentDetail(this, '${teamId}', '${a.agent_id}')">
                         <div class="team-agent-header">
                             <svg class="team-agent-icon" fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
@@ -3726,6 +3726,12 @@
                     findingsEl.classList.add(status === 'error' ? 'error' : 'success');
                 }
             }
+
+            // Update detail view if expanded
+            const detailEl = card.querySelector('.agent-detail-content');
+            if (detailEl && content) {
+                detailEl.innerHTML = formatTeamAgentContent(content);
+            }
             scrollToBottom();
         }
 
@@ -3769,6 +3775,35 @@
                 panel.classList.toggle('collapsed');
             }
         };
+
+        // Toggle agent card detail view
+        window.toggleAgentDetail = function(cardEl, teamId, agentId) {
+            // Toggle expanded class
+            const isExpanded = cardEl.classList.toggle('expanded');
+
+            // Find or create detail section
+            let detail = cardEl.querySelector('.team-agent-detail');
+            if (!detail) {
+                detail = document.createElement('div');
+                detail.className = 'team-agent-detail';
+                detail.innerHTML = '<div class="agent-detail-content">Waiting for output...</div>';
+                cardEl.appendChild(detail);
+            }
+
+            detail.style.display = isExpanded ? '' : 'none';
+        };
+
+        // Format agent detail content with basic markdown
+        function formatTeamAgentContent(content) {
+            if (!content) return '<span class="ansi-dim">No output yet...</span>';
+            // Convert markdown-like content to HTML
+            let html = escapeHtml(content);
+            // Basic markdown: bold, code blocks, line breaks
+            html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+            html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+            html = html.replace(/\n/g, '<br>');
+            return html;
+        }
 
         // Helper: escape HTML to prevent XSS
         function escapeHtml(text) {
@@ -4187,6 +4222,9 @@
             if (textContent) {
                 messageContent.push({ type: 'text', text: textContent });
             }
+
+            // Detect and save interests from user message
+            detectAndSaveInterests(content || textContent);
 
             // Add user message to THIS conversation's messages
             const userMsg = {
@@ -6676,28 +6714,105 @@ Be concise and helpful in your responses.`;
         const NEWS_REFRESH_INTERVAL = 60 * 60 * 1000; // 1 hour
 
         function initNewsPanel() {
-            // Load saved custom topics
-            const topicsInput = document.getElementById('news-custom-topics');
-            if (topicsInput) {
-                topicsInput.value = localStorage.getItem('newsCustomTopics') || '';
-                // Save on blur and refresh on Enter
-                topicsInput.addEventListener('blur', () => {
-                    localStorage.setItem('newsCustomTopics', topicsInput.value);
-                });
-                topicsInput.addEventListener('keydown', (e) => {
-                    if (e.key === 'Enter') {
-                        localStorage.setItem('newsCustomTopics', topicsInput.value);
-                        refreshNews(true);
-                        topicsInput.blur();
-                    }
-                });
-            }
+            // Load user interests
+            loadUserInterests();
 
             // Load news on startup
             refreshNews();
 
             // Set up hourly auto-refresh
             newsRefreshInterval = setInterval(refreshNews, NEWS_REFRESH_INTERVAL);
+        }
+
+        async function loadUserInterests() {
+            try {
+                const res = await fetch(BASE_URL + '/v1/news/interests');
+                const data = await res.json();
+                if (data.success) {
+                    renderInterestTags(data.interests);
+                }
+            } catch (e) {
+                console.error('Failed to load interests:', e);
+            }
+        }
+
+        function renderInterestTags(interests) {
+            const container = document.getElementById('news-interests-tags');
+            if (!container) return;
+
+            if (!interests || interests.length === 0) {
+                container.innerHTML = '<span class="news-interest-hint">Say "\u6211\u5173\u6CE8..." in chat to add</span>';
+                return;
+            }
+
+            container.innerHTML = interests.map(interest =>
+                `<span class="news-interest-tag">
+                    ${escapeHTML(interest)}
+                    <button class="news-interest-remove" onclick="removeInterest('${escapeHTML(interest).replace(/'/g, "\\'")}')" title="Remove">\u00d7</button>
+                </span>`
+            ).join('');
+        }
+
+        async function removeInterest(interest) {
+            try {
+                await fetch(BASE_URL + '/v1/news/interests/' + encodeURIComponent(interest), { method: 'DELETE' });
+                loadUserInterests();
+                // Refresh news with updated interests
+                refreshNews(true);
+            } catch (e) {
+                console.error('Failed to remove interest:', e);
+            }
+        }
+
+        async function addUserInterests(interests) {
+            try {
+                const res = await fetch(BASE_URL + '/v1/news/interests', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ interests })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    renderInterestTags(data.interests);
+                    // Refresh news with new interests
+                    refreshNews(true);
+                }
+            } catch (e) {
+                console.error('Failed to add interests:', e);
+            }
+        }
+
+        function detectAndSaveInterests(message) {
+            if (!message) return;
+
+            const patterns = [
+                /\u6211\u5173\u6CE8(.+)/,
+                /\u6211\u60F3\u5173\u6CE8(.+)/,
+                /\u5173\u6CE8\u4E00\u4E0B(.+)/,
+                /\u6211\u5BF9(.+?)(?:\u611F\u5174\u8DA3|\u5F88\u611F\u5174\u8DA3)/,
+                /\u5E2E\u6211\u5173\u6CE8(.+)/,
+                /\u6211\u60F3\u4E86\u89E3(.+)/,
+                /i'?m interested in (.+)/i,
+                /i want to follow (.+)/i,
+                /keep me updated on (.+)/i,
+                /track news about (.+)/i,
+            ];
+
+            for (const pattern of patterns) {
+                const match = message.match(pattern);
+                if (match) {
+                    let topicStr = match[1].trim();
+                    // Remove trailing punctuation and connectors
+                    topicStr = topicStr.replace(/[\u3002.!\uFF01?\uFF1F\u7684\u76F8\u5173\u65B0\u95FB\u52A8\u6001\u65B9\u9762\u5185\u5BB9]+$/g, '');
+                    // Split by delimiters
+                    const topics = topicStr.split(/[,\uFF0C\u3001;\uFF1B\u548C\u4E0E\u53CA&\s]+/).filter(t => t.trim().length > 1).map(t => t.trim());
+                    if (topics.length > 0) {
+                        addUserInterests(topics);
+                        console.log('Detected interests:', topics);
+                    }
+                    break;
+                }
+            }
         }
 
         let newsPollingTimer = null;
@@ -6727,7 +6842,7 @@ Be concise and helpful in your responses.`;
 
             try {
                 const m = encodeURIComponent(settings.model || 'claude-sonnet-4-5-20250929');
-                const customTopics = (document.getElementById('news-custom-topics')?.value || '').trim();
+                const customTopics = '';  // Now handled server-side via interests
                 let url = force ? `${BASE_URL}/v1/news/fetch?force=true&model=${m}` : `${BASE_URL}/v1/news/fetch?model=${m}`;
                 if (customTopics) url += `&topics=${encodeURIComponent(customTopics)}`;
                 const response = await fetch(url);
@@ -7608,6 +7723,7 @@ Be concise and helpful in your responses.`;
 
             // Generate tasks HTML
             const completed = todos.filter(t => t.status === 'completed').length;
+            const allDone = completed === todos.length && todos.length > 0;
             const tasksHtml = todos.map(todo => {
                 const icon = todo.status === 'completed' ? '✅' :
                             todo.status === 'in_progress' ? '🔄' : '○';
@@ -7621,9 +7737,12 @@ Be concise and helpful in your responses.`;
             }).join('');
 
             const fullHtml = `
-                <div class="inline-tasks-header">
-                    <h4>📋 Tasks</h4>
-                    <span class="inline-tasks-progress">${completed}/${todos.length}</span>
+                <div class="inline-tasks-header" onclick="toggleInlineTasks(this.parentElement)" style="cursor:pointer">
+                    <div style="display:flex;align-items:center;gap:6px">
+                        <span class="inline-tasks-chevron ${allDone ? 'collapsed' : ''}">▾</span>
+                        <h4>📋 Tasks</h4>
+                    </div>
+                    <span class="inline-tasks-progress ${allDone ? 'all-done' : ''}">${completed}/${todos.length}${allDone ? ' ✓' : ''}</span>
                 </div>
                 <div class="inline-tasks-list">${tasksHtml}</div>
             `;
@@ -7638,6 +7757,28 @@ Be concise and helpful in your responses.`;
 
             inlineTasks.innerHTML = fullHtml;
             scrollToBottom();
+
+            // Auto-collapse after all tasks complete
+            if (allDone) {
+                setTimeout(() => {
+                    const container = document.querySelector('.inline-tasks');
+                    if (container && !container.classList.contains('manually-expanded')) {
+                        container.classList.add('collapsed');
+                        const chevron = container.querySelector('.inline-tasks-chevron');
+                        if (chevron) chevron.classList.add('collapsed');
+                    }
+                }, 1500);
+            }
+        }
+
+        function toggleInlineTasks(container) {
+            if (!container) return;
+            const isCollapsed = container.classList.toggle('collapsed');
+            container.classList.toggle('manually-expanded', !isCollapsed);
+            const chevron = container.querySelector('.inline-tasks-chevron');
+            if (chevron) {
+                chevron.classList.toggle('collapsed', isCollapsed);
+            }
         }
 
         function hideTodoPanel() {
@@ -10073,6 +10214,9 @@ ${content || 'Task completed successfully.'}
                         timestamp: Date.now(),
                         _teamMode: true
                     });
+                    if (currentConversationId === thisConvId) {
+                        renderMessages();
+                    }
                 }
 
                 updateConversationStatus(thisConvId, 'completed');
@@ -10096,6 +10240,10 @@ ${content || 'Task completed successfully.'}
         let terminalCurrentPid = null;
         let terminalHistory = [];
         let terminalHistoryIndex = -1;
+
+        // SSH state
+        let terminalMode = 'local';  // 'local' or 'ssh'
+        let currentSSHConnectionId = null;
 
         function toggleTerminalPanel() {
             const panel = document.getElementById('right-panel');
@@ -10134,6 +10282,11 @@ ${content || 'Task completed successfully.'}
             const input = document.getElementById('terminal-input');
             const command = input.value.trim();
             if (!command) return;
+
+            // Route to SSH if in SSH mode
+            if (terminalMode === 'ssh') {
+                return executeSSHCommand(command);
+            }
 
             // Add to history
             terminalHistory.push(command);
@@ -10271,4 +10424,209 @@ ${content || 'Task completed successfully.'}
                 toggleTerminalPanel();
             }
         });
+
+        // ============ Terminal SSH Mode ============
+
+        function switchTerminalMode(mode) {
+            terminalMode = mode;
+
+            // Update tabs
+            document.querySelectorAll('.terminal-mode-tab').forEach(tab => {
+                tab.classList.toggle('active', tab.dataset.mode === mode);
+            });
+
+            // Show/hide SSH form
+            const sshForm = document.getElementById('ssh-connect-form');
+            if (sshForm) {
+                sshForm.style.display = mode === 'ssh' ? '' : 'none';
+            }
+
+            // Update CWD display
+            const cwdEl = document.getElementById('terminal-cwd');
+            if (mode === 'ssh' && currentSSHConnectionId) {
+                const info = cwdEl.dataset.sshName || 'SSH';
+                cwdEl.textContent = info;
+            } else if (mode === 'local') {
+                cwdEl.textContent = '~/';
+            }
+
+            // Update prompt
+            const prompt = document.querySelector('.terminal-prompt');
+            if (prompt) {
+                prompt.textContent = mode === 'ssh' ? '>' : '$';
+            }
+
+            document.getElementById('terminal-input')?.focus();
+        }
+
+        async function sshConnect() {
+            const host = document.getElementById('ssh-host')?.value?.trim();
+            const port = parseInt(document.getElementById('ssh-port')?.value) || 22;
+            const username = document.getElementById('ssh-username')?.value?.trim();
+            const password = document.getElementById('ssh-password')?.value;
+            const keyPath = document.getElementById('ssh-key-path')?.value?.trim();
+
+            if (!host || !username) {
+                updateSSHStatus('Host and username are required', 'error');
+                return;
+            }
+
+            updateSSHStatus('Connecting...', 'connecting');
+
+            try {
+                const body = { host, port, username };
+                if (keyPath) body.key_path = keyPath;
+                if (password) body.password = password;
+
+                const res = await fetch(BASE_URL + '/v1/terminal/ssh/connect', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.detail || 'Connection failed');
+                }
+
+                currentSSHConnectionId = data.connection_id;
+                updateSSHStatus(`Connected: ${data.name}`, 'connected');
+
+                // Update CWD to show SSH host
+                const cwdEl = document.getElementById('terminal-cwd');
+                cwdEl.textContent = data.name;
+                cwdEl.dataset.sshName = data.name;
+
+                // Add to connections list
+                refreshSSHConnections();
+
+                // Show success in terminal output
+                appendTerminalOutput(`<span class="ansi-green">Connected to ${escapeHtml(data.name)}</span>`, 'terminal-cmd-line');
+
+                document.getElementById('terminal-input')?.focus();
+
+            } catch (e) {
+                updateSSHStatus(e.message, 'error');
+            }
+        }
+
+        function updateSSHStatus(message, type) {
+            const el = document.getElementById('ssh-status');
+            if (!el) return;
+            el.textContent = message;
+            el.className = 'ssh-status ' + (type || '');
+        }
+
+        async function refreshSSHConnections() {
+            try {
+                const res = await fetch(BASE_URL + '/v1/terminal/ssh/connections');
+                const data = await res.json();
+
+                const container = document.getElementById('ssh-connections');
+                if (!container || !data.connections?.length) return;
+
+                container.innerHTML = data.connections.map(c => `
+                    <div class="ssh-connection-item ${c.connection_id === currentSSHConnectionId ? 'active' : ''}">
+                        <span class="ssh-conn-name" onclick="switchSSHConnection('${c.connection_id}', '${escapeHtml(c.name)}')">${escapeHtml(c.name)}</span>
+                        <button class="ssh-disconnect-btn" onclick="sshDisconnect('${c.connection_id}')" title="Disconnect">&times;</button>
+                    </div>
+                `).join('');
+            } catch (e) {
+                console.error('Failed to refresh SSH connections:', e);
+            }
+        }
+
+        function switchSSHConnection(connectionId, name) {
+            currentSSHConnectionId = connectionId;
+            const cwdEl = document.getElementById('terminal-cwd');
+            cwdEl.textContent = name;
+            cwdEl.dataset.sshName = name;
+            refreshSSHConnections();
+            appendTerminalOutput(`<span class="ansi-cyan">Switched to ${escapeHtml(name)}</span>`, 'terminal-cmd-line');
+        }
+
+        async function sshDisconnect(connectionId) {
+            try {
+                await fetch(BASE_URL + '/v1/terminal/ssh/disconnect/' + connectionId, { method: 'POST' });
+
+                if (connectionId === currentSSHConnectionId) {
+                    currentSSHConnectionId = null;
+                    updateSSHStatus('Disconnected', '');
+                    document.getElementById('terminal-cwd').textContent = 'SSH';
+                }
+
+                refreshSSHConnections();
+                appendTerminalOutput(`<span class="ansi-yellow">Disconnected</span>`, 'terminal-cmd-line');
+            } catch (e) {
+                console.error('Disconnect error:', e);
+            }
+        }
+
+        async function executeSSHCommand(command) {
+            if (!currentSSHConnectionId) {
+                appendTerminalOutput(`<span class="ansi-red">No SSH connection active. Please connect first.</span>`, 'terminal-error-line');
+                return;
+            }
+
+            // Add to history
+            terminalHistory.push(command);
+            terminalHistoryIndex = terminalHistory.length;
+
+            // Show command in output
+            appendTerminalOutput(`<span class="ansi-cyan">> ${escapeHtml(command)}</span>`, 'terminal-cmd-line');
+
+            // Clear input
+            document.getElementById('terminal-input').value = '';
+
+            // Show stop button
+            document.getElementById('terminal-run-btn').style.display = 'none';
+            document.getElementById('terminal-stop-btn').style.display = '';
+
+            try {
+                const response = await fetch(BASE_URL + '/v1/terminal/ssh/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        connection_id: currentSSHConnectionId,
+                        command: command,
+                        timeout: 300
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventType = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6);
+                            if (dataStr === '[DONE]') continue;
+                            try {
+                                const data = JSON.parse(dataStr);
+                                handleTerminalEvent(eventType, data);
+                            } catch (e) {}
+                            eventType = null;
+                        }
+                    }
+                }
+            } catch (e) {
+                appendTerminalOutput(`<span class="ansi-red">SSH Error: ${escapeHtml(e.message)}</span>`, 'terminal-error-line');
+            } finally {
+                document.getElementById('terminal-run-btn').style.display = '';
+                document.getElementById('terminal-stop-btn').style.display = 'none';
+                document.getElementById('terminal-input')?.focus();
+            }
+        }
 
