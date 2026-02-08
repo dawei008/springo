@@ -13,10 +13,12 @@ from . import config
 from . import memory
 from . import skills
 from . import tool_results
+from . import terminal
+from . import teams
 
 __all__ = [
     "messages",
-    "tools", 
+    "tools",
     "sessions",
     "context",
     "news",
@@ -25,5 +27,7 @@ __all__ = [
     "config",
     "memory",
     "skills",
-    "tool_results"
+    "tool_results",
+    "terminal",
+    "teams"
 ]

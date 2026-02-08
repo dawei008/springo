@@ -55,8 +55,9 @@ def task(description: str, prompt: str, agent_type: str = "general", run_in_back
     }
 
 
-def delegate_task(task_description: str, target_session: str = None,
-                  priority: str = "normal", context: Dict[str, Any] = None) -> Dict[str, Any]:
+def delegate_task(task: str, session_number: int = None,
+                  create_new_session: bool = False, working_directory: str = None,
+                  session_name: str = None, wait_for_result: bool = False) -> Dict[str, Any]:
     """
     Delegate a task to another session or create a new delegation.
 
@@ -67,22 +68,21 @@ def delegate_task(task_description: str, target_session: str = None,
 
     delegation = {
         "id": delegation_id,
-        "task": task_description,
-        "priority": priority,
-        "target_session": target_session,
-        "context": context or {},
+        "task": task,
+        "session_number": session_number,
+        "create_new_session": create_new_session,
+        "working_directory": working_directory,
+        "session_name": session_name,
+        "wait_for_result": wait_for_result,
         "status": "pending",
         "created_at": time.time()
     }
-
-    # In a full implementation, this would be stored in a shared database
-    # and made available to other sessions
 
     return {
         "success": True,
         "delegation_id": delegation_id,
         "delegation": delegation,
-        "message": f"Task delegated with ID '{delegation_id}'.",
+        "message": f"Task delegated with ID '{delegation_id}'." + (f" Session: {session_name}" if session_name else ""),
         "ui_update": "delegation_created"
     }
 

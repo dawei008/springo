@@ -5,6 +5,10 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:debug": "playwright test --debug",
+    "test:ui": "playwright test --ui",
     "build": "electron-builder --mac",
     "build:dmg": "electron-builder --mac dmg",
     "build:zip": "electron-builder --mac zip"
@@ -12,6 +16,7 @@
   "author": "Springo",
   "license": "MIT",
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "electron": "^28.3.3",
     "electron-builder": "^24.9.1",
     "puppeteer-core": "^24.35.0"

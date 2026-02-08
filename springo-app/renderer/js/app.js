@@ -490,6 +490,8 @@
         let activeSkill = null;  // Currently active skill for the conversation
         let showSkillPicker = false;
 
+        let teamModeEnabled = false;
+
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
             // Global link click handler - open external URLs in default browser (Chrome new tab)
@@ -3240,6 +3242,83 @@
                             }
                             break;
 
+                        // === Agent Team SSE Events ===
+                        case 'team_spawned':
+                            console.log(`[${convId}] Team spawned: ${data.team_id} with ${data.agents?.length} agents`);
+                            if (currentConversationId === convId) {
+                                renderTeamPanel(data.team_id, data.agents, data.user_request);
+                            }
+                            break;
+
+                        case 'team_planning':
+                            console.log(`[${convId}] Team planning: ${data.team_id}`);
+                            if (currentConversationId === convId) {
+                                updateTeamStatus(data.team_id, 'planning', 'Orchestrator decomposing task...');
+                            }
+                            break;
+
+                        case 'team_task_board':
+                            console.log(`[${convId}] Team task board: ${data.tasks?.length} tasks`);
+                            if (currentConversationId === convId) {
+                                renderTeamTaskBoard(data.team_id, data.tasks);
+                                updateTeamStatus(data.team_id, 'executing', 'Agents working...');
+                            }
+                            break;
+
+                        case 'team_agent_start':
+                            console.log(`[${convId}] Agent started: ${data.role} -> ${data.task_title}`);
+                            if (currentConversationId === convId) {
+                                updateTeamAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
+                            }
+                            break;
+
+                        case 'team_agent_progress':
+                            if (currentConversationId === convId) {
+                                updateTeamAgent(data.team_id, data.agent_id, data.role, data.status, '', data.preview);
+                            }
+                            break;
+
+                        case 'team_agent_complete':
+                            console.log(`[${convId}] Agent complete: ${data.role} - ${data.task_title}`);
+                            if (currentConversationId === convId) {
+                                updateTeamAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
+                                updateTeamTaskStatus(data.team_id, data.agent_id, 'complete');
+                            }
+                            break;
+
+                        case 'team_agent_error':
+                            console.error(`[${convId}] Agent error: ${data.role} - ${data.error}`);
+                            if (currentConversationId === convId) {
+                                updateTeamAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
+                                updateTeamTaskStatus(data.team_id, data.agent_id, 'error');
+                            }
+                            break;
+
+                        case 'team_synthesizing':
+                            console.log(`[${convId}] Team synthesizing: ${data.team_id}`);
+                            if (currentConversationId === convId) {
+                                updateTeamStatus(data.team_id, 'synthesizing', 'Synthesizing results...');
+                            }
+                            break;
+
+                        case 'team_complete':
+                            console.log(`[${convId}] Team complete: ${data.team_id}`);
+                            if (currentConversationId === convId) {
+                                updateTeamStatus(data.team_id, 'complete', 'Team complete');
+                                renderTeamResult(data.team_id, data.result, data.total_tokens);
+                            }
+                            // Append team result to text content for chat history
+                            textContent += '\n\n' + data.result;
+                            onTextUpdate(textContent, toolUses, false);
+                            break;
+
+                        case 'team_error':
+                            console.error(`[${convId}] Team error: ${data.error}`);
+                            if (currentConversationId === convId) {
+                                updateTeamStatus(data.team_id, 'error', `Error: ${data.error}`);
+                            }
+                            break;
+
                         case 'error':
                             throw new Error(data.error?.message || 'Stream error');
                     }
@@ -3489,6 +3568,215 @@
             inlinePanelLastStatus = {};
         }
 
+        // === Agent Team UI Functions ===
+
+        // Role display config: label, color, icon
+        const TEAM_ROLE_CONFIG = {
+            orchestrator: { label: 'Orchestrator', color: '#7c3aed', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z' },
+            explorer:     { label: 'Explorer',     color: '#2563eb', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
+            researcher:   { label: 'Researcher',   color: '#059669', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
+            implementer:  { label: 'Implementer',  color: '#d97706', icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4' },
+            reviewer:     { label: 'Reviewer',     color: '#dc2626', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
+        };
+
+        // Render the main team panel in chat
+        function renderTeamPanel(teamId, agents, userRequest) {
+            const chatContent = document.getElementById('chat-content');
+            if (!chatContent) return;
+
+            // Remove existing team panel if any
+            const existing = document.getElementById(`team-panel-${teamId}`);
+            if (existing) existing.remove();
+
+            const agentCards = agents.map(a => {
+                const cfg = TEAM_ROLE_CONFIG[a.role] || TEAM_ROLE_CONFIG.explorer;
+                return `
+                    <div class="team-agent-card" data-agent-id="${a.agent_id}" data-team-id="${teamId}" style="--agent-color: ${cfg.color}">
+                        <div class="team-agent-header">
+                            <svg class="team-agent-icon" fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
+                            </svg>
+                            <span class="team-agent-role">${cfg.label}</span>
+                            <span class="team-agent-status-badge idle">idle</span>
+                        </div>
+                        <div class="team-agent-purpose">${a.purpose || ''}</div>
+                        <div class="team-agent-findings" style="display:none;"></div>
+                    </div>
+                `;
+            }).join('');
+
+            const panel = document.createElement('div');
+            panel.id = `team-panel-${teamId}`;
+            panel.className = 'team-panel';
+            panel.innerHTML = `
+                <div class="team-panel-header" onclick="toggleTeamPanel('${teamId}')">
+                    <div class="team-panel-title">
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" width="18" height="18">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+                        </svg>
+                        <span>Agent Team</span>
+                        <span class="team-status-text">Spawned</span>
+                    </div>
+                    <svg class="team-panel-toggle" fill="none" stroke="currentColor" viewBox="0 0 24 24" width="16" height="16">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                </div>
+                <div class="team-panel-body">
+                    <div class="team-agents-grid">${agentCards}</div>
+                    <div class="team-task-board" style="display:none;">
+                        <div class="team-task-board-title">Task Board</div>
+                        <div class="team-task-board-list"></div>
+                    </div>
+                    <div class="team-result" style="display:none;"></div>
+                </div>
+            `;
+            chatContent.appendChild(panel);
+            scrollToBottom();
+        }
+
+        // Update overall team status text
+        function updateTeamStatus(teamId, status, text) {
+            const panel = document.getElementById(`team-panel-${teamId}`);
+            if (!panel) return;
+            const statusEl = panel.querySelector('.team-status-text');
+            if (statusEl) {
+                statusEl.textContent = text;
+                statusEl.className = `team-status-text ${status}`;
+            }
+        }
+
+        // Render the task board within the team panel
+        function renderTeamTaskBoard(teamId, tasks) {
+            const panel = document.getElementById(`team-panel-${teamId}`);
+            if (!panel) return;
+
+            const boardEl = panel.querySelector('.team-task-board');
+            const listEl = panel.querySelector('.team-task-board-list');
+            if (!boardEl || !listEl) return;
+
+            boardEl.style.display = 'block';
+            listEl.innerHTML = tasks.map(t => {
+                const cfg = TEAM_ROLE_CONFIG[t.role] || TEAM_ROLE_CONFIG.explorer;
+                return `
+                    <div class="team-task-item" data-task-agent="${t.assigned_to}" data-task-id="${t.task_id}">
+                        <span class="team-task-status-dot pending"></span>
+                        <span class="team-task-title">${t.title}</span>
+                        <span class="team-task-role" style="color: ${cfg.color}">${cfg.label}</span>
+                    </div>
+                `;
+            }).join('');
+
+            // Also add any new agents that were spawned for tasks
+            const agentsGrid = panel.querySelector('.team-agents-grid');
+            if (agentsGrid) {
+                for (const task of tasks) {
+                    const existingCard = agentsGrid.querySelector(`[data-agent-id="${task.assigned_to}"]`);
+                    if (!existingCard) {
+                        const cfg = TEAM_ROLE_CONFIG[task.role] || TEAM_ROLE_CONFIG.explorer;
+                        const card = document.createElement('div');
+                        card.className = 'team-agent-card';
+                        card.setAttribute('data-agent-id', task.assigned_to);
+                        card.setAttribute('data-team-id', teamId);
+                        card.style.setProperty('--agent-color', cfg.color);
+                        card.innerHTML = `
+                            <div class="team-agent-header">
+                                <svg class="team-agent-icon" fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
+                                </svg>
+                                <span class="team-agent-role">${cfg.label}</span>
+                                <span class="team-agent-status-badge idle">idle</span>
+                            </div>
+                            <div class="team-agent-purpose">${task.title}</div>
+                            <div class="team-agent-findings" style="display:none;"></div>
+                        `;
+                        agentsGrid.appendChild(card);
+                    }
+                }
+            }
+            scrollToBottom();
+        }
+
+        // Update an agent card status
+        function updateTeamAgent(teamId, agentId, role, status, taskTitle, content) {
+            const panel = document.getElementById(`team-panel-${teamId}`);
+            if (!panel) return;
+            const card = panel.querySelector(`[data-agent-id="${agentId}"]`);
+            if (!card) return;
+
+            const badge = card.querySelector('.team-agent-status-badge');
+            if (badge) {
+                badge.textContent = status;
+                badge.className = `team-agent-status-badge ${status}`;
+            }
+
+            // Add pulsing animation for active states
+            if (status === 'thinking' || status === 'executing') {
+                card.classList.add('active');
+            } else {
+                card.classList.remove('active');
+            }
+
+            // Show findings for complete/error
+            if ((status === 'complete' || status === 'error') && content) {
+                const findingsEl = card.querySelector('.team-agent-findings');
+                if (findingsEl) {
+                    const truncated = content.length > 300 ? content.substring(0, 300) + '...' : content;
+                    findingsEl.textContent = truncated;
+                    findingsEl.style.display = 'block';
+                    findingsEl.classList.add(status === 'error' ? 'error' : 'success');
+                }
+            }
+            scrollToBottom();
+        }
+
+        // Update task board item status when agent completes
+        function updateTeamTaskStatus(teamId, agentId, status) {
+            const panel = document.getElementById(`team-panel-${teamId}`);
+            if (!panel) return;
+            const taskItem = panel.querySelector(`[data-task-agent="${agentId}"]`);
+            if (!taskItem) return;
+            const dot = taskItem.querySelector('.team-task-status-dot');
+            if (dot) {
+                dot.className = `team-task-status-dot ${status}`;
+            }
+        }
+
+        // Render the final synthesized result
+        function renderTeamResult(teamId, result, totalTokens) {
+            const panel = document.getElementById(`team-panel-${teamId}`);
+            if (!panel) return;
+            const resultEl = panel.querySelector('.team-result');
+            if (!resultEl) return;
+
+            const tokenInfo = totalTokens ?
+                `${totalTokens.input_tokens + totalTokens.output_tokens} tokens` : '';
+
+            resultEl.style.display = 'block';
+            resultEl.innerHTML = `
+                <div class="team-result-header">
+                    <span>Synthesized Result</span>
+                    ${tokenInfo ? `<span class="team-result-tokens">${tokenInfo}</span>` : ''}
+                </div>
+                <div class="team-result-content">${escapeHtml(result).replace(/\n/g, '<br>')}</div>
+            `;
+            scrollToBottom();
+        }
+
+        // Toggle team panel collapsed state
+        window.toggleTeamPanel = function(teamId) {
+            const panel = document.getElementById(`team-panel-${teamId}`);
+            if (panel) {
+                panel.classList.toggle('collapsed');
+            }
+        };
+
+        // Helper: escape HTML to prevent XSS
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // Show tool detail modal
         function showToolDetail(toolId) {
             const tu = toolDataStore[toolId];
@@ -3521,12 +3809,17 @@
                             <div class="tool-detail-section-label">Input</div>
                             <pre>${JSON.stringify(tu.input, null, 2)}</pre>
                         </div>
-                        ${tu.result ? `
+                        ${tu.result ? (tu.name === 'execute_command' && !tu.result.error ? `
+                        <div class="tool-detail-section">
+                            <div class="tool-detail-section-label">Output</div>
+                            ${formatTerminalOutput(tu)}
+                        </div>
+                        ` : `
                         <div class="tool-detail-section">
                             <div class="tool-detail-section-label">Output</div>
                             <pre>${JSON.stringify(tu.result, null, 2)}</pre>
                         </div>
-                        ` : `
+                        `) : `
                         <div class="tool-detail-section">
                             <div class="tool-detail-section-label">Status</div>
                             <p style="color: var(--text-secondary);">Running...</p>
@@ -3576,7 +3869,12 @@
 
                 // Format output (truncate if too long)
                 let outputStr = '';
+                let isTerminalOutput = false;
                 if (hasResult) {
+                    // Detect execute_command tool for terminal-styled rendering
+                    if (tu.name === 'execute_command' && tu.result && !hasError) {
+                        isTerminalOutput = true;
+                    }
                     try {
                         const resultData = hasError ? tu.result.error : tu.result;
                         if (typeof resultData === 'string') {
@@ -3593,6 +3891,18 @@
                     }
                 }
 
+                // Terminal-styled output for execute_command
+                let outputHtml = '';
+                if (hasResult && isTerminalOutput) {
+                    outputHtml = formatTerminalOutput(tu);
+                } else if (hasResult) {
+                    outputHtml = `
+                        <div class="chat-tool-section">
+                            <div class="chat-tool-label">${hasError ? 'Error' : 'Output'}</div>
+                            <pre class="chat-tool-code ${hasError ? 'error' : ''}">${escapeHtml(outputStr)}</pre>
+                        </div>`;
+                }
+
                 return `
                     <div class="chat-tool-item ${hasError ? 'error' : hasResult ? 'success' : 'running'}">
                         <div class="chat-tool-header">
@@ -3604,12 +3914,7 @@
                                 <div class="chat-tool-label">Input</div>
                                 <pre class="chat-tool-code">${escapeHtml(inputStr)}</pre>
                             </div>
-                            ${hasResult ? `
-                            <div class="chat-tool-section">
-                                <div class="chat-tool-label">${hasError ? 'Error' : 'Output'}</div>
-                                <pre class="chat-tool-code ${hasError ? 'error' : ''}">${escapeHtml(outputStr)}</pre>
-                            </div>
-                            ` : ''}
+                            ${outputHtml}
                         </div>
                     </div>
                 `;
@@ -3628,6 +3933,91 @@
                         ${toolsHtml}
                     </div>
                 </div><!-- END_TOOL_CONTAINER -->`;
+        }
+
+        // Convert ANSI escape codes to HTML spans
+        function ansiToHtml(text) {
+            if (!text) return '';
+            // Escape HTML first
+            let html = text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            // Map ANSI codes to CSS classes
+            const ansiMap = {
+                '0': '</span>',  // reset
+                '1': '<span class="ansi-bold">',
+                '2': '<span class="ansi-dim">',
+                '30': '<span style="color:#414868">',  // black
+                '31': '<span class="ansi-red">',
+                '32': '<span class="ansi-green">',
+                '33': '<span class="ansi-yellow">',
+                '34': '<span class="ansi-blue">',
+                '35': '<span class="ansi-magenta">',
+                '36': '<span class="ansi-cyan">',
+                '37': '<span class="ansi-white">',
+                '90': '<span class="ansi-dim">',  // bright black (gray)
+                '91': '<span class="ansi-red">',
+                '92': '<span class="ansi-green">',
+                '93': '<span class="ansi-yellow">',
+                '94': '<span class="ansi-blue">',
+                '95': '<span class="ansi-magenta">',
+                '96': '<span class="ansi-cyan">',
+                '97': '<span class="ansi-white">',
+            };
+
+            // Replace ANSI escape sequences
+            html = html.replace(/\x1b\[([0-9;]+)m/g, (match, codes) => {
+                const parts = codes.split(';');
+                let result = '';
+                for (const code of parts) {
+                    if (ansiMap[code]) {
+                        result += ansiMap[code];
+                    }
+                }
+                return result || '';
+            });
+
+            // Remove any remaining escape sequences
+            html = html.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+
+            return html;
+        }
+
+        // Format execute_command result as terminal output
+        function formatTerminalOutput(tu) {
+            const result = tu.result || {};
+            const command = tu.input?.command || result.command || '';
+            const exitCode = result.return_code;
+            const stdout = result.stdout || '';
+            const stderr = result.stderr || '';
+
+            const exitCodeClass = (exitCode === 0) ? 'success' : 'error';
+            const exitCodeText = exitCode !== undefined ? `exit ${exitCode}` : '';
+
+            // Combine stdout and stderr with ANSI color conversion
+            let outputContent = '';
+            if (stdout) {
+                outputContent += ansiToHtml(stdout);
+            }
+            if (stderr) {
+                outputContent += `<span class="ansi-stderr">${ansiToHtml(stderr)}</span>`;
+            }
+            if (!outputContent) {
+                outputContent = '<span class="ansi-dim">(no output)</span>';
+            }
+
+            return `
+                <div class="chat-tool-section">
+                    <div class="terminal-output">
+                        <div class="terminal-header">
+                            <span class="terminal-cmd">$ ${escapeHtml(command)}</span>
+                            ${exitCodeText ? `<span class="terminal-exit-code ${exitCodeClass}">${exitCodeText}</span>` : ''}
+                        </div>
+                        ${outputContent}
+                    </div>
+                </div>`;
         }
 
         // Helper to escape HTML
@@ -3694,6 +4084,11 @@
 
             // Check if CURRENT conversation is streaming (allow other conversations to stream)
             if ((!content && attachments.length === 0) || isCurrentStreaming()) return;
+
+            // Team mode check - route through teams API
+            if (teamModeEnabled) {
+                return sendTeamMessage(content);
+            }
 
             // Handle built-in slash commands (local commands, not sent to server)
             if (content.startsWith('/')) {
@@ -9528,5 +9923,352 @@ ${content || 'Task completed successfully.'}
             renderProjects();
         }
 
+        // ============ Team Mode ============
+
+        function toggleTeamMode() {
+            teamModeEnabled = !teamModeEnabled;
+            const btn = document.getElementById('team-toggle');
+            btn.classList.toggle('active', teamModeEnabled);
+
+            // Update placeholder
+            const input = document.getElementById('message-input');
+            if (teamModeEnabled) {
+                input.placeholder = 'Team Mode: multiple agents will collaborate on your request...';
+            } else {
+                input.placeholder = 'Message Springo... (/ for skills)';
+            }
+        }
+
+        async function sendTeamMessage(userMessage) {
+            const input = document.getElementById('message-input');
+
+            // Get or create conversation
+            const thisConvId = currentConversationId || Date.now().toString();
+            if (!currentConversationId) {
+                currentConversationId = thisConvId;
+                convRuntime[thisConvId] = { isStreaming: false, attachments: [], messages: [] };
+            }
+            const runtime = getConvRuntime(thisConvId);
+
+            // Hide welcome
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.style.display = 'none';
+
+            // Add user message
+            runtime.messages.push({ role: 'user', content: userMessage, timestamp: Date.now() });
+
+            // Clear input
+            input.value = '';
+            input.style.height = 'auto';
+
+            // Render
+            if (currentConversationId === thisConvId) {
+                renderMessages();
+            }
+
+            runtime.isStreaming = true;
+            updateConversationStatus(thisConvId, 'running');
+            updateStatus('running');
+            updateSendButtonState();
+
+            try {
+                // Step 1: Spawn team
+                const spawnRes = await fetch(BASE_URL + '/v1/teams/spawn', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_request: userMessage })
+                });
+
+                if (!spawnRes.ok) {
+                    throw new Error('Failed to spawn team: ' + spawnRes.statusText);
+                }
+
+                const spawnData = await spawnRes.json();
+                const teamId = spawnData.team_id;
+
+                // Step 2: Execute team with SSE streaming
+                const execRes = await fetch(BASE_URL + '/v1/teams/' + teamId + '/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ stream: true })
+                });
+
+                if (!execRes.ok) {
+                    throw new Error('Failed to execute team: ' + execRes.statusText);
+                }
+
+                const reader = execRes.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventType = null;
+                let finalResult = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6);
+                            if (dataStr === '[DONE]') continue;
+
+                            try {
+                                const data = JSON.parse(dataStr);
+
+                                // Handle team SSE events using existing render functions
+                                switch (eventType) {
+                                    case 'team_spawned':
+                                        renderTeamPanel(data.team_id, data.agents, data.user_request);
+                                        break;
+                                    case 'team_planning':
+                                        updateTeamStatus(data.team_id, 'planning', 'Decomposing task...');
+                                        break;
+                                    case 'team_task_board':
+                                        renderTeamTaskBoard(data.team_id, data.tasks);
+                                        updateTeamStatus(data.team_id, 'executing', 'Agents working...');
+                                        break;
+                                    case 'team_agent_start':
+                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
+                                        break;
+                                    case 'team_agent_progress':
+                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'executing', '', data.preview);
+                                        break;
+                                    case 'team_agent_complete':
+                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
+                                        break;
+                                    case 'team_agent_error':
+                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
+                                        break;
+                                    case 'team_synthesizing':
+                                        updateTeamStatus(data.team_id, 'synthesizing', 'Synthesizing results...');
+                                        break;
+                                    case 'team_complete':
+                                        finalResult = data.result;
+                                        renderTeamResult(data.team_id, data.result, data.total_tokens);
+                                        updateTeamStatus(data.team_id, 'complete', 'Complete');
+                                        break;
+                                    case 'team_error':
+                                        updateTeamStatus(data.team_id, 'error', data.error);
+                                        break;
+                                }
+                            } catch (e) {
+                                // ignore parse errors
+                            }
+                            eventType = null;
+                        }
+                    }
+                }
+
+                // Add assistant message with team result
+                if (finalResult) {
+                    runtime.messages.push({
+                        role: 'assistant',
+                        content: finalResult,
+                        timestamp: Date.now(),
+                        _teamMode: true
+                    });
+                }
+
+                updateConversationStatus(thisConvId, 'completed');
+                updateStatus('completed');
+
+            } catch (e) {
+                console.error('Team execution error:', e);
+                updateConversationStatus(thisConvId, 'error');
+                updateStatus('error', e.message);
+            } finally {
+                runtime.isStreaming = false;
+                updateSendButtonState();
+                saveConversation(thisConvId);
+            }
+        }
+
         // LTM Panel removed - LTM retrieval will be implemented via skill
+
+        // ============ Terminal Panel ============
+
+        let terminalCurrentPid = null;
+        let terminalHistory = [];
+        let terminalHistoryIndex = -1;
+
+        function toggleTerminalPanel() {
+            const panel = document.getElementById('right-panel');
+            const btn = document.getElementById('terminal-toggle');
+
+            if (panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+            }
+
+            // Switch to terminal tab
+            switchRightPanelTab('terminal');
+            btn.classList.add('active');
+
+            // Focus the input
+            setTimeout(() => {
+                document.getElementById('terminal-input')?.focus();
+            }, 100);
+        }
+
+        function clearTerminal() {
+            const output = document.getElementById('terminal-panel-output');
+            if (output) output.innerHTML = '';
+        }
+
+        function appendTerminalOutput(html, className) {
+            const output = document.getElementById('terminal-panel-output');
+            if (!output) return;
+            const div = document.createElement('div');
+            if (className) div.className = className;
+            div.innerHTML = html;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+
+        async function executeTerminalCommand() {
+            const input = document.getElementById('terminal-input');
+            const command = input.value.trim();
+            if (!command) return;
+
+            // Add to history
+            terminalHistory.push(command);
+            terminalHistoryIndex = terminalHistory.length;
+
+            // Show command in output
+            appendTerminalOutput(`<span class="ansi-blue">$ ${escapeHtml(command)}</span>`, 'terminal-cmd-line');
+
+            // Clear input
+            input.value = '';
+
+            // Show stop button, hide run button
+            document.getElementById('terminal-run-btn').style.display = 'none';
+            document.getElementById('terminal-stop-btn').style.display = '';
+
+            try {
+                const response = await fetch(BASE_URL + '/v1/terminal/execute', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        command: command,
+                        timeout: 300
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventType = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6);
+                            if (dataStr === '[DONE]') continue;
+
+                            try {
+                                const data = JSON.parse(dataStr);
+                                handleTerminalEvent(eventType, data);
+                            } catch (e) {
+                                // ignore parse errors
+                            }
+                            eventType = null;
+                        }
+                    }
+                }
+            } catch (e) {
+                appendTerminalOutput(`<span class="ansi-red">Error: ${escapeHtml(e.message)}</span>`, 'terminal-error-line');
+            } finally {
+                // Reset buttons
+                document.getElementById('terminal-run-btn').style.display = '';
+                document.getElementById('terminal-stop-btn').style.display = 'none';
+                terminalCurrentPid = null;
+                input.focus();
+            }
+        }
+
+        function handleTerminalEvent(eventType, data) {
+            switch (eventType) {
+                case 'start':
+                    terminalCurrentPid = data.pid;
+                    if (data.working_dir) {
+                        const cwd = data.working_dir.replace(/^\/Users\/[^/]+/, '~');
+                        document.getElementById('terminal-cwd').textContent = cwd;
+                    }
+                    break;
+                case 'output':
+                    if (data.type === 'stderr') {
+                        appendTerminalOutput(`<span class="ansi-stderr">${ansiToHtml(data.data)}</span>`);
+                    } else {
+                        appendTerminalOutput(ansiToHtml(data.data));
+                    }
+                    break;
+                case 'exit':
+                    if (data.exit_code !== 0) {
+                        appendTerminalOutput(`<span class="ansi-dim">exit ${data.exit_code}</span>`, 'terminal-exit-line');
+                    }
+                    break;
+                case 'error':
+                    appendTerminalOutput(`<span class="ansi-red">${escapeHtml(data.message)}</span>`, 'terminal-error-line');
+                    break;
+            }
+        }
+
+        async function killTerminalProcess() {
+            if (!terminalCurrentPid) return;
+            try {
+                await fetch(BASE_URL + '/v1/terminal/kill/' + terminalCurrentPid, { method: 'POST' });
+            } catch (e) {
+                console.error('Failed to kill process:', e);
+            }
+        }
+
+        // Terminal input keyboard handling
+        document.addEventListener('DOMContentLoaded', function() {
+            const termInput = document.getElementById('terminal-input');
+            if (termInput) {
+                termInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        executeTerminalCommand();
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        if (terminalHistoryIndex > 0) {
+                            terminalHistoryIndex--;
+                            this.value = terminalHistory[terminalHistoryIndex];
+                        }
+                    } else if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        if (terminalHistoryIndex < terminalHistory.length - 1) {
+                            terminalHistoryIndex++;
+                            this.value = terminalHistory[terminalHistoryIndex];
+                        } else {
+                            terminalHistoryIndex = terminalHistory.length;
+                            this.value = '';
+                        }
+                    }
+                });
+            }
+        });
+
+        // Keyboard shortcut: Cmd+` to toggle terminal
+        document.addEventListener('keydown', function(e) {
+            if ((e.metaKey || e.ctrlKey) && e.key === '`') {
+                e.preventDefault();
+                toggleTerminalPanel();
+            }
+        });
 

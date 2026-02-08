@@ -234,14 +234,20 @@ async def test_all_routes_in_openapi(fastapi_client: httpx.AsyncClient):
         "/v1/messages",
         "/v1/messages-auto",
         "/v1/tools/execute",
-        "/v1/tools/list",
+        "/v1/tools",
         "/v1/sessions",
         "/v1/context",
         "/v1/context/add",
         "/v1/news/search",
         "/v1/images/search",
         "/health",
-        "/health/detailed"
+        "/health/detailed",
+        "/v1/terminal/execute",
+        "/v1/terminal/kill/{pid}",
+        "/v1/teams/spawn",
+        "/v1/teams/{team_id}",
+        "/v1/teams/{team_id}/execute",
+        "/v1/teams/{team_id}/task-board",
     ]
     
     for path in expected_paths:

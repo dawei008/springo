@@ -315,6 +315,119 @@ class SSEEventBuilder:
             'timestamp': datetime.now().isoformat(),
         })
 
+    # === Agent Team SSE Events ===
+
+    @staticmethod
+    def team_spawned(team_id: str, agents: list, user_request: str) -> str:
+        """Team created with agents"""
+        return format_sse_event('team_spawned', {
+            'type': 'team_spawned',
+            'team_id': team_id,
+            'agents': agents,
+            'user_request': user_request,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_planning(team_id: str) -> str:
+        """Orchestrator is decomposing the task"""
+        return format_sse_event('team_planning', {
+            'type': 'team_planning',
+            'team_id': team_id,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_task_board(team_id: str, tasks: list) -> str:
+        """Task board updated with decomposed tasks"""
+        return format_sse_event('team_task_board', {
+            'type': 'team_task_board',
+            'team_id': team_id,
+            'tasks': tasks,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_start(team_id: str, agent_id: str, role: str, task_title: str) -> str:
+        """An agent started working on a task"""
+        return format_sse_event('team_agent_start', {
+            'type': 'team_agent_start',
+            'team_id': team_id,
+            'agent_id': agent_id,
+            'role': role,
+            'task_title': task_title,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_progress(team_id: str, agent_id: str, role: str, status: str, preview: str = "") -> str:
+        """Agent progress update (thinking/executing)"""
+        return format_sse_event('team_agent_progress', {
+            'type': 'team_agent_progress',
+            'team_id': team_id,
+            'agent_id': agent_id,
+            'role': role,
+            'status': status,
+            'preview': preview[:200] if preview else "",
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_complete(team_id: str, agent_id: str, role: str, task_title: str, findings: str, tokens: dict) -> str:
+        """Agent completed its task"""
+        return format_sse_event('team_agent_complete', {
+            'type': 'team_agent_complete',
+            'team_id': team_id,
+            'agent_id': agent_id,
+            'role': role,
+            'task_title': task_title,
+            'findings': findings,
+            'tokens': tokens,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_error(team_id: str, agent_id: str, role: str, error: str) -> str:
+        """Agent encountered an error"""
+        return format_sse_event('team_agent_error', {
+            'type': 'team_agent_error',
+            'team_id': team_id,
+            'agent_id': agent_id,
+            'role': role,
+            'error': error,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_synthesizing(team_id: str) -> str:
+        """Orchestrator is synthesizing results"""
+        return format_sse_event('team_synthesizing', {
+            'type': 'team_synthesizing',
+            'team_id': team_id,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_complete(team_id: str, result: str, total_tokens: dict) -> str:
+        """Team execution complete with final result"""
+        return format_sse_event('team_complete', {
+            'type': 'team_complete',
+            'team_id': team_id,
+            'result': result,
+            'total_tokens': total_tokens,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_error(team_id: str, error: str) -> str:
+        """Team-level error"""
+        return format_sse_event('team_error', {
+            'type': 'team_error',
+            'team_id': team_id,
+            'error': error,
+            'timestamp': datetime.now().isoformat(),
+        })
+
     @staticmethod
     def done() -> str:
         """构建完成标记"""
