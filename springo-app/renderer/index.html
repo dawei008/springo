@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com 'unsafe-inline'; style-src 'self' https://cdnjs.cloudflare.com 'unsafe-inline'; connect-src 'self' http://127.0.0.1:* http://localhost:*; img-src 'self' data: blob:;">
+    <title>Springo</title>
+    <!-- Markdown & Code Highlighting -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- DOMPurify for XSS protection -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <!-- External CSS -->
+    <link rel="stylesheet" href="styles/main.css">
+</head>
+<body data-theme="light">
+    <!-- Sidebar -->
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <svg width="24" height="24" viewBox="0 0 100 100" fill="none" stroke="currentColor" style="color: var(--accent)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <!-- Springer Spaniel sketch style -->
+                <!-- Head -->
+                <ellipse cx="50" cy="38" rx="22" ry="20"/>
+                <!-- Left ear (floppy) -->
+                <path d="M28 35 C15 38, 8 55, 12 72 C14 78, 18 80, 22 78 C28 75, 30 65, 30 55"/>
+                <!-- Right ear (floppy) -->
+                <path d="M72 35 C85 38, 92 55, 88 72 C86 78, 82 80, 78 78 C72 75, 70 65, 70 55"/>
+                <!-- Eyes -->
+                <circle cx="40" cy="35" r="3" fill="currentColor"/>
+                <circle cx="60" cy="35" r="3" fill="currentColor"/>
+                <!-- Nose -->
+                <ellipse cx="50" cy="48" rx="5" ry="4" fill="currentColor"/>
+                <!-- Mouth -->
+                <path d="M45 52 Q50 58, 55 52"/>
+                <!-- Body hint -->
+                <path d="M35 56 Q50 65, 65 56"/>
+            </svg>
+            <h1>Springo</h1>
+        </div>
+
+        <!-- Workspace Section -->
+        <div class="working-folders-section">
+            <div class="working-folders-header">
+                <span>Workspace</span>
+                <button class="add-folder-btn" onclick="addWorkingFolder()" title="Add folder">
+                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M7 2v10M2 7h10"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="working-folders-list" id="working-folders-list">
+                <div class="working-folders-empty" id="working-folders-empty">
+                    Click + to add folders
+                </div>
+            </div>
+        </div>
+
+        <button class="new-chat-btn" onclick="newConversation()"
+                ondragover="handleNewChatDragOver(event)"
+                ondragleave="handleNewChatDragLeave(event)"
+                ondrop="handleNewChatDrop(event)">
+            <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M8 2v12M2 8h12"/>
+            </svg>
+            New Chat
+        </button>
+
+        <div class="conversations-list" id="conversations-list"></div>
+
+        <div class="sidebar-footer">
+            <button class="settings-btn" onclick="openSettings()">
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="8" cy="8" r="3"/>
+                    <path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M2.9 13.1l1.4-1.4M11.7 4.3l1.4-1.4"/>
+                </svg>
+                Settings
+            </button>
+        </div>
+    </div>
+
+    <!-- File Browser Panel (macOS Finder style) -->
+    <div class="file-browser-panel" id="file-browser-panel">
+        <div class="file-browser-header">
+            <h3>
+                <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                </svg>
+                <span id="file-browser-folder-name">Folder</span>
+            </h3>
+            <button class="close-btn" onclick="closeFileBrowser()" title="Close">
+                <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 3l8 8M11 3l-8 8"/>
+                </svg>
+            </button>
+        </div>
+        <div class="file-browser-breadcrumb" id="file-browser-breadcrumb">
+            <span class="breadcrumb-item current">Folder</span>
+        </div>
+        <div class="file-browser-content" id="file-browser-content">
+            <div class="file-browser-empty">
+                <svg fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                    <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                </svg>
+                <p>Select a folder to browse</p>
+            </div>
+        </div>
+        <div class="file-browser-toolbar">
+            <span class="item-count" id="file-browser-count">0 items</span>
+            <button onclick="refreshFileBrowser()" title="Refresh">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M1 4v6h6M23 20v-6h-6"/>
+                    <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/>
+                </svg>
+            </button>
+            <button onclick="openCurrentFolderInFinder()" title="Open in Finder">
+                <svg width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                    <polyline points="15 3 21 3 21 9"/>
+                    <line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+            </button>
+        </div>
+        <!-- Resize Handle -->
+        <div class="file-browser-resize-handle" id="file-browser-resize-handle"></div>
+    </div>
+
+    <!-- File Context Menu -->
+    <div class="file-context-menu" id="file-context-menu">
+        <div class="file-context-menu-header" id="context-menu-file-count">1 file selected</div>
+        <div class="file-context-menu-item new-chat" onclick="contextMenuNewChat()">
+            <svg fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14"/>
+            </svg>
+            <span>New Chat with file(s)</span>
+        </div>
+        <div class="file-context-menu-divider"></div>
+        <div class="file-context-menu-header">Add to chat:</div>
+        <div class="file-context-menu-section" id="context-menu-chats">
+            <!-- Chat list will be populated dynamically -->
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <div class="header">
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M3 6h12M3 12h12"/>
+                    </svg>
+                </button>
+                <span class="header-title" id="header-title">New Chat</span>
+            </div>
+            <div class="header-actions">
+                <button class="panel-toggle" id="right-panel-toggle" title="Toggle panel (⌘/)">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <line x1="15" y1="3" x2="15" y2="21"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Chat and Panel Wrapper -->
+        <div class="chat-panel-wrapper">
+            <div class="chat-area">
+                <div class="chat-container" id="chat-container">
+                    <div class="chat-content" id="chat-content">
+                        <div class="welcome" id="welcome">
+                            <svg class="welcome-icon" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <!-- Springer Spaniel sketch style -->
+                                <!-- Head -->
+                                <ellipse cx="50" cy="38" rx="22" ry="20"/>
+                                <!-- Left ear (floppy) -->
+                                <path d="M28 35 C15 38, 8 55, 12 72 C14 78, 18 80, 22 78 C28 75, 30 65, 30 55"/>
+                                <!-- Right ear (floppy) -->
+                                <path d="M72 35 C85 38, 92 55, 88 72 C86 78, 82 80, 78 78 C72 75, 70 65, 70 55"/>
+                                <!-- Eyes -->
+                                <circle cx="40" cy="35" r="3" fill="currentColor"/>
+                                <circle cx="60" cy="35" r="3" fill="currentColor"/>
+                                <!-- Nose -->
+                                <ellipse cx="50" cy="48" rx="5" ry="4" fill="currentColor"/>
+                                <!-- Mouth -->
+                                <path d="M45 52 Q50 58, 55 52"/>
+                                <!-- Body hint -->
+                                <path d="M35 56 Q50 65, 65 56"/>
+                            </svg>
+                            <h1>Springo</h1>
+                            <p>Powered by AWS Bedrock</p>
+                            <div class="welcome-prompts">
+                                <div class="welcome-prompt" onclick="setPrompt('Explain quantum computing in simple terms')">
+                                    <h3>Explain a concept</h3>
+                                    <p>Quantum computing in simple terms</p>
+                                </div>
+                                <div class="welcome-prompt" onclick="setPrompt('Write a Python function to sort a list')">
+                                    <h3>Write code</h3>
+                                    <p>Python function to sort a list</p>
+                                </div>
+                                <div class="welcome-prompt" onclick="setPrompt('Help me brainstorm ideas for a mobile app')">
+                                    <h3>Brainstorm ideas</h3>
+                                    <p>Ideas for a mobile app</p>
+                                </div>
+                                <div class="welcome-prompt" onclick="setPrompt('Summarize the key points of machine learning')">
+                                    <h3>Summarize a topic</h3>
+                                    <p>Key points of machine learning</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="status-bar">
+                    <span id="status">Connecting...</span>
+                    <div class="status-workdir-area">
+                        <span class="workdir-path" id="workdir-path-display"></span>
+                        <div class="status-workdir-selector">
+                            <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                            </svg>
+                            <select id="status-workdir-select">
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel -->
+            <div class="right-panel hidden" id="right-panel">
+                <div class="right-panel-resize" id="right-panel-resize"></div>
+                <div class="right-panel-tabs">
+                    <button class="right-panel-tab active" data-tab="tasks">Tasks</button>
+                    <button class="right-panel-tab" data-tab="schedules">Schedules</button>
+                    <button class="right-panel-tab" data-tab="news">News</button>
+                </div>
+                <div class="right-panel-content">
+                    <div class="right-panel-section active" id="panel-tasks">
+                        <div class="panel-tasks-list" id="panel-tasks-list">
+                            <div class="panel-placeholder">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                                </svg>
+                                <span>No background tasks</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="right-panel-section" id="panel-schedules">
+                        <div class="panel-schedules-list" id="panel-schedules-list">
+                            <div class="panel-placeholder">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                                    <circle cx="12" cy="12" r="10"/>
+                                    <polyline points="12 6 12 12 16 14"/>
+                                </svg>
+                                <span>No scheduled tasks</span>
+                                <span class="panel-placeholder-hint">Ask Claude to create reminders or scheduled tasks</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="right-panel-section" id="panel-news">
+                        <div class="news-header">
+                            <span class="news-title">For You</span>
+                            <button class="news-refresh-btn" onclick="refreshNews(true)" title="Refresh">
+                                <svg viewBox="0 0 24 24" width="16" height="16">
+                                    <path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 .79-.15 1.56-.44 2.25l1.52 1.52C19.68 14.62 20 13.35 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-.79.15-1.56.44-2.25L4.92 8.23C4.32 9.38 4 10.65 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z" fill="currentColor"/>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="news-topics-input">
+                            <input type="text" id="news-custom-topics" placeholder="e.g. AWS, AI Agent, Kubernetes..." spellcheck="false">
+                        </div>
+                        <div class="news-updated" id="news-updated"></div>
+                        <div id="panel-news-list">
+                            <div class="panel-placeholder">
+                                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.5">
+                                    <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 12h10"/>
+                                </svg>
+                                <span>Loading news...</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-area">
+            <div class="input-wrapper"
+                 ondragover="handleInputDragOver(event)"
+                 ondragleave="handleInputDragLeave(event)"
+                 ondrop="handleInputDrop(event)">
+                <div class="attachments" id="attachments"></div>
+                <div class="input-box">
+                    <div class="input-actions">
+                        <button class="icon-btn" onclick="document.getElementById('file-input').click()" title="Attach file">
+                            <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M14 2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Z"/>
+                                <path d="M12 9H8M12 13H8M10 5H8"/>
+                            </svg>
+                        </button>
+                        <input type="file" id="file-input" multiple accept="image/*,.pdf,.txt,.md,.json,.csv,.pptx,.ppt,.xlsx,.xls,.docx,.doc,.html,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.css,.scss,.sql,.sh,.bash,.zsh,.r,.rb,.php,.swift,.kt,.scala,.lua,.m,.mm" onchange="handleFiles(this.files)">
+                    </div>
+                    <textarea id="message-input" placeholder="Message Springo... (/ for skills)" rows="1"></textarea>
+                    <button id="send-btn" onclick="sendMessage()" disabled>
+                        <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12l5-5 5 5"/>
+                        </svg>
+                    </button>
+                    <button id="stop-btn" onclick="stopCurrentTask()" title="Stop (Esc)">
+                        <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+                            <rect x="6" y="6" width="12" height="12" rx="2"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="bottom-status-row">
+                    <div class="context-indicator" id="context-indicator" onclick="toggleContextBreakdown(event)">
+                        <span class="context-icon">●</span>
+                        <span id="context-text">Context: 0%</span>
+                        <!-- Context Breakdown Popup -->
+                        <div class="context-breakdown-popup" id="context-breakdown-popup">
+                            <div class="breakdown-header">Context Breakdown</div>
+                            <div class="breakdown-content" id="breakdown-content">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                    <div class="memory-sync-status" id="memory-sync-status" title="AgentCore Memory Sync Status">
+                        <span class="sync-icon" id="sync-icon">●</span>
+                        <span id="sync-text">Memory: checking...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Modal -->
+    <div class="project-modal" id="project-modal">
+        <div class="project-modal-content">
+            <h3>Create New Project</h3>
+            <input type="text" id="project-name-input" placeholder="Project name...">
+            <div class="project-modal-actions">
+                <button class="cancel-btn" onclick="hideProjectModal()">Cancel</button>
+                <button class="create-btn" onclick="createProject()">Create</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="icon-btn" onclick="closeSettings()">
+                    <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M4 4l10 10M14 4L4 14"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- Default Working Directory Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Default Working Directory</h3>
+                <div class="setting-group">
+                    <label>Path</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <input type="text" id="settings-default-workdir" placeholder="~/Downloads" style="flex: 1;">
+                        <button onclick="browseDefaultWorkdir()" class="browse-btn">
+                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="hint">Default folder for new chats. Use absolute path (e.g., ~/Downloads)</div>
+                </div>
+
+                <div class="setting-divider"></div>
+
+                <!-- AWS Credentials Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AWS Credentials</h3>
+                <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
+                    Auto-detects from environment variables or <code>~/.aws/credentials</code>.<br>
+                    Only enter below if not using those methods.
+                </div>
+                <div class="setting-group">
+                    <label>Access Key ID</label>
+                    <input type="text" id="settings-aws-access-key" placeholder="Enter your access key">
+                </div>
+                <div class="setting-group">
+                    <label>Secret Access Key</label>
+                    <input type="password" id="settings-aws-secret-key" placeholder="Enter your secret key">
+                </div>
+                <div class="hint">Manual credentials will be saved to <code>~/.springo/.env</code></div>
+                <div class="setting-group" style="margin-top: 12px;">
+                    <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
+                    <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                </div>
+
+                <div class="setting-divider"></div>
+
+                <!-- Region Section (applies to all AWS services) -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Region</h3>
+                <div class="setting-group">
+                    <select id="settings-memory-region">
+                        <option value="us-west-2">us-west-2 (Oregon)</option>
+                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                    </select>
+                    <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
+                </div>
+
+                <div class="setting-divider"></div>
+                <h3 style="margin: 16px 0 12px; font-size: 14px; color: var(--text-secondary);">Model Settings</h3>
+
+                <div class="setting-group">
+                    <label>Default Model</label>
+                    <select id="settings-model">
+                        <option value="claude-opus-4-5-20251101" selected>Claude Opus 4.5 (Recommended)</option>
+                        <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
+                        <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
+                    </select>
+                </div>
+                <div class="setting-group">
+                    <label>Max Tokens</label>
+                    <input type="number" id="settings-max-tokens" value="4096" min="100" max="8192">
+                    <div class="hint">Maximum number of tokens in the response</div>
+                </div>
+                <div class="setting-group">
+                    <label>Temperature</label>
+                    <input type="range" id="settings-temperature" min="0" max="1" step="0.1" value="0.7">
+                    <div class="hint">Controls randomness: <span id="temp-value">0.7</span></div>
+                </div>
+                <div class="setting-group">
+                    <label>Context Compact Model</label>
+                    <select id="settings-compact-model">
+                        <option value="claude-haiku-4-5-20251001" selected>Claude Haiku 4.5 (Recommended)</option>
+                        <option value="claude-opus-4-5-20251101">Claude Opus 4.5</option>
+                        <option value="claude-sonnet-4-5-20250929">Claude Sonnet 4.5</option>
+                    </select>
+                    <div class="hint">Model for context summarization (Haiku is faster & cheaper)</div>
+                </div>
+
+                <div class="setting-divider"></div>
+
+                <!-- Skills Section -->
+                <div class="settings-section-header">
+                    <h3>Skills</h3>
+                    <div style="display: flex; gap: 6px;">
+                        <button onclick="openSkillsFolder()">Open Folder</button>
+                        <button onclick="reloadSkills()">Reload</button>
+                    </div>
+                </div>
+                <div class="settings-list" id="skills-list">
+                    <div class="settings-list-empty">Loading skills...</div>
+                </div>
+                <div class="hint">Skills are loaded from the <code>skills/</code> directory. Each skill folder should contain a <code>SKILL.md</code> file.</div>
+
+                <div class="setting-divider"></div>
+
+                <!-- MCP Servers Section -->
+                <div class="settings-section-header">
+                    <h3>MCP Servers</h3>
+                    <button onclick="toggleMcpAddForm()">+ Add</button>
+                </div>
+                <div class="settings-list" id="mcp-servers-list">
+                    <div class="settings-list-empty">Loading MCP servers...</div>
+                </div>
+                <div id="mcp-add-form" class="settings-add-form" style="display: none;">
+                    <div class="form-row">
+                        <input type="text" id="mcp-server-name" placeholder="Server name (e.g., filesystem)">
+                    </div>
+                    <div class="form-row">
+                        <input type="text" id="mcp-server-command" placeholder="Command (e.g., npx)">
+                    </div>
+                    <div class="form-row">
+                        <input type="text" id="mcp-server-args" placeholder="Arguments (comma separated)">
+                    </div>
+                    <div class="form-row">
+                        <input type="text" id="mcp-server-env" placeholder="Environment (KEY=value, comma separated)">
+                    </div>
+                    <div class="form-actions">
+                        <button class="btn-cancel" onclick="toggleMcpAddForm()">Cancel</button>
+                        <button class="btn-add" onclick="addMcpServer()">Add Server</button>
+                    </div>
+                </div>
+                <div class="hint">MCP servers provide additional tools. Config file: <code>~/.springo/mcp_servers.json</code></div>
+
+                <div class="setting-divider"></div>
+
+                <!-- AgentCore Memory Section -->
+                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
+                <div class="setting-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
+                        Enable Memory Sync
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label>Memory ID</label>
+                    <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
+                    <div class="hint" style="margin-top: 4px;">Create via <code>agentcore memory create --name springo_memory</code></div>
+                </div>
+                <div class="setting-group">
+                    <label>S3 Bucket</label>
+                    <input type="text" id="settings-s3-bucket" placeholder="e.g., my-springo-bucket">
+                    <div class="hint" style="margin-top: 4px;">Pre-created S3 bucket for storing images and tool results</div>
+                </div>
+                <!-- LTM Strategies Section -->
+                <div class="setting-group" style="margin-top: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <label style="margin: 0;">LTM Strategies</label>
+                        <button onclick="refreshLtmStrategies()" id="refresh-strategies-btn" class="secondary-btn" style="font-size: 11px; padding: 4px 10px;">
+                            <span id="refresh-strategies-icon">↻</span> Refresh
+                        </button>
+                    </div>
+                    <div id="ltm-strategies-display" class="ltm-strategies-display" style="display: none;">
+                        <!-- Dynamically populated after Refresh -->
+                    </div>
+                    <div class="hint" style="margin-top: 4px;">Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Todo Panel (Claude Code pattern) -->
+    <div class="todo-panel" id="todo-panel">
+        <div class="todo-panel-header">
+            <h3>Tasks</h3>
+            <span class="todo-panel-progress" id="todo-progress">0/0</span>
+        </div>
+        <div class="todo-panel-list" id="todo-list"></div>
+    </div>
+
+    <!-- Ask User Dialog -->
+    <div class="ask-user-modal" id="ask-user-modal">
+        <div class="ask-user-content">
+            <div class="ask-user-header">
+                <h3>Question</h3>
+                <p class="ask-user-question" id="ask-user-question"></p>
+            </div>
+            <div class="ask-user-options" id="ask-user-options"></div>
+            <div class="ask-user-custom" id="ask-user-custom">
+                <input type="text" id="ask-user-input" placeholder="Or type your own answer...">
+            </div>
+        </div>
+    </div>
+
+    <!-- Plan Mode Indicator -->
+    <div class="plan-mode-indicator" id="plan-mode-indicator">
+        <span class="icon">Plan</span>
+        <span>Plan Mode</span>
+    </div>
+
+    <!-- Plan Approval Dialog -->
+    <div class="plan-approval-modal" id="plan-approval-modal">
+        <div class="plan-approval-content">
+            <div class="plan-approval-header">
+                <span class="icon">Plan</span>
+                <h3>Review Plan</h3>
+            </div>
+            <div class="plan-approval-body">
+                <div class="plan-summary" id="plan-summary"></div>
+                <div class="plan-steps" id="plan-steps">
+                    <h4>Steps</h4>
+                </div>
+                <div class="plan-files" id="plan-files">
+                    <h4>Files to modify</h4>
+                    <ul></ul>
+                </div>
+            </div>
+            <div class="plan-approval-footer">
+                <button class="plan-btn-reject" onclick="rejectPlan()">Reject</button>
+                <button class="plan-btn-approve" onclick="approvePlan()">Approve</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Working Directory Selector Dialog -->
+    <div class="workdir-selector-modal" id="workdir-selector-modal">
+        <div class="workdir-selector-content">
+            <h3>Select Working Directory</h3>
+            <p class="subtitle">Choose from existing directories or add a new one</p>
+            <div class="workdir-selector-list" id="workdir-selector-list">
+                <!-- Dynamically populated -->
+            </div>
+            <div class="workdir-selector-actions">
+                <button class="cancel-btn" onclick="hideWorkdirSelector()">Cancel</button>
+                <button class="new-folder-btn" onclick="selectNewFolderForChat()">Select New Directory</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- External JavaScript -->
+    <script src="js/config.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

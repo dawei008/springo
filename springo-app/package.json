@@ -1,0 +1,46 @@
+{
+  "name": "springo",
+  "version": "1.0.0",
+  "description": "Springo - AI Assistant powered by AWS Bedrock",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --mac",
+    "build:dmg": "electron-builder --mac dmg",
+    "build:zip": "electron-builder --mac zip"
+  },
+  "author": "Springo",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.3.3",
+    "electron-builder": "^24.9.1",
+    "puppeteer-core": "^24.35.0"
+  },
+  "build": {
+    "appId": "com.springo.app",
+    "productName": "Springo",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/springo-backend",
+        "to": "backend/springo-backend"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  }
+}

@@ -1,0 +1,293 @@
+"""
+Task Management Tools
+Todo tracking, user questions, skills, and tool search
+"""
+
+from typing import Any, Dict, List
+
+from ..session import get_session_state, set_pending_question, set_active_skill
+
+# Skill loader import
+try:
+    from skill_loader import get_skill_loader
+    HAS_SKILL_LOADER = True
+except ImportError:
+    HAS_SKILL_LOADER = False
+
+
+def todo_write(todos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Create or update the task list"""
+    state = get_session_state()
+    state["todos"] = todos
+
+    completed = sum(1 for t in todos if t.get("status") == "completed")
+    in_progress = sum(1 for t in todos if t.get("status") == "in_progress")
+    pending = sum(1 for t in todos if t.get("status") == "pending")
+
+    return {
+        "success": True,
+        "todos": todos,
+        "stats": {
+            "total": len(todos),
+            "completed": completed,
+            "in_progress": in_progress,
+            "pending": pending
+        },
+        "ui_update": "todo_panel"
+    }
+
+
+def todo_read() -> Dict[str, Any]:
+    """Read the current task list"""
+    state = get_session_state()
+    todos = state.get("todos", [])
+
+    completed = sum(1 for t in todos if t.get("status") == "completed")
+    in_progress = sum(1 for t in todos if t.get("status") == "in_progress")
+    pending = sum(1 for t in todos if t.get("status") == "pending")
+
+    return {
+        "todos": todos,
+        "stats": {
+            "total": len(todos),
+            "completed": completed,
+            "in_progress": in_progress,
+            "pending": pending
+        }
+    }
+
+
+def ask_user(question: str, options: List[Dict[str, Any]], allow_custom: bool = True) -> Dict[str, Any]:
+    """Ask the user a question and wait for their response"""
+    question_data = {
+        "question": question,
+        "options": options,
+        "allow_custom": allow_custom,
+        "awaiting_response": True
+    }
+
+    set_pending_question(question_data)
+
+    return {
+        "success": True,
+        "waiting_for_user": True,
+        "question": question,
+        "options": options,
+        "message": "Question sent to user. Waiting for response.",
+        "ui_update": "user_question"
+    }
+
+
+def use_skill(skill_name: str, user_request: str = "", inject_mode: str = "system") -> Dict[str, Any]:
+    """Activate a skill with flexible injection mode
+
+    Args:
+        skill_name: Name of the skill to activate
+        user_request: Original user request context
+        inject_mode: How to inject skill instructions
+            - "system" (default, Claude Code style): Inject into system prompt
+            - "result": Return instructions in tool_result (original style)
+
+    Both modes are supported for flexibility:
+    - "system" mode: Cleaner context, instructions in system prompt
+    - "result" mode: Instructions visible in tool_result, useful for debugging
+    """
+    if not HAS_SKILL_LOADER:
+        return {"error": "Skill loader not available"}
+
+    try:
+        loader = get_skill_loader()
+        skill = loader.get_skill(skill_name)
+
+        if not skill:
+            available = [s.name for s in loader.skills.values()]
+            return {
+                "error": f"Skill '{skill_name}' not found",
+                "available_skills": available
+            }
+
+        # Build skill instructions
+        instructions = f"""<skill name="{skill.name}">
+{skill.instructions}
+</skill>
+
+IMPORTANT: You have activated the '{skill.name}' skill.
+Please follow the instructions above to complete the user's request.
+User's original request: {user_request if user_request else '(not specified)'}
+
+Now proceed with the task using the skill instructions."""
+
+        if inject_mode == "result":
+            # Original style: return instructions in tool_result
+            return {
+                "success": True,
+                "skill_name": skill.name,
+                "skill_activated": True,
+                "inject_mode": "result",
+                "instructions": instructions,
+                "message": f"Skill '{skill.name}' activated. Follow the instructions above."
+            }
+        else:
+            # Claude Code style (default): store for system prompt injection
+            skill_info = {
+                "name": skill.name,
+                "instructions": skill.instructions,
+                "user_request": user_request
+            }
+            set_active_skill(skill_info)
+
+            return {
+                "success": True,
+                "skill_name": skill.name,
+                "skill_activated": True,
+                "inject_mode": "system",
+                "message": f"Skill '{skill.name}' activated and will be applied to next response."
+            }
+    except Exception as e:
+        return {"error": f"Failed to load skill: {str(e)}"}
+
+
+def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) -> Dict[str, Any]:
+    """Search for deferred tools and optionally auto-activate the best match.
+
+    When auto_activate=True, this will:
+    1. Search for matching tools
+    2. Start the MCP server if needed
+    3. Activate the best matching tool
+    """
+    try:
+        from tool_registry import get_tool_registry
+        from mcp_client import get_mcp_manager
+
+        registry = get_tool_registry()
+        manager = get_mcp_manager()
+
+        def activate_tool_with_server(tool_name: str) -> Dict[str, Any]:
+            """Activate a tool by starting its server if needed"""
+            # Already active?
+            if registry.is_active(tool_name):
+                return {
+                    "success": True,
+                    "tool_name": tool_name,
+                    "message": f"Tool '{tool_name}' is already active."
+                }
+
+            # Extract server name
+            if "__" not in tool_name:
+                return {"error": f"Invalid tool name format: {tool_name}"}
+
+            server_name = tool_name.split("__")[0]
+
+            # Start server if not running
+            if server_name not in manager.servers:
+                if not manager.ensure_server_started(server_name):
+                    return {"error": f"Failed to start MCP server: {server_name}"}
+
+            # Get tool definition from running server
+            if server_name in manager.servers:
+                server = manager.servers[server_name]
+                for tool_def in server.get_tool_definitions():
+                    if tool_def.get("name") == tool_name:
+                        registry.activate(tool_name, tool_def)
+                        return {
+                            "success": True,
+                            "tool_name": tool_name,
+                            "tool": tool_def,
+                            "message": f"Tool '{tool_name}' is now active and ready to use."
+                        }
+
+            return {"error": f"Tool '{tool_name}' not found on server {server_name}"}
+
+        # Direct selection with select: prefix
+        if query.startswith("select:"):
+            tool_name = query[7:].strip()
+            result = activate_tool_with_server(tool_name)
+            if "error" in result:
+                return result
+            return {
+                "success": True,
+                "action": "activated",
+                **result
+            }
+
+        # Search for tools in deferred registry
+        deferred_tools = registry.get_deferred_tools()
+        query_lower = query.lower()
+
+        # Score and rank tools
+        scored_tools = []
+        for tool in deferred_tools:
+            name = tool.get("name", "").lower()
+            desc = tool.get("description", "").lower()
+
+            score = 0
+            # Exact name match
+            if query_lower in name:
+                score += 10
+            # Word matches in name
+            for word in query_lower.split():
+                if word in name:
+                    score += 5
+                if word in desc:
+                    score += 2
+
+            if score > 0:
+                scored_tools.append((score, tool))
+
+        # Sort by score
+        scored_tools.sort(key=lambda x: x[0], reverse=True)
+        results = [t[1] for t in scored_tools[:max_results]]
+
+        # Auto-activate best match if requested
+        if auto_activate and results:
+            best_match = results[0]
+            tool_name = best_match.get("name")
+            result = activate_tool_with_server(tool_name)
+            if result.get("success"):
+                return {
+                    "success": True,
+                    "action": "auto_activated",
+                    "tool_name": tool_name,
+                    "tool": result.get("tool"),
+                    "search_results": results,
+                    "message": f"Auto-activated best match: '{tool_name}'. You can now use this tool."
+                }
+            # If activation failed but we have results, return them
+            return {
+                "success": True,
+                "action": "search",
+                "query": query,
+                "results": results,
+                "count": len(results),
+                "activation_error": result.get("error"),
+                "message": f"Found {len(results)} tools but auto-activation failed. Use select:<tool_name> to try manually."
+            }
+
+        # No results found
+        if not results:
+            # List available servers as hint
+            configured = manager.get_configured_servers()
+            enabled = [s['name'] for s in configured if s.get('enabled', True)]
+            return {
+                "success": True,
+                "action": "search",
+                "query": query,
+                "results": [],
+                "count": 0,
+                "available_servers": enabled,
+                "message": f"No matching tools found. Available MCP servers: {', '.join(enabled)}. Try a different query or use server__toolname format."
+            }
+
+        return {
+            "success": True,
+            "action": "search",
+            "query": query,
+            "results": results,
+            "count": len(results),
+            "message": f"Found {len(results)} matching tools. Use select:<tool_name> to activate."
+        }
+
+    except ImportError as e:
+        return {"error": f"Tool registry not available: {e}"}
+    except Exception as e:
+        return {"error": f"Tool search failed: {str(e)}"}

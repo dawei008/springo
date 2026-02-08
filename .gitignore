@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.log
+*.tmp
+certs/
+workspace/
+
+# Claude Code local settings (keep CLAUDE.md)
+.claude/settings.local.json
+
+# Test outputs
+tests/__pycache__/
+tests/*.png
+tests/*.json
+test-screenshots/
+test-*.png
+.pytest_cache/
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# Process outputs
+nohup.out
+
+# Temporary test/debug files (root only)
+/electron-test-*.js
+/main.js
+/index.html
+
+# SSM session
+.ssm_session
+
+# PyInstaller
+*.spec
+Springo-Installer.sh
+
+# MCP config (contains local paths)
+.mcp.json
+
+# Stray tilde directory
+~/
+
+# Test screenshots in springo-app
+springo-app/tests/*.png
