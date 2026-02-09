@@ -21,6 +21,7 @@ class TeamAgent(BaseModel):
     """团队中的单个 Agent"""
     agent_id: str = Field(default_factory=lambda: f"agent_{uuid.uuid4().hex[:8]}")
     role: AgentRole
+    custom_instructions: str = Field(default="", description="Custom instructions from orchestrator for this agent")
     status: Literal["idle", "thinking", "executing", "complete", "error"] = "idle"
     findings: str = ""
     assigned_task: Optional[str] = None
@@ -57,7 +58,7 @@ class Team(BaseModel):
 class TeamSpawnRequest(BaseModel):
     """创建团队请求"""
     user_request: str = Field(..., description="The user's request to decompose into agent tasks")
-    max_parallel_agents: int = Field(default=3, ge=1, le=5, description="Max agents to run in parallel")
+    max_parallel_agents: int = Field(default=3, ge=1, le=6, description="Max agents to run in parallel")
     model: str = Field(default="claude-sonnet-4-5-20250929", description="Orchestrator model")
     context: Optional[str] = Field(default=None, description="Additional context for the team")
 
@@ -72,16 +73,18 @@ ROLE_CONFIGS = {
     "orchestrator": AgentRole(
         name="orchestrator",
         model="claude-sonnet-4-5-20250929",
-        purpose="Task decomposition and result synthesis",
+        purpose="Dynamic task decomposition and result synthesis",
         system_prompt=(
             "You are the orchestrator agent. Your job is to:\n"
-            "1. Analyze the user's request\n"
-            "2. Decompose it into specific subtasks\n"
-            "3. Assign roles to each subtask\n"
+            "1. Analyze the user's request and judge its complexity\n"
+            "2. Decompose it into 1-6 subtasks (simple questions may need only 1 agent)\n"
+            "3. Assign roles to each subtask - use built-in roles or create custom ones\n"
             "4. Synthesize findings from all agents into a coherent response\n\n"
+            "Built-in roles: explorer, researcher, implementer, reviewer\n"
+            "You may also create custom role names with custom_instructions.\n\n"
             "When decomposing tasks, output a JSON array of subtasks:\n"
             '[\n'
-            '  {"title": "...", "description": "...", "role": "explorer|researcher|implementer|reviewer"}\n'
+            '  {"title": "...", "description": "...", "role": "...", "custom_instructions": "(optional)"}\n'
             ']\n\n'
             "When synthesizing, combine all agent findings into a clear, complete response.\n"
             "Do NOT use emojis. Use plain text only."

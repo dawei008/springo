@@ -5,6 +5,7 @@ Terminal Router for FastAPI
 import asyncio
 import asyncssh
 import os
+import shlex
 import signal
 import logging
 import uuid
@@ -555,12 +556,21 @@ async def ssh_connect(body: SSHConnectRequest):
         conn = await asyncssh.connect(**connect_kwargs)
 
         _ssh_connections[connection_id] = conn
+
+        # Get remote home directory as initial cwd
+        try:
+            home_result = await asyncio.wait_for(conn.run('echo $HOME'), timeout=5)
+            initial_cwd = (home_result.stdout or '').strip() or f'/home/{body.username}'
+        except Exception:
+            initial_cwd = f'/home/{body.username}'
+
         _ssh_connection_info[connection_id] = {
             'host': body.host,
             'port': body.port,
             'username': body.username,
             'name': body.name or f"{body.username}@{body.host}",
             'connected_at': datetime.now().isoformat(),
+            'cwd': initial_cwd,
         }
 
         return {
@@ -591,8 +601,24 @@ async def ssh_execute(body: SSHExecuteRequest, request: Request):
 
     info = _ssh_connection_info.get(body.connection_id, {})
 
+    cwd_marker = '__SPRINGO_CWD__'
+
     async def stream_ssh_command() -> AsyncGenerator[str, None]:
         try:
+            # Prepend cd to tracked cwd so directory persists across commands
+            cwd = info.get('cwd', '')
+            # Chain: cd to cwd, run user command, capture exit code, then pwd via marker
+            if cwd:
+                full_command = (
+                    f'cd {shlex.quote(cwd)} && {{ {body.command}; }};'
+                    f' __ec=$?; echo {cwd_marker}$__ec; pwd; exit $__ec'
+                )
+            else:
+                full_command = (
+                    f'{{ {body.command}; }};'
+                    f' __ec=$?; echo {cwd_marker}$__ec; pwd; exit $__ec'
+                )
+
             yield format_sse_event('start', {
                 'type': 'start',
                 'connection_id': body.connection_id,
@@ -601,12 +627,34 @@ async def ssh_execute(body: SSHExecuteRequest, request: Request):
             })
 
             result = await asyncio.wait_for(
-                conn.run(body.command),
+                conn.run(full_command, check=False),
                 timeout=body.timeout
             )
 
-            if result.stdout:
-                for line in result.stdout.splitlines(True):
+            stdout = result.stdout or ''
+            # Extract cwd and real exit code from marker in stdout
+            real_exit_code = result.exit_status or 0
+            if cwd_marker in stdout:
+                parts = stdout.split(cwd_marker)
+                # Everything before marker is real output
+                real_output = parts[0]
+                # After marker: first line is exit code, second line is pwd
+                trailer = parts[1].strip() if len(parts) > 1 else ''
+                trailer_lines = trailer.splitlines()
+                if trailer_lines:
+                    try:
+                        real_exit_code = int(trailer_lines[0].strip())
+                    except ValueError:
+                        pass
+                if len(trailer_lines) > 1:
+                    new_cwd = trailer_lines[1].strip()
+                    if new_cwd:
+                        info['cwd'] = new_cwd
+            else:
+                real_output = stdout
+
+            if real_output:
+                for line in real_output.splitlines(True):
                     yield format_sse_event('output', {
                         'type': 'stdout',
                         'data': line,
@@ -619,10 +667,12 @@ async def ssh_execute(body: SSHExecuteRequest, request: Request):
                         'data': line,
                     })
 
-            exit_code = result.exit_status or 0
+            exit_code = real_exit_code
+
             yield format_sse_event('exit', {
                 'type': 'exit',
                 'exit_code': exit_code,
+                'cwd': info.get('cwd', ''),
             })
 
         except asyncio.TimeoutError:

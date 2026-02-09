@@ -31,6 +31,8 @@ class MCPServerConnection:
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
         self.tools: List[Dict[str, Any]] = []
+        self.instructions: str = ""
+        self.server_info: Dict[str, Any] = {}
 
     def start(self) -> bool:
         """Start the MCP server process"""
@@ -71,6 +73,10 @@ class MCPServerConnection:
             })
 
             if init_result and "error" not in init_result:
+                # Store server instructions if provided (used in system prompt)
+                result_data = init_result.get("result", {})
+                self.instructions = result_data.get("instructions", "")
+                self.server_info = result_data.get("serverInfo", {})
                 self._send_notification("notifications/initialized", {})
                 self._discover_tools()
                 return True
@@ -304,6 +310,11 @@ class ExternalMCPManager:
         if not self._config_loaded:
             self.load_config(lazy=True)
         if server_name not in self.server_configs:
+            # Reload config in case new servers were added to mcp_servers.json
+            self._config_loaded = False
+            self.load_config(lazy=True)
+        if server_name not in self.server_configs:
+            logger.warning(f"MCP server '{server_name}' not configured in mcp_servers.json")
             return False
         config = self.server_configs[server_name]
         if config.get("status") == "disabled":
@@ -489,6 +500,14 @@ class ExternalMCPManager:
             all_tools.extend(server.get_tool_definitions())
         return all_tools
 
+    def get_server_instructions(self) -> Dict[str, str]:
+        """Get instructions from all running MCP servers (for system prompt injection)"""
+        instructions = {}
+        for name, server in self.servers.items():
+            if server.instructions:
+                instructions[name] = server.instructions
+        return instructions
+
     def call_tool(self, tool_name: str, arguments: Dict[str, Any], timeout: float = 60) -> Dict[str, Any]:
         if "__" not in tool_name:
             return {"error": f"Invalid tool name format: {tool_name}"}
@@ -505,8 +524,13 @@ class ExternalMCPManager:
         return server.call_tool(actual_tool_name, arguments, timeout=timeout)
 
     def stop_all(self):
+        """Stop all running servers without modifying config file."""
         for name in list(self.servers.keys()):
-            self.remove_server(name)
+            try:
+                self.servers[name].stop()
+            except Exception as e:
+                logger.warning(f"Failed to stop server {name}: {e}")
+        self.servers.clear()
 
     def get_status(self) -> Dict[str, Any]:
         status = {}

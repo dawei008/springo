@@ -31,6 +31,7 @@ BEDROCK_MODEL_MAPPING = {
     "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
     "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
     "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
 }
 
 
@@ -63,24 +64,19 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 
 The working directory will be provided below. Use it to construct absolute paths.
 
-## Springo Configuration Directory (~/.springo/)
+{SPRINGO_MD_PLACEHOLDER}
 
-Springo's configuration and data are stored in `~/.springo/`. Key files and directories:
+## Important: Two Directory Scopes
 
-| Path | Purpose |
-|------|---------|
-| `config.json` | App settings: AWS credentials, region, model, AgentCore Memory config, S3 sync config |
-| `mcp_servers.json` | External MCP server definitions (name, command, args, env, enabled) |
-| `mcp_tools_cache.json` | Cached tool schemas from MCP servers (avoids re-discovery on startup) |
-| `cache.json` | Electron frontend state: workspace folders, current working directory, UI preferences |
-| `scheduled_tasks.json` | User-created scheduled/recurring tasks (cron, delay, one-time) |
-| `sessions/` | Persisted chat sessions (each session is a JSON file with messages and metadata) |
-| `skills/` | Skill plugins (each subfolder contains a SKILL.md and optional scripts) |
-| `scripts/` | Helper scripts (e.g., start-playwright-cdp.sh) |
-| `cache/` | Temporary cache data |
-| `failed_uploads/` | Files that failed to upload to S3 (for retry) |
+You work with TWO separate directory trees. Do NOT confuse them:
 
-When users ask about configuration, settings, or stored data, refer to these paths.
+1. **Project directory** (working_dir) — source code, config files, app logic
+2. **`~/.springo/`** — Springo's runtime data: skills, sessions, config, scripts
+
+When searching for **skills**, **sessions**, **config**, or **scripts**, ALWAYS use `~/.springo/` as the base path:
+- Skills: `read_file ~/.springo/skills/<name>/SKILL.md` or `list_directory ~/.springo/skills/`
+- Config: `read_file ~/.springo/config.json`
+- For glob/grep, set `path` parameter to `~/.springo/` — do NOT search the project directory for these.
 
 ## Tool Selection Guidelines
 
@@ -326,14 +322,19 @@ class BedrockService:
         tools: list = None,
         working_dir: str = None
     ) -> tuple[str, Dict[str, Any]]:
-        """将 Anthropic API 请求转换为 Bedrock 格式"""
+        """将 Anthropic API 请求转换为 Bedrock 格式
+
+        NOTE: Deep-copies messages to avoid mutating the caller's list
+        (time prefix injection would otherwise leak into persisted sessions).
+        """
+        import copy
         model = request.get("model", "claude-sonnet-4-5-20250929")
         bedrock_model_id = self.get_bedrock_model_id(model)
-        
+
         bedrock_body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": request.get("max_tokens", 16384),
-            "messages": request.get("messages", []),
+            "messages": copy.deepcopy(request.get("messages", [])),
         }
         
         # Copy optional parameters
@@ -341,10 +342,27 @@ class BedrockService:
             if key in request and request[key] is not None:
                 bedrock_body[key] = request[key]
         
-        # Handle system prompt
+        # Handle system prompt - inject SPRINGO.md content
+        from ..utils.springo_md import load_springo_md
         system_prompt = request.get("system") or DEFAULT_SYSTEM_PROMPT
+        springo_md = load_springo_md()
+        if springo_md:
+            system_prompt = system_prompt.replace("{SPRINGO_MD_PLACEHOLDER}", springo_md)
+        else:
+            system_prompt = system_prompt.replace("{SPRINGO_MD_PLACEHOLDER}", "")
         if working_dir:
-            system_prompt += f"\n\n## Working Directory\n- **Path**: `{working_dir}`\n"
+            import os
+            springo_config_dir = os.path.expanduser("~/.springo")
+            system_prompt += (
+                f"\n\n## Working Directory & Springo Config\n"
+                f"- **Working Directory**: `{working_dir}` — project code lives here\n"
+                f"- **Springo Config**: `{springo_config_dir}/` — settings, skills, sessions, scripts\n"
+                f"  - Skills: `{springo_config_dir}/skills/` (each subfolder has SKILL.md)\n"
+                f"  - Config: `{springo_config_dir}/config.json`\n"
+                f"- For `glob`/`grep`: use `path` parameter to search the right directory\n"
+                f"  - Project files: `path: \"{working_dir}\"`\n"
+                f"  - Skills/config: `path: \"{springo_config_dir}\"`\n"
+            )
         bedrock_body["system"] = system_prompt
         
         # Handle tools
@@ -523,6 +541,89 @@ class BedrockService:
             logger.error(f"Bedrock streaming error: {e}")
             error_data = format_error_response(e)
             yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
+        finally:
+            if client_ctx:
+                try:
+                    await client_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
+    async def invoke_model_stream_text(
+        self,
+        model_id: str,
+        body: Dict[str, Any],
+        max_retries: int = 3
+    ) -> AsyncGenerator[dict, None]:
+        """
+        Streaming call that yields simple parsed dicts for agent team use.
+
+        Yields:
+            {"type": "delta", "text": "chunk"}
+            {"type": "usage", "input_tokens": N, "output_tokens": N}
+        """
+        import random
+
+        response = None
+        client_ctx = None
+        for attempt in range(max_retries):
+            try:
+                client_ctx = self.session.client(
+                    'bedrock-runtime',
+                    region_name=self.region,
+                    config=self.config
+                )
+                client = await client_ctx.__aenter__()
+                response = await client.invoke_model_with_response_stream(
+                    modelId=model_id,
+                    body=json.dumps(body),
+                    contentType="application/json",
+                    accept="application/json"
+                )
+                break
+            except Exception as e:
+                error_str = str(e)
+                is_throttle = 'ThrottlingException' in error_str or '429' in error_str or 'Too Many Requests' in error_str
+                if is_throttle and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 5)
+                    logger.warning(f"Bedrock stream_text 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                    if client_ctx:
+                        try:
+                            await client_ctx.__aexit__(None, None, None)
+                        except Exception:
+                            pass
+                    await asyncio.sleep(backoff)
+                    continue
+                if client_ctx:
+                    try:
+                        await client_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                raise
+
+        try:
+            async for event in response['body']:
+                chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
+                chunk_type = chunk.get("type")
+
+                if chunk_type == "content_block_delta":
+                    delta = chunk.get("delta", {})
+                    if delta.get("type") == "text_delta":
+                        yield {"type": "delta", "text": delta.get("text", "")}
+
+                elif chunk_type == "message_delta":
+                    usage = chunk.get("usage", {})
+                    if usage:
+                        yield {"type": "usage", "input_tokens": usage.get("input_tokens", 0), "output_tokens": usage.get("output_tokens", 0)}
+
+                elif chunk_type == "message_start":
+                    msg = chunk.get("message", {})
+                    usage = msg.get("usage", {})
+                    if usage:
+                        yield {"type": "usage", "input_tokens": usage.get("input_tokens", 0), "output_tokens": 0}
+
+        except Exception as e:
+            logger.error(f"Bedrock stream_text error: {e}")
+            raise
         finally:
             if client_ctx:
                 try:

@@ -1,6 +1,6 @@
 """
 Springo Agent Team Manager
-多 Agent 团队协作服务 - 任务分解、并行执行、结果合成
+多 Agent 团队协作服务 - 动态任务分解、流式并行执行、结果合成
 """
 import json
 import uuid
@@ -14,9 +14,30 @@ from ..models.teams import (
     TeamSpawnRequest, ROLE_CONFIGS,
 )
 from .bedrock import get_bedrock_service, BedrockService
+from .session_state import get_working_dir
 from ..utils.streaming import SSEEventBuilder
 
 logger = logging.getLogger(__name__)
+
+
+def _with_working_dir(system_prompt: str) -> str:
+    """Append working directory and SPRINGO.md reference to system prompt."""
+    from ..utils.springo_md import load_springo_md
+    parts = [system_prompt]
+    springo_md = load_springo_md()
+    if springo_md:
+        parts.append(f"\n\n{springo_md}")
+    wd = get_working_dir()
+    if wd:
+        import os
+        springo_config_dir = os.path.expanduser("~/.springo")
+        parts.append(
+            f"\n\n## Working Directory & Springo Config\n"
+            f"- **Working Directory**: `{wd}` — project code lives here\n"
+            f"- **Springo Config**: `{springo_config_dir}/` — settings, skills, sessions, scripts\n"
+            f"  - Skills: `{springo_config_dir}/skills/` (each subfolder has SKILL.md)\n"
+        )
+    return "".join(parts)
 
 
 class AgentTeamManager:
@@ -51,10 +72,10 @@ class AgentTeamManager:
         max_parallel: int = 3
     ) -> AsyncGenerator[str, None]:
         """
-        Execute the team workflow via SSE streaming:
-        1. Orchestrator decomposes the task
-        2. Spawn worker agents and execute in parallel
-        3. Orchestrator synthesizes results
+        Execute the team workflow via SSE streaming with real-time deltas:
+        1. Orchestrator dynamically decomposes the task (1-6 agents)
+        2. Spawn worker agents and execute with streaming via queue
+        3. Orchestrator synthesizes results with streaming
         """
         team = self._teams.get(team_id)
         if not team:
@@ -92,11 +113,34 @@ class AgentTeamManager:
                 )
                 team.task_board.append(task_item)
 
-            # Spawn worker agents for each subtask
+            # Spawn worker agents for each subtask (supports custom roles)
             for i, st in enumerate(subtasks):
                 role_name = st.get("role", "explorer")
-                role_config = ROLE_CONFIGS.get(role_name, ROLE_CONFIGS["explorer"]).model_copy()
-                agent = TeamAgent(role=role_config, assigned_task=team.task_board[i].task_id)
+                custom_instructions = st.get("custom_instructions", "")
+                agent_model = st.get("model", "")
+
+                if role_name in ROLE_CONFIGS:
+                    role_config = ROLE_CONFIGS[role_name].model_copy()
+                else:
+                    # Create custom role from explorer template
+                    base = ROLE_CONFIGS["explorer"].model_copy()
+                    role_config = AgentRole(
+                        name=role_name,
+                        purpose=custom_instructions[:100] if custom_instructions else f"Custom {role_name} agent",
+                        system_prompt=custom_instructions or base.system_prompt,
+                        model=base.model,
+                        tools_available=base.tools_available,
+                    )
+
+                # Override model if orchestrator specified one
+                if agent_model:
+                    role_config.model = agent_model
+
+                agent = TeamAgent(
+                    role=role_config,
+                    custom_instructions=custom_instructions,
+                    assigned_task=team.task_board[i].task_id,
+                )
                 team.agents.append(agent)
                 team.task_board[i].assigned_to = agent.agent_id
 
@@ -119,72 +163,111 @@ class AgentTeamManager:
             ]
             yield SSEEventBuilder.team_task_board(team.team_id, task_board_data)
 
-            # === Phase 3: Execute worker agents in parallel ===
+            # === Phase 3: Execute worker agents with streaming queue ===
             team.status = "executing"
             worker_agents = [a for a in team.agents if a.role.name != "orchestrator"]
 
-            # Run agents in batches of max_parallel
-            for batch_start in range(0, len(worker_agents), max_parallel):
-                batch = worker_agents[batch_start:batch_start + max_parallel]
+            # Queue-based streaming execution
+            event_queue: asyncio.Queue = asyncio.Queue()
+            completed_count = 0
+            total_agents = len(worker_agents)
 
-                # Emit start events for this batch
-                for agent in batch:
-                    task_item = next(
-                        (t for t in team.task_board if t.assigned_to == agent.agent_id),
-                        None
-                    )
-                    task_title = task_item.title if task_item else "Unknown"
-                    yield SSEEventBuilder.team_agent_start(
+            async def run_agent_streaming(agent: TeamAgent):
+                """Run a single agent and push events to queue"""
+                task_item = next(
+                    (t for t in team.task_board if t.assigned_to == agent.agent_id),
+                    None
+                )
+                task_title = task_item.title if task_item else "Unknown"
+
+                # Push start event
+                await event_queue.put(
+                    SSEEventBuilder.team_agent_start(
                         team.team_id, agent.agent_id, agent.role.name, task_title
                     )
+                )
 
-                # Execute batch in parallel
-                tasks = []
-                for agent in batch:
-                    task_item = next(
-                        (t for t in team.task_board if t.assigned_to == agent.agent_id),
-                        None
+                try:
+                    full_text, tokens = await self._execute_agent_streaming(
+                        team, agent, task_item, team.user_request, team.shared_context,
+                        event_queue
                     )
-                    tasks.append(self._execute_agent(
-                        team, agent, task_item, team.user_request, team.shared_context
-                    ))
+                    agent.status = "complete"
+                    agent.findings = full_text
+                    agent.token_usage = tokens
+                    if task_item:
+                        task_item.status = "complete"
+                        task_item.findings = full_text
 
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Emit results for this batch
-                for agent, result in zip(batch, results):
-                    task_item = next(
-                        (t for t in team.task_board if t.assigned_to == agent.agent_id),
-                        None
-                    )
-                    task_title = task_item.title if task_item else "Unknown"
-
-                    if isinstance(result, Exception):
-                        agent.status = "error"
-                        agent.findings = f"Error: {str(result)}"
-                        if task_item:
-                            task_item.status = "error"
-                            task_item.findings = agent.findings
-                        yield SSEEventBuilder.team_agent_error(
-                            team.team_id, agent.agent_id, agent.role.name, str(result)
-                        )
-                    else:
-                        agent.status = "complete"
-                        agent.findings = result.get("findings", "")
-                        agent.token_usage = result.get("tokens", {"input_tokens": 0, "output_tokens": 0})
-                        if task_item:
-                            task_item.status = "complete"
-                            task_item.findings = agent.findings
-                        yield SSEEventBuilder.team_agent_complete(
+                    await event_queue.put(
+                        SSEEventBuilder.team_agent_complete(
                             team.team_id, agent.agent_id, agent.role.name,
-                            task_title, agent.findings, agent.token_usage
+                            task_title, full_text, tokens
                         )
+                    )
+                except Exception as e:
+                    agent.status = "error"
+                    agent.findings = f"Error: {str(e)}"
+                    agent.completed_at = datetime.now().isoformat()
+                    if task_item:
+                        task_item.status = "error"
+                        task_item.findings = agent.findings
+                    await event_queue.put(
+                        SSEEventBuilder.team_agent_error(
+                            team.team_id, agent.agent_id, agent.role.name, str(e)
+                        )
+                    )
 
-            # === Phase 4: Orchestrator synthesizes results ===
+                # Signal this agent is done
+                await event_queue.put({"__agent_done__": True})
+
+            # Launch agents in batches of max_parallel
+            running_tasks: List[asyncio.Task] = []
+            agent_index = 0
+
+            # Start first batch
+            while agent_index < total_agents and agent_index < max_parallel:
+                task = asyncio.create_task(run_agent_streaming(worker_agents[agent_index]))
+                running_tasks.append(task)
+                agent_index += 1
+
+            # Drain queue and yield events until all agents complete
+            while completed_count < total_agents:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=15.0)
+
+                    if isinstance(event, dict) and event.get("__agent_done__"):
+                        completed_count += 1
+                        # Launch next agent if any remaining
+                        if agent_index < total_agents:
+                            task = asyncio.create_task(run_agent_streaming(worker_agents[agent_index]))
+                            running_tasks.append(task)
+                            agent_index += 1
+                    else:
+                        yield event
+
+                except asyncio.TimeoutError:
+                    # Send heartbeat to keep connection alive
+                    yield SSEEventBuilder.heartbeat(0.0)
+
+            # Wait for all tasks to finish (they should already be done)
+            for task in running_tasks:
+                if not task.done():
+                    try:
+                        await asyncio.wait_for(task, timeout=5.0)
+                    except (asyncio.TimeoutError, Exception):
+                        pass
+
+            # === Phase 4: Orchestrator synthesizes results with streaming ===
             team.status = "synthesizing"
             yield SSEEventBuilder.team_synthesizing(team.team_id)
 
-            final_result = await self._synthesize_results(orchestrator, team)
+            final_result = ""
+            async for event in self._synthesize_results_streaming(orchestrator, team):
+                if isinstance(event, dict) and "__final_result__" in event:
+                    final_result = event["__final_result__"]
+                else:
+                    yield event  # SSE event string
 
             team.status = "complete"
             team.final_result = final_result
@@ -209,18 +292,35 @@ class AgentTeamManager:
     async def _decompose_task(
         self, orchestrator: TeamAgent, user_request: str, context: str
     ) -> List[Dict[str, Any]]:
-        """Use orchestrator to decompose a request into subtasks"""
+        """Use orchestrator to dynamically decompose a request into subtasks.
+
+        The orchestrator decides:
+        - How many agents (1-6) based on task complexity
+        - Which roles to use (built-in or custom)
+        - Optional custom_instructions per agent
+        - Optional model override per agent
+        """
         messages = [
             {
                 "role": "user",
                 "content": (
-                    f"Decompose the following user request into 2-4 specific subtasks.\n"
-                    f"Each subtask should have a title, description, and the best role to handle it.\n"
-                    f"Available roles: explorer, researcher, implementer, reviewer\n\n"
+                    "Decompose the following user request into subtasks for a team of AI agents.\n\n"
+                    "GUIDELINES:\n"
+                    "- Use 1-6 agents depending on complexity. Simple questions may need only 1 agent.\n"
+                    "- Available built-in roles: explorer, researcher, implementer, reviewer\n"
+                    "- You may also create custom role names (e.g., 'data_analyst', 'security_auditor', 'translator')\n"
+                    "- For custom roles, provide 'custom_instructions' with the agent's system prompt\n"
+                    "- Optionally specify 'model' per agent (e.g., 'claude-sonnet-4-5-20250929' for complex tasks)\n\n"
                     f"User request: {user_request}\n"
                     f"{'Additional context: ' + context if context else ''}\n\n"
-                    f"Respond with ONLY a JSON array of subtasks, no other text:\n"
-                    f'[{{"title": "...", "description": "...", "role": "explorer|researcher|implementer|reviewer"}}]'
+                    "Respond with ONLY a JSON array. Each item has:\n"
+                    '- "title": short task title\n'
+                    '- "description": what this agent should do\n'
+                    '- "role": role name (built-in or custom)\n'
+                    '- "custom_instructions": (optional) system prompt for custom roles\n'
+                    '- "model": (optional) model override\n\n'
+                    "Example:\n"
+                    '[{"title": "Research API docs", "description": "Find the latest API documentation...", "role": "researcher"}]\n'
                 ),
             }
         ]
@@ -229,7 +329,7 @@ class AgentTeamManager:
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 2048,
-            "system": orchestrator.role.system_prompt,
+            "system": _with_working_dir(orchestrator.role.system_prompt),
             "messages": messages,
         }
 
@@ -249,7 +349,6 @@ class AgentTeamManager:
             # Parse JSON from response - try to extract JSON array
             text = text.strip()
             if text.startswith("```"):
-                # Strip markdown code fences
                 lines = text.split("\n")
                 text = "\n".join(
                     line for line in lines
@@ -267,6 +366,10 @@ class AgentTeamManager:
             if not isinstance(subtasks, list):
                 subtasks = [subtasks]
 
+            # Clamp to 1-6 agents
+            if len(subtasks) > 6:
+                subtasks = subtasks[:6]
+
             logger.info(f"Orchestrator decomposed into {len(subtasks)} subtasks")
             return subtasks
 
@@ -274,15 +377,20 @@ class AgentTeamManager:
             logger.error(f"Task decomposition failed: {e}")
             return []
 
-    async def _execute_agent(
+    async def _execute_agent_streaming(
         self,
         team: Team,
         agent: TeamAgent,
         task_item: Optional[TaskBoardItem],
         user_request: str,
         shared_context: str,
-    ) -> Dict[str, Any]:
-        """Execute a single agent's task"""
+        event_queue: asyncio.Queue,
+    ) -> tuple:
+        """Execute a single agent's task with streaming, pushing delta events to queue.
+
+        Returns:
+            (full_text, tokens_dict)
+        """
         agent.status = "thinking"
         agent.started_at = datetime.now().isoformat()
 
@@ -298,6 +406,11 @@ class AgentTeamManager:
             if other.agent_id != agent.agent_id and other.findings:
                 other_findings.append(f"[{other.role.name}] {other.findings[:500]}")
 
+        # Build system prompt (use custom_instructions if set)
+        system_prompt = agent.role.system_prompt
+        if agent.custom_instructions and agent.custom_instructions != system_prompt:
+            system_prompt = agent.custom_instructions + "\n\n" + system_prompt
+
         messages = [
             {
                 "role": "user",
@@ -308,7 +421,8 @@ class AgentTeamManager:
                     f"Details: {task_desc}\n"
                     f"{'Shared context: ' + shared_context if shared_context else ''}\n"
                     f"{'Other agents findings: ' + chr(10).join(other_findings) if other_findings else ''}\n\n"
-                    f"Provide your findings concisely. Focus on your assigned task."
+                    f"Provide your findings concisely. Focus on your assigned task.\n"
+                    f"Do NOT use emojis or icons. Use plain text and markdown only."
                 ),
             }
         ]
@@ -317,7 +431,80 @@ class AgentTeamManager:
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 4096,
-            "system": agent.role.system_prompt,
+            "system": _with_working_dir(system_prompt),
+            "messages": messages,
+        }
+
+        agent.status = "executing"
+        full_text = ""
+        tokens = {"input_tokens": 0, "output_tokens": 0}
+
+        try:
+            async for chunk in self.bedrock.invoke_model_stream_text(model_id, body):
+                if chunk["type"] == "delta":
+                    text = chunk["text"]
+                    full_text += text
+                    # Push delta event to queue
+                    await event_queue.put(
+                        SSEEventBuilder.team_agent_delta(
+                            team.team_id, agent.agent_id, agent.role.name, text
+                        )
+                    )
+                elif chunk["type"] == "usage":
+                    tokens["input_tokens"] += chunk.get("input_tokens", 0)
+                    tokens["output_tokens"] += chunk.get("output_tokens", 0)
+
+            agent.completed_at = datetime.now().isoformat()
+            return full_text, tokens
+
+        except Exception as e:
+            agent.completed_at = datetime.now().isoformat()
+            raise
+
+    async def _execute_agent(
+        self,
+        team: Team,
+        agent: TeamAgent,
+        task_item: Optional[TaskBoardItem],
+        user_request: str,
+        shared_context: str,
+    ) -> Dict[str, Any]:
+        """Execute a single agent's task (non-streaming fallback)"""
+        agent.status = "thinking"
+        agent.started_at = datetime.now().isoformat()
+
+        if task_item:
+            task_item.status = "in_progress"
+
+        task_desc = task_item.description if task_item else user_request
+        task_title = task_item.title if task_item else "General task"
+
+        other_findings = []
+        for other in team.agents:
+            if other.agent_id != agent.agent_id and other.findings:
+                other_findings.append(f"[{other.role.name}] {other.findings[:500]}")
+
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"You are working as part of a team to address this request:\n"
+                    f"Original request: {user_request}\n\n"
+                    f"Your specific task: {task_title}\n"
+                    f"Details: {task_desc}\n"
+                    f"{'Shared context: ' + shared_context if shared_context else ''}\n"
+                    f"{'Other agents findings: ' + chr(10).join(other_findings) if other_findings else ''}\n\n"
+                    f"Provide your findings concisely. Focus on your assigned task.\n"
+                    f"Do NOT use emojis or icons. Use plain text and markdown only."
+                ),
+            }
+        ]
+
+        model_id = self.bedrock.get_bedrock_model_id(agent.role.model)
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 4096,
+            "system": _with_working_dir(agent.role.system_prompt),
             "messages": messages,
         }
 
@@ -342,8 +529,13 @@ class AgentTeamManager:
             agent.completed_at = datetime.now().isoformat()
             raise
 
-    async def _synthesize_results(self, orchestrator: TeamAgent, team: Team) -> str:
-        """Orchestrator synthesizes all agent findings into final result"""
+    async def _synthesize_results_streaming(
+        self, orchestrator: TeamAgent, team: Team
+    ) -> AsyncGenerator:
+        """Orchestrator synthesizes results with streaming deltas.
+
+        Yields SSE event strings for deltas, then yields the final full text (non-string).
+        """
         findings_text = ""
         for agent in team.agents:
             if agent.role.name != "orchestrator" and agent.findings:
@@ -363,7 +555,8 @@ class AgentTeamManager:
                     f"Original request: {team.user_request}\n\n"
                     f"Agent findings:\n{findings_text}\n\n"
                     f"Provide a well-organized synthesis. Do not simply concatenate the findings. "
-                    f"Create a coherent response that addresses the user's request completely."
+                    f"Create a coherent response that addresses the user's request completely.\n\n"
+                    f"IMPORTANT: Do NOT use any emojis or icons in the output. Use plain text and markdown formatting only."
                 ),
             }
         ]
@@ -372,7 +565,61 @@ class AgentTeamManager:
         body = {
             "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": 8192,
-            "system": orchestrator.role.system_prompt,
+            "system": _with_working_dir(orchestrator.role.system_prompt),
+            "messages": messages,
+        }
+
+        full_text = ""
+        try:
+            async for chunk in self.bedrock.invoke_model_stream_text(model_id, body):
+                if chunk["type"] == "delta":
+                    text = chunk["text"]
+                    full_text += text
+                    yield SSEEventBuilder.team_synthesis_delta(team.team_id, text)
+                elif chunk["type"] == "usage":
+                    orchestrator.token_usage["input_tokens"] += chunk.get("input_tokens", 0)
+                    orchestrator.token_usage["output_tokens"] += chunk.get("output_tokens", 0)
+
+            # Yield final result as a dict sentinel
+            yield {"__final_result__": full_text}
+
+        except Exception as e:
+            logger.error(f"Streaming synthesis failed: {e}")
+            fallback = f"[Synthesis failed: {e}]\n\nRaw findings:\n{findings_text}"
+            yield {"__final_result__": fallback}
+
+    async def _synthesize_results(self, orchestrator: TeamAgent, team: Team) -> str:
+        """Orchestrator synthesizes all agent findings (non-streaming fallback)"""
+        findings_text = ""
+        for agent in team.agents:
+            if agent.role.name != "orchestrator" and agent.findings:
+                task_item = next(
+                    (t for t in team.task_board if t.assigned_to == agent.agent_id),
+                    None
+                )
+                task_title = task_item.title if task_item else "General"
+                findings_text += f"\n### [{agent.role.name}] {task_title}\n{agent.findings}\n"
+
+        messages = [
+            {
+                "role": "user",
+                "content": (
+                    f"You are the orchestrator. Synthesize the following agent findings into "
+                    f"a clear, comprehensive response to the user's original request.\n\n"
+                    f"Original request: {team.user_request}\n\n"
+                    f"Agent findings:\n{findings_text}\n\n"
+                    f"Provide a well-organized synthesis. Do not simply concatenate the findings. "
+                    f"Create a coherent response that addresses the user's request completely.\n\n"
+                    f"IMPORTANT: Do NOT use any emojis or icons in the output. Use plain text and markdown formatting only."
+                ),
+            }
+        ]
+
+        model_id = self.bedrock.get_bedrock_model_id(orchestrator.role.model)
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 8192,
+            "system": _with_working_dir(orchestrator.role.system_prompt),
             "messages": messages,
         }
 
@@ -384,7 +631,6 @@ class AgentTeamManager:
                 if block.get("type") == "text":
                     text += block.get("text", "")
 
-            # Update orchestrator token usage (add synthesis tokens)
             usage = response.get("usage", {})
             orchestrator.token_usage["input_tokens"] += usage.get("input_tokens", 0)
             orchestrator.token_usage["output_tokens"] += usage.get("output_tokens", 0)
@@ -393,7 +639,6 @@ class AgentTeamManager:
 
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
-            # Fallback: concatenate findings
             return f"[Synthesis failed: {e}]\n\nRaw findings:\n{findings_text}"
 
 

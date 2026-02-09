@@ -86,6 +86,12 @@ def _get_loader():
     return get_skill_loader()
 
 
+@router.get("/skills/path")
+async def get_skills_path():
+    """获取技能目录路径"""
+    return {"path": str(SKILLS_DIR)}
+
+
 @router.get("/skills", response_model=SkillsListResponse)
 async def list_skills():
     """列出所有可用技能"""
@@ -200,7 +206,3 @@ async def activate_skill(skill_name: str, request: ActivateSkillRequest = None):
     return {"success": True, "skill_name": skill_name}
 
 
-@router.get("/skills/path")
-async def get_skills_path():
-    """获取技能目录路径"""
-    return {"path": str(SKILLS_DIR)}

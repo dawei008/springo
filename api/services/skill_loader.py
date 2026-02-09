@@ -23,9 +23,10 @@ SKILL_CACHE_TTL = 60
 try:
     import yaml
     HAS_YAML = True
-except ImportError:
+except Exception as _yaml_err:
+    yaml = None
     HAS_YAML = False
-    logger.debug("PyYAML not installed, using simple frontmatter parsing")
+    logger.warning(f"PyYAML not available ({type(_yaml_err).__name__}: {_yaml_err}), using simple frontmatter parsing")
 
 
 class Skill:
@@ -72,15 +73,40 @@ class SkillLoader:
             if HAS_YAML:
                 try:
                     frontmatter = yaml.safe_load(frontmatter_str)
-                except Exception:
+                except Exception as e:
+                    logger.warning(f"YAML parse failed: {e}")
                     frontmatter = {}
             else:
-                # Simple key: value parsing
+                # Simple key: value parsing with basic multi-line block support
                 frontmatter = {}
+                current_key = None
+                current_lines = []
                 for line in frontmatter_str.split('\n'):
-                    if ':' in line:
+                    # Indented line = continuation of multi-line value
+                    if current_key and line.startswith('  '):
+                        current_lines.append(line.strip())
+                        continue
+                    # Save previous multi-line key
+                    if current_key and current_lines:
+                        frontmatter[current_key] = ' '.join(current_lines)
+                        current_key = None
+                        current_lines = []
+                    if ':' in line and not line.startswith(' '):
                         key, _, value = line.partition(':')
-                        frontmatter[key.strip()] = value.strip().strip('"').strip("'")
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        if value in ('|', '>'):
+                            # Multi-line block scalar — collect indented lines
+                            current_key = key
+                            current_lines = []
+                        elif value.startswith('-') or value == '':
+                            # List or empty — skip for simple parser
+                            frontmatter[key] = value
+                        else:
+                            frontmatter[key] = value
+                # Flush remaining multi-line key
+                if current_key and current_lines:
+                    frontmatter[current_key] = ' '.join(current_lines)
         else:
             frontmatter = {}
             instructions = content.strip()

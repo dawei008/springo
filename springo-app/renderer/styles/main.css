@@ -507,9 +507,9 @@
 
         /* Right Panel */
         .right-panel {
-            width: 280px;
+            width: 360px;
             min-width: 200px;
-            max-width: 500px;
+            max-width: 600px;
             background: var(--bg-secondary);
             border-left: 1px solid var(--border);
             display: flex;
@@ -546,18 +546,22 @@
         }
 
         .right-panel-tab {
-            flex: 1;
-            padding: 12px 16px;
+            flex: 1 1 0;
+            padding: 10px 4px;
+            min-width: 0;
             border: none;
             background: transparent;
             color: var(--text-tertiary);
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 500;
             cursor: pointer;
             border-radius: 0;
             transition: all 0.15s ease;
             position: relative;
             text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         .right-panel-tab:hover {
@@ -1059,11 +1063,13 @@
 
         .news-refresh-btn {
             background: none;
-            border: none;
+            border: 1px solid var(--border);
             color: var(--text-secondary);
             cursor: pointer;
-            padding: 4px;
-            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -1071,8 +1077,9 @@
         }
 
         .news-refresh-btn:hover {
-            background: transparent;
+            background: var(--bg-hover);
             color: var(--accent);
+            border-color: var(--accent);
         }
 
         .news-refresh-btn.spinning svg {
@@ -5240,7 +5247,7 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    background: #1a1b26;
+    background: var(--bg-primary);
 }
 
 .terminal-panel-header {
@@ -5248,8 +5255,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 12px;
-    background: #16161e;
-    border-bottom: 1px solid #292e42;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
     min-height: 36px;
 }
 
@@ -5261,7 +5268,7 @@
 }
 
 .terminal-cwd {
-    color: #7aa2f7;
+    color: var(--accent);
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
     font-size: 11px;
     font-weight: 500;
@@ -5280,7 +5287,7 @@
     height: 28px;
     border: none;
     background: transparent;
-    color: #565f89;
+    color: var(--text-tertiary);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -5290,8 +5297,8 @@
 }
 
 .terminal-panel-btn:hover {
-    background: #292e42;
-    color: #c0caf5;
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
 }
 
 .terminal-panel-output {
@@ -5302,7 +5309,7 @@
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
     font-size: 12px;
     line-height: 1.6;
-    color: #c0caf5;
+    color: var(--text-primary);
     white-space: pre-wrap;
     word-break: break-word;
 }
@@ -5321,12 +5328,12 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    background: #16161e;
-    border-top: 1px solid #292e42;
+    background: var(--bg-secondary);
+    border-top: 1px solid var(--border);
 }
 
 .terminal-prompt {
-    color: #9ece6a;
+    color: var(--success-text, #198754);
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
     font-size: 12px;
     font-weight: 600;
@@ -5337,7 +5344,7 @@
     flex: 1;
     border: none;
     background: transparent;
-    color: #c0caf5;
+    color: var(--text-primary);
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
     font-size: 12px;
     outline: none;
@@ -5345,15 +5352,15 @@
 }
 
 .terminal-panel-input::placeholder {
-    color: #565f89;
+    color: var(--text-tertiary);
 }
 
 .terminal-run-btn:hover {
-    color: #9ece6a !important;
+    color: var(--success-text, #198754) !important;
 }
 
 .terminal-stop-btn:hover {
-    color: #f7768e !important;
+    color: var(--error-text, #dc3545) !important;
 }
 
 /* Terminal panel scrollbar */
@@ -5366,12 +5373,12 @@
 }
 
 .terminal-panel-output::-webkit-scrollbar-thumb {
-    background: #292e42;
+    background: var(--border);
     border-radius: 3px;
 }
 
 .terminal-panel-output::-webkit-scrollbar-thumb:hover {
-    background: #3b4261;
+    background: var(--text-tertiary);
 }
 
 /* ============ Terminal SSH Styles ============ */
@@ -5379,7 +5386,7 @@
 .terminal-mode-tabs {
     display: flex;
     gap: 2px;
-    background: #13141c;
+    background: var(--bg-tertiary);
     border-radius: 4px;
     padding: 2px;
 }
@@ -5388,7 +5395,7 @@
     padding: 3px 10px;
     border: none;
     background: transparent;
-    color: #565f89;
+    color: var(--text-tertiary);
     font-size: 11px;
     font-weight: 500;
     cursor: pointer;
@@ -5397,12 +5404,12 @@
 }
 
 .terminal-mode-tab:hover {
-    color: #c0caf5;
+    color: var(--text-primary);
 }
 
 .terminal-mode-tab.active {
-    background: #292e42;
-    color: #7aa2f7;
+    background: var(--bg-primary);
+    color: var(--accent);
 }
 
 /* SSH Config Hosts Dropdown */
@@ -5413,10 +5420,10 @@
 .ssh-config-hosts select {
     width: 100%;
     padding: 5px 8px;
-    border: 1px solid #292e42;
+    border: 1px solid var(--border);
     border-radius: 4px;
-    background: #1a1b26;
-    color: #c0caf5;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     font-size: 11px;
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
     outline: none;
@@ -5425,18 +5432,18 @@
 }
 
 .ssh-config-hosts select:focus {
-    border-color: #7aa2f7;
+    border-color: var(--accent);
 }
 
 .ssh-config-hosts select option {
-    background: #1a1b26;
-    color: #c0caf5;
+    background: var(--bg-primary);
+    color: var(--text-primary);
 }
 
 .ssh-connect-form {
     padding: 8px 12px;
-    background: #16161e;
-    border-bottom: 1px solid #292e42;
+    background: var(--bg-secondary);
+    border-bottom: 1px solid var(--border);
 }
 
 .ssh-form-row {
@@ -5452,21 +5459,21 @@
 .ssh-input {
     flex: 1;
     padding: 5px 8px;
-    border: 1px solid #292e42;
+    border: 1px solid var(--border);
     border-radius: 4px;
-    background: #1a1b26;
-    color: #c0caf5;
+    background: var(--bg-primary);
+    color: var(--text-primary);
     font-size: 11px;
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
     outline: none;
 }
 
 .ssh-input:focus {
-    border-color: #7aa2f7;
+    border-color: var(--accent);
 }
 
 .ssh-input::placeholder {
-    color: #565f89;
+    color: var(--text-tertiary);
 }
 
 .ssh-port-input {
@@ -5478,8 +5485,8 @@
     padding: 5px 14px;
     border: none;
     border-radius: 4px;
-    background: #7aa2f7;
-    color: #1a1b26;
+    background: var(--accent);
+    color: #ffffff;
     font-size: 11px;
     font-weight: 600;
     cursor: pointer;
@@ -5488,7 +5495,7 @@
 }
 
 .ssh-connect-btn:hover {
-    background: #89b4fa;
+    background: var(--accent-hover);
 }
 
 .ssh-status {
@@ -5498,15 +5505,15 @@
 }
 
 .ssh-status.connected {
-    color: #9ece6a;
+    color: var(--success-text, #198754);
 }
 
 .ssh-status.connecting {
-    color: #e0af68;
+    color: var(--warning-text, #d97706);
 }
 
 .ssh-status.error {
-    color: #f7768e;
+    color: var(--error-text, #dc3545);
 }
 
 .ssh-connections {
@@ -5521,16 +5528,16 @@
     align-items: center;
     gap: 4px;
     padding: 2px 6px;
-    background: #292e42;
+    background: var(--bg-tertiary);
     border-radius: 3px;
     font-size: 10px;
-    color: #565f89;
+    color: var(--text-tertiary);
     border: 1px solid transparent;
 }
 
 .ssh-connection-item.active {
-    border-color: #7aa2f7;
-    color: #7aa2f7;
+    border-color: var(--accent);
+    color: var(--accent);
 }
 
 .ssh-conn-name {
@@ -5538,20 +5545,20 @@
 }
 
 .ssh-conn-name:hover {
-    color: #c0caf5;
+    color: var(--text-primary);
 }
 
 .ssh-disconnect-btn {
     border: none;
     background: none;
-    color: #565f89;
+    color: var(--text-tertiary);
     cursor: pointer;
     font-size: 10px;
     padding: 0 2px;
 }
 
 .ssh-disconnect-btn:hover {
-    color: #f7768e;
+    color: var(--error-text, #dc3545);
 }
 
 /* ============ Inline Tasks Collapse ============ */
@@ -5803,7 +5810,8 @@
 
 .team-split-agent-output {
     display: none;
-    font-size: 11px;
+    font-size: 12px;
+    font-family: var(--font-mono, 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace);
     color: var(--text-secondary);
     line-height: 1.5;
     margin-top: 6px;
@@ -5812,9 +5820,9 @@
     border-radius: 6px;
     white-space: pre-wrap;
     word-break: break-word;
-    /* Full output - no max-height truncation */
     overflow-y: auto;
-    max-height: 400px;
+    max-height: 300px;
+    scroll-behavior: smooth;
 }
 
 .team-split-agent-output.success {
@@ -5845,160 +5853,16 @@
 }
 
 /* ============ Terminal Panel Light Theme ============ */
-/* Add class "terminal-light" to .terminal-panel to enable light theme */
+/* terminal-light class no longer needed — terminal uses CSS variables from :root / [data-theme="dark"] */
 
-.terminal-panel.terminal-light {
-    background: #f8f9fa;
-}
-
-.terminal-panel.terminal-light .terminal-panel-header {
-    background: #e9ecef;
-    border-bottom: 1px solid #dee2e6;
-}
-
-.terminal-panel.terminal-light .terminal-cwd {
-    color: #0066cc;
-}
-
-.terminal-panel.terminal-light .terminal-panel-btn {
-    color: #6c757d;
-}
-
-.terminal-panel.terminal-light .terminal-panel-btn:hover {
-    background: #dee2e6;
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .terminal-panel-output {
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .terminal-panel-input-row {
-    background: #e9ecef;
-    border-top: 1px solid #dee2e6;
-}
-
-.terminal-panel.terminal-light .terminal-prompt {
-    color: #198754;
-}
-
-.terminal-panel.terminal-light .terminal-panel-input {
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .terminal-panel-input::placeholder {
-    color: #6c757d;
-}
-
-.terminal-panel.terminal-light .terminal-panel-output::-webkit-scrollbar-thumb {
-    background: #ced4da;
-}
-
-.terminal-panel.terminal-light .terminal-panel-output::-webkit-scrollbar-thumb:hover {
-    background: #adb5bd;
-}
-
-/* SSH Form Light Theme */
-.terminal-panel.terminal-light .terminal-mode-tabs {
-    background: #e9ecef;
-}
-
-.terminal-panel.terminal-light .terminal-mode-tab {
-    color: #6c757d;
-}
-
-.terminal-panel.terminal-light .terminal-mode-tab:hover {
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .terminal-mode-tab.active {
-    background: #ffffff;
-    color: #0066cc;
-}
-
-.terminal-panel.terminal-light .ssh-connect-form {
-    background: #e9ecef;
-    border-bottom: 1px solid #dee2e6;
-}
-
-.terminal-panel.terminal-light .ssh-input {
-    border: 1px solid #ced4da;
-    background: #ffffff;
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .ssh-input:focus {
-    border-color: #0066cc;
-}
-
-.terminal-panel.terminal-light .ssh-input::placeholder {
-    color: #6c757d;
-}
-
-.terminal-panel.terminal-light .ssh-config-hosts select {
-    border: 1px solid #ced4da;
-    background: #ffffff;
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .ssh-config-hosts select:focus {
-    border-color: #0066cc;
-}
-
-.terminal-panel.terminal-light .ssh-config-hosts select option {
-    background: #ffffff;
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .ssh-connect-btn {
-    background: #0066cc;
-    color: #ffffff;
-}
-
-.terminal-panel.terminal-light .ssh-connect-btn:hover {
-    background: #0052a3;
-}
-
-.terminal-panel.terminal-light .ssh-status.connected {
-    color: #198754;
-}
-
-.terminal-panel.terminal-light .ssh-status.connecting {
-    color: #fd7e14;
-}
-
-.terminal-panel.terminal-light .ssh-status.error {
-    color: #dc3545;
-}
-
-.terminal-panel.terminal-light .ssh-connection-item {
-    background: #e9ecef;
-    color: #6c757d;
-}
-
-.terminal-panel.terminal-light .ssh-connection-item.active {
-    border-color: #0066cc;
-    color: #0066cc;
-}
-
-.terminal-panel.terminal-light .ssh-conn-name:hover {
-    color: #212529;
-}
-
-.terminal-panel.terminal-light .ssh-disconnect-btn {
-    color: #6c757d;
-}
-
-.terminal-panel.terminal-light .ssh-disconnect-btn:hover {
-    color: #dc3545;
-}
-
-/* ANSI colors for light theme */
-.terminal-panel.terminal-light .ansi-red { color: #dc3545; }
-.terminal-panel.terminal-light .ansi-green { color: #198754; }
-.terminal-panel.terminal-light .ansi-yellow { color: #fd7e14; }
-.terminal-panel.terminal-light .ansi-blue { color: #0066cc; }
-.terminal-panel.terminal-light .ansi-magenta { color: #6f42c1; }
-.terminal-panel.terminal-light .ansi-cyan { color: #0dcaf0; }
-.terminal-panel.terminal-light .ansi-white { color: #212529; }
-.terminal-panel.terminal-light .ansi-stderr { color: #dc3545; }
+/* ANSI colors — semantic mappings that work on both light and dark themes */
+.terminal-panel .ansi-red { color: var(--error-text, #dc3545); }
+.terminal-panel .ansi-green { color: var(--success-text, #198754); }
+.terminal-panel .ansi-yellow { color: var(--warning-text, #d97706); }
+.terminal-panel .ansi-blue { color: var(--accent); }
+.terminal-panel .ansi-magenta { color: #9333ea; }
+.terminal-panel .ansi-cyan { color: #0891b2; }
+.terminal-panel .ansi-white { color: var(--text-primary); }
+.terminal-panel .ansi-bold { font-weight: 700; }
+.terminal-panel .ansi-dim { opacity: 0.6; }
+.terminal-panel .ansi-stderr { color: var(--error-text, #dc3545); opacity: 0.85; }

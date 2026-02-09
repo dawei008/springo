@@ -5,11 +5,11 @@ Todo tracking, user questions, skills, and tool search
 
 from typing import Any, Dict, List
 
-from ..session import get_session_state, set_pending_question, set_active_skill
+from ..session import get_session_state, set_pending_question
 
 # Skill loader import
 try:
-    from skill_loader import get_skill_loader
+    from api.services.skill_loader import get_skill_loader
     HAS_SKILL_LOADER = True
 except ImportError:
     HAS_SKILL_LOADER = False
@@ -129,12 +129,17 @@ Now proceed with the task using the skill instructions."""
             }
         else:
             # Claude Code style (default): store for system prompt injection
+            # Use the router-level state so messages.py can consume it
             skill_info = {
                 "name": skill.name,
                 "instructions": skill.instructions,
                 "user_request": user_request
             }
-            set_active_skill(skill_info)
+            try:
+                from api.routers.skills import set_active_skill as set_router_skill
+                set_router_skill(skill_info)
+            except ImportError:
+                pass
 
             return {
                 "success": True,
@@ -181,6 +186,8 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
             # Start server if not running
             if server_name not in manager.servers:
                 if not manager.ensure_server_started(server_name):
+                    if server_name not in manager.server_configs:
+                        return {"error": f"MCP server '{server_name}' is not configured. Add it to ~/.springo/mcp_servers.json"}
                     return {"error": f"Failed to start MCP server: {server_name}"}
 
             # Get tool definition from running server

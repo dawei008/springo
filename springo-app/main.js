@@ -291,7 +291,7 @@ function startServer() {
                     });
                 } else {
                     console.log('Using python3 with script:', SERVER_SCRIPT);
-                    serverProcess = spawn('python3', [SERVER_SCRIPT, '--port', '8080'], {
+                    serverProcess = spawn('python3', [SERVER_SCRIPT, '--port', '8081'], {
                         cwd: path.dirname(SERVER_SCRIPT),
                         stdio: ['ignore', 'pipe', 'pipe']
                     });

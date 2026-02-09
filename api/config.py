@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     
     # Server Configuration
     host: str = Field(default="0.0.0.0", description="Server host")
-    port: int = Field(default=8080, description="Server port")
+    port: int = Field(default=8081, description="Server port")
     debug: bool = Field(default=True, description="Debug mode")
     
     # Paths

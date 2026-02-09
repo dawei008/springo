@@ -399,6 +399,26 @@ class SSEEventBuilder:
         })
 
     @staticmethod
+    def team_agent_delta(team_id: str, agent_id: str, role: str, delta: str) -> str:
+        """Streaming text chunk from an agent"""
+        return format_sse_event('team_agent_delta', {
+            'type': 'team_agent_delta',
+            'team_id': team_id,
+            'agent_id': agent_id,
+            'role': role,
+            'delta': delta,
+        })
+
+    @staticmethod
+    def team_synthesis_delta(team_id: str, delta: str) -> str:
+        """Streaming text chunk from synthesis phase"""
+        return format_sse_event('team_synthesis_delta', {
+            'type': 'team_synthesis_delta',
+            'team_id': team_id,
+            'delta': delta,
+        })
+
+    @staticmethod
     def team_synthesizing(team_id: str) -> str:
         """Orchestrator is synthesizing results"""
         return format_sse_event('team_synthesizing', {

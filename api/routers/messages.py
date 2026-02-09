@@ -185,6 +185,37 @@ async def messages_auto_api(
                 iteration = 0
                 system_extra = ""
 
+                def _auto_save_session(msgs, extra_meta=None):
+                    """Auto-save session to JSONL after each iteration"""
+                    if not session_id:
+                        return
+                    try:
+                        import re
+                        store = get_session_store()
+                        # Generate title from last user text message
+                        title = ""
+                        for m in reversed(msgs):
+                            if m.get("role") == "user":
+                                content = m.get("content", "")
+                                if isinstance(content, str) and content:
+                                    # Strip injected time prefix: [Current time: ...]\n\n
+                                    clean = re.sub(r'^\[Current time:[^\]]*\]\s*', '', content)
+                                    if clean:
+                                        title = clean[:30] + ("..." if len(clean) > 30 else "")
+                                    break
+                                elif isinstance(content, list):
+                                    # tool_result messages - skip
+                                    continue
+                        meta = {
+                            "title": title or "New Chat",
+                            "tokens": count_messages_tokens(msgs),
+                        }
+                        if extra_meta:
+                            meta.update(extra_meta)
+                        store.save_session_complete(session_id, msgs, metadata=meta)
+                    except Exception as e:
+                        logger.error(f"Auto-save session {session_id} failed: {e}")
+
                 while iteration < max_iterations:
                     iteration += 1
 
@@ -197,20 +228,28 @@ async def messages_auto_api(
                     if iteration > 1:
                         yield SSEEventBuilder.heartbeat(0, f"iteration_{iteration}")
 
-                    # === Skill Injection (Flask-aligned) ===
+                    # === Skill Injection (every iteration - skill may be activated by tool call) ===
+                    active_skill = consume_active_skill()
+                    if active_skill:
+                        skill_block = (
+                            f'\n\n<skill name="{active_skill["name"]}">\n'
+                            f'{active_skill["instructions"]}\n'
+                            f'</skill>\n\n'
+                            f'IMPORTANT: You have activated the \'{active_skill["name"]}\' skill.\n'
+                            f'Please follow the skill instructions above to complete the user\'s request.\n'
+                            f'User\'s original request: {active_skill.get("user_request", "(not specified)")}\n'
+                        )
+                        system_extra = (system_extra or "") + skill_block
+                        logger.info(f"Injected skill '{active_skill['name']}' into system prompt (iteration {iteration})")
+                        yield SSEEventBuilder.skill_injected(active_skill["name"])
+
+                    # === MCP Instructions Injection (first iteration only) ===
                     if iteration == 1:
-                        active_skill = consume_active_skill()
-                        if active_skill:
-                            system_extra = (
-                                f'\n\n<skill name="{active_skill["name"]}">\n'
-                                f'{active_skill["instructions"]}\n'
-                                f'</skill>\n\n'
-                                f'IMPORTANT: You have activated the \'{active_skill["name"]}\' skill.\n'
-                                f'Please follow the skill instructions above to complete the user\'s request.\n'
-                                f'User\'s original request: {active_skill.get("user_request", "(not specified)")}\n'
-                            )
-                            logger.info(f"Injected skill '{active_skill['name']}' into system prompt")
-                            yield SSEEventBuilder.skill_injected(active_skill["name"])
+                        from mcp_tools.core import get_mcp_server_instructions
+                        mcp_instructions = get_mcp_server_instructions()
+                        if mcp_instructions:
+                            system_extra = (system_extra or "") + mcp_instructions
+                            logger.info(f"Injected MCP server instructions into system prompt ({len(mcp_instructions)} chars)")
 
                     # === 5-Step Context Protection (aligned with Flask) ===
                     messages_modified = False
@@ -511,6 +550,19 @@ async def messages_auto_api(
                     messages.append({"role": "assistant", "content": assistant_content})
                     messages.append({"role": "user", "content": tool_results})
 
+                    # Auto-save after each tool execution iteration
+                    _auto_save_session(messages, {"iteration": iteration})
+
+                # Save final assistant response (when loop ends without tool_use)
+                if content_blocks:
+                    final_assistant = []
+                    for block in content_blocks:
+                        if block.get("type") == "text" and block.get("text"):
+                            final_assistant.append({"type": "text", "text": block["text"]})
+                    if final_assistant:
+                        messages.append({"role": "assistant", "content": final_assistant})
+                        _auto_save_session(messages)
+
                 # Emit error if max iterations was hit
                 if iteration >= max_iterations:
                     yield SSEEventBuilder.error(
@@ -530,22 +582,23 @@ async def messages_auto_api(
             final_response = None
             system_extra = ""
 
-            # Skill injection (non-streaming, Flask-aligned)
-            active_skill = consume_active_skill()
-            if active_skill:
-                system_extra = (
-                    f'\n\n<skill name="{active_skill["name"]}">\n'
-                    f'{active_skill["instructions"]}\n'
-                    f'</skill>\n\n'
-                    f'IMPORTANT: You have activated the \'{active_skill["name"]}\' skill.\n'
-                    f'Please follow the skill instructions above to complete the user\'s request.\n'
-                    f'User\'s original request: {active_skill.get("user_request", "(not specified)")}\n'
-                )
-                logger.info(f"Injected skill '{active_skill['name']}' into system prompt (non-streaming)")
-
             while iteration < max_iterations:
                 iteration += 1
                 messages_modified = False
+
+                # Skill injection (check every iteration - skill may be activated by tool call)
+                active_skill = consume_active_skill()
+                if active_skill:
+                    skill_block = (
+                        f'\n\n<skill name="{active_skill["name"]}">\n'
+                        f'{active_skill["instructions"]}\n'
+                        f'</skill>\n\n'
+                        f'IMPORTANT: You have activated the \'{active_skill["name"]}\' skill.\n'
+                        f'Please follow the skill instructions above to complete the user\'s request.\n'
+                        f'User\'s original request: {active_skill.get("user_request", "(not specified)")}\n'
+                    )
+                    system_extra = (system_extra or "") + skill_block
+                    logger.info(f"Injected skill '{active_skill['name']}' into system prompt (non-streaming, iteration {iteration})")
 
                 # === 5-Step Context Protection (non-streaming) ===
                 # Step 1: Truncate old tool results

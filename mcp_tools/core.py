@@ -33,7 +33,7 @@ from .handlers import (
 
 # Skill loader import
 try:
-    from skill_loader import get_skill_loader
+    from api.services.skill_loader import get_skill_loader
     HAS_SKILL_LOADER = True
 except ImportError:
     HAS_SKILL_LOADER = False
@@ -163,6 +163,7 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             loader = get_skill_loader()
             loader.reload()
 
+            skills_dir = str(loader.skills_dir)
             skill_entries = []
             for skill in loader.skills.values():
                 desc = skill.description or f"Skill for {skill.name} related tasks"
@@ -176,6 +177,9 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
 - NEVER pretend to create files (PPT, Word, Excel, PDF) without calling this tool first
 - NEVER announce "I'll create..." and then just output text - actually call the tool
 - This is a BLOCKING REQUIREMENT: invoke the skill tool BEFORE generating file-related responses
+
+Skills directory: `{skills_dir}/`
+Each skill is a subfolder with a SKILL.md file. To inspect a skill: `read_file {skills_dir}/<name>/SKILL.md`
 
 Available skills:
 {skill_list}
@@ -285,3 +289,28 @@ Call with skill_name and optionally user_request. The skill will provide detaile
         logger.warning(f"Failed to load tool registry: {e}")
 
     return tools
+
+
+def get_mcp_server_instructions() -> str:
+    """Get MCP server instructions for system prompt injection (like Claude Code does).
+
+    Returns a formatted string with instructions from all running MCP servers,
+    or empty string if none have instructions.
+    """
+    try:
+        from api.services.mcp_client import get_external_mcp_manager
+        manager = get_external_mcp_manager()
+        instructions = manager.get_server_instructions()
+        if not instructions:
+            return ""
+
+        parts = ["\n\n# MCP Server Instructions\n",
+                 "The following MCP servers have provided instructions for how to use their tools:\n"]
+        for name, text in instructions.items():
+            # Truncate very long instructions to avoid bloating context
+            truncated = text[:2000] + "..." if len(text) > 2000 else text
+            parts.append(f"\n## {name}\n{truncated}\n")
+        return "".join(parts)
+    except Exception as e:
+        logger.warning(f"Failed to get MCP server instructions: {e}")
+        return ""

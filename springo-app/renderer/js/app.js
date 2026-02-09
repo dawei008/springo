@@ -3243,90 +3243,78 @@
                             }
                             break;
 
-                        // === Agent Team SSE Events ===
+                        // === Agent Team SSE Events (rendered in Team tab only) ===
                         case 'team_spawned':
                             console.log(`[${convId}] Team spawned: ${data.team_id} with ${data.agents?.length} agents`);
                             if (currentConversationId === convId) {
-                                renderTeamPanel(data.team_id, data.agents, data.user_request);
                                 initTeamSplitPanel(data.team_id, data.agents, data.user_request);
                             }
                             break;
 
                         case 'team_planning':
-                            console.log(`[${convId}] Team planning: ${data.team_id}`);
                             if (currentConversationId === convId) {
-                                updateTeamStatus(data.team_id, 'planning', 'Orchestrator decomposing task...');
                                 updateTeamSplitStatus(data.team_id, 'planning', 'Planning...');
                             }
                             break;
 
                         case 'team_task_board':
-                            console.log(`[${convId}] Team task board: ${data.tasks?.length} tasks`);
                             if (currentConversationId === convId) {
-                                renderTeamTaskBoard(data.team_id, data.tasks);
-                                updateTeamStatus(data.team_id, 'executing', 'Agents working...');
                                 addTeamSplitAgents(data.team_id, data.tasks);
                                 updateTeamSplitStatus(data.team_id, 'executing', 'Agents working...');
                             }
                             break;
 
                         case 'team_agent_start':
-                            console.log(`[${convId}] Agent started: ${data.role} -> ${data.task_title}`);
                             if (currentConversationId === convId) {
-                                updateTeamAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
                                 updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
                             }
                             break;
 
                         case 'team_agent_progress':
                             if (currentConversationId === convId) {
-                                updateTeamAgent(data.team_id, data.agent_id, data.role, data.status, '', data.preview);
                                 updateTeamSplitAgent(data.team_id, data.agent_id, data.role, data.status, '', data.preview);
                             }
                             break;
 
                         case 'team_agent_complete':
-                            console.log(`[${convId}] Agent complete: ${data.role} - ${data.task_title}`);
                             if (currentConversationId === convId) {
-                                updateTeamAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
-                                updateTeamTaskStatus(data.team_id, data.agent_id, 'complete');
                                 updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
                             }
                             break;
 
                         case 'team_agent_error':
-                            console.error(`[${convId}] Agent error: ${data.role} - ${data.error}`);
                             if (currentConversationId === convId) {
-                                updateTeamAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
-                                updateTeamTaskStatus(data.team_id, data.agent_id, 'error');
                                 updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
                             }
                             break;
 
-                        case 'team_synthesizing':
-                            console.log(`[${convId}] Team synthesizing: ${data.team_id}`);
+                        case 'team_agent_delta':
                             if (currentConversationId === convId) {
-                                updateTeamStatus(data.team_id, 'synthesizing', 'Synthesizing results...');
+                                appendTeamAgentDelta(data.team_id, data.agent_id, data.role, data.delta);
+                            }
+                            break;
+
+                        case 'team_synthesis_delta':
+                            // Stream synthesis to chat window (not team panel)
+                            textContent += data.delta;
+                            onTextUpdate(textContent, toolUses, false);
+                            break;
+
+                        case 'team_synthesizing':
+                            if (currentConversationId === convId) {
                                 updateTeamSplitStatus(data.team_id, 'synthesizing', 'Synthesizing...');
                             }
                             break;
 
                         case 'team_complete':
-                            console.log(`[${convId}] Team complete: ${data.team_id}`);
                             if (currentConversationId === convId) {
-                                updateTeamStatus(data.team_id, 'complete', 'Team complete');
-                                renderTeamResult(data.team_id, data.result, data.total_tokens);
                                 updateTeamSplitStatus(data.team_id, 'complete', 'Complete');
                             }
-                            // Append team result to text content for chat history
-                            textContent += '\n\n' + data.result;
-                            onTextUpdate(textContent, toolUses, false);
+                            // Result already streamed via team_synthesis_delta
                             break;
 
                         case 'team_error':
-                            console.error(`[${convId}] Team error: ${data.error}`);
                             if (currentConversationId === convId) {
-                                updateTeamStatus(data.team_id, 'error', `Error: ${data.error}`);
                                 updateTeamSplitStatus(data.team_id, 'error', `Error: ${data.error}`);
                             }
                             break;
@@ -3589,7 +3577,70 @@
             researcher:   { label: 'Researcher',   color: '#059669', icon: 'M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253' },
             implementer:  { label: 'Implementer',  color: '#d97706', icon: 'M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4' },
             reviewer:     { label: 'Reviewer',     color: '#dc2626', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },
+            custom:       { label: 'Agent',        color: '#6366f1', icon: 'M13 10V3L4 14h7v7l9-11h-7z' },
         };
+
+        // Get role config with fallback for custom roles - use actual role name as label
+        function getTeamRoleConfig(roleName) {
+            if (TEAM_ROLE_CONFIG[roleName]) return TEAM_ROLE_CONFIG[roleName];
+            const base = TEAM_ROLE_CONFIG.custom;
+            const label = roleName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+            return { ...base, label };
+        }
+
+        // Append streaming delta text to an agent's output in the split panel
+        function appendTeamAgentDelta(teamId, agentId, role, delta) {
+            if (teamId !== activeTeamSplitId) return;
+            const agentsContainer = document.getElementById('team-split-agents');
+            if (!agentsContainer) return;
+            const card = agentsContainer.querySelector(`[data-agent-id="${agentId}"]`);
+            if (!card) return;
+
+            // Set badge to executing with pulse
+            const badge = card.querySelector('.team-split-agent-badge');
+            if (badge && badge.textContent !== 'executing') {
+                badge.textContent = 'executing';
+                badge.className = 'team-split-agent-badge executing';
+            }
+            if (!card.classList.contains('active')) {
+                card.classList.add('active');
+            }
+
+            // Append delta text to output
+            const outputEl = card.querySelector('.team-split-agent-output');
+            if (outputEl) {
+                if (outputEl.style.display === 'none' || !outputEl.style.display) {
+                    outputEl.style.display = 'block';
+                    outputEl.setAttribute('data-streaming', 'true');
+                }
+                outputEl.textContent += delta;
+                outputEl.scrollTop = outputEl.scrollHeight;
+            }
+
+        }
+
+        // Append streaming synthesis delta to the Team tab split panel
+        function appendTeamSynthesisDelta(teamId, delta) {
+            if (teamId !== activeTeamSplitId) return;
+            const splitContent = document.getElementById('team-split-content');
+            if (!splitContent) return;
+
+            let synthesisEl = splitContent.querySelector('.team-synthesis-stream');
+            if (!synthesisEl) {
+                synthesisEl = document.createElement('div');
+                synthesisEl.className = 'team-synthesis-stream team-split-agent-output';
+                synthesisEl.style.display = 'block';
+                const agentsContainer = document.getElementById('team-split-agents');
+                if (agentsContainer) {
+                    agentsContainer.parentNode.insertBefore(synthesisEl, agentsContainer.nextSibling);
+                } else {
+                    splitContent.appendChild(synthesisEl);
+                }
+            }
+
+            synthesisEl.textContent += delta;
+            synthesisEl.scrollTop = synthesisEl.scrollHeight;
+        }
 
         // Render the main team panel in chat
         function renderTeamPanel(teamId, agents, userRequest) {
@@ -3601,7 +3652,7 @@
             if (existing) existing.remove();
 
             const agentCards = agents.map(a => {
-                const cfg = TEAM_ROLE_CONFIG[a.role] || TEAM_ROLE_CONFIG.explorer;
+                const cfg = getTeamRoleConfig(a.role);
                 return `
                     <div class="team-agent-card" data-agent-id="${a.agent_id}" data-team-id="${teamId}" style="--agent-color: ${cfg.color}; cursor:pointer" onclick="toggleAgentDetail(this, '${teamId}', '${a.agent_id}')">
                         <div class="team-agent-header">
@@ -3668,7 +3719,7 @@
 
             boardEl.style.display = 'block';
             listEl.innerHTML = tasks.map(t => {
-                const cfg = TEAM_ROLE_CONFIG[t.role] || TEAM_ROLE_CONFIG.explorer;
+                const cfg = getTeamRoleConfig(t.role);
                 return `
                     <div class="team-task-item" data-task-agent="${t.assigned_to}" data-task-id="${t.task_id}">
                         <span class="team-task-status-dot pending"></span>
@@ -3684,7 +3735,7 @@
                 for (const task of tasks) {
                     const existingCard = agentsGrid.querySelector(`[data-agent-id="${task.assigned_to}"]`);
                     if (!existingCard) {
-                        const cfg = TEAM_ROLE_CONFIG[task.role] || TEAM_ROLE_CONFIG.explorer;
+                        const cfg = getTeamRoleConfig(task.role);
                         const card = document.createElement('div');
                         card.className = 'team-agent-card';
                         card.setAttribute('data-agent-id', task.assigned_to);
@@ -4555,7 +4606,7 @@
             const abortController = resetAbortController(convId);
             const abortSignal = abortController.signal;
 
-            const model = settings.model || 'claude-opus-4-5-20251101';  // Fixed to Opus 4.5
+            const model = settings.model || 'claude-opus-4-6';
             const maxTokens = parseInt(settings.maxTokens || 16384);
             const temperature = parseFloat(settings.temperature || 0.7);
 
@@ -5493,7 +5544,7 @@ Be concise and helpful in your responses.`;
             modal.classList.add('active');
             // Load default working directory
             document.getElementById('settings-default-workdir').value = defaultWorkingFolder || '~/Downloads';
-            document.getElementById('settings-model').value = settings.model || 'claude-sonnet-4-5-20250929';
+            document.getElementById('settings-model').value = settings.model || 'claude-opus-4-6';
             document.getElementById('settings-max-tokens').value = settings.maxTokens || 16384;
             document.getElementById('settings-temperature').value = settings.temperature || 0.7;
             document.getElementById('temp-value').textContent = settings.temperature || 0.7;
@@ -6559,7 +6610,7 @@ Be concise and helpful in your responses.`;
                 document.addEventListener('mousemove', (e) => {
                     if (!isResizing) return;
                     const diff = startX - e.clientX;
-                    const newWidth = Math.min(500, Math.max(200, startWidth + diff));
+                    const newWidth = Math.min(600, Math.max(200, startWidth + diff));
                     panel.style.width = newWidth + 'px';
                     rightPanelWidth = newWidth;
                 });
@@ -6608,6 +6659,11 @@ Be concise and helpful in your responses.`;
                 const sectionId = section.id.replace('panel-', '');
                 section.classList.toggle('active', sectionId === tabName);
             });
+
+            // Load SSH config when switching to terminal tab
+            if (tabName === 'terminal') {
+                loadSSHConfig();
+            }
         }
 
         // Update tasks in right panel
@@ -10249,50 +10305,44 @@ ${content || 'Task completed successfully.'}
                             try {
                                 const data = JSON.parse(dataStr);
 
-                                // Handle team SSE events using existing render functions
+                                // Handle team SSE events (Team tab only)
                                 switch (eventType) {
                                     case 'team_spawned':
-                                        renderTeamPanel(data.team_id, data.agents, data.user_request);
                                         initTeamSplitPanel(data.team_id, data.agents, data.user_request);
                                         break;
                                     case 'team_planning':
-                                        updateTeamStatus(data.team_id, 'planning', 'Decomposing task...');
                                         updateTeamSplitStatus(data.team_id, 'planning', 'Planning...');
                                         break;
                                     case 'team_task_board':
-                                        renderTeamTaskBoard(data.team_id, data.tasks);
-                                        updateTeamStatus(data.team_id, 'executing', 'Agents working...');
                                         addTeamSplitAgents(data.team_id, data.tasks);
                                         updateTeamSplitStatus(data.team_id, 'executing', 'Agents working...');
                                         break;
                                     case 'team_agent_start':
-                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
                                         updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
                                         break;
                                     case 'team_agent_progress':
-                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'executing', '', data.preview);
                                         updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'executing', '', data.preview);
                                         break;
                                     case 'team_agent_complete':
-                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
                                         updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
                                         break;
                                     case 'team_agent_error':
-                                        updateTeamAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
                                         updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
                                         break;
+                                    case 'team_agent_delta':
+                                        appendTeamAgentDelta(data.team_id, data.agent_id, data.role, data.delta);
+                                        break;
+                                    case 'team_synthesis_delta':
+                                        // Synthesis shown in chat, not team panel
+                                        break;
                                     case 'team_synthesizing':
-                                        updateTeamStatus(data.team_id, 'synthesizing', 'Synthesizing results...');
                                         updateTeamSplitStatus(data.team_id, 'synthesizing', 'Synthesizing...');
                                         break;
                                     case 'team_complete':
                                         finalResult = data.result;
-                                        renderTeamResult(data.team_id, data.result, data.total_tokens);
-                                        updateTeamStatus(data.team_id, 'complete', 'Complete');
                                         updateTeamSplitStatus(data.team_id, 'complete', 'Complete');
                                         break;
                                     case 'team_error':
-                                        updateTeamStatus(data.team_id, 'error', data.error);
                                         updateTeamSplitStatus(data.team_id, 'error', data.error);
                                         break;
                                 }
@@ -10368,43 +10418,9 @@ ${content || 'Task completed successfully.'}
             if (output) output.innerHTML = '';
         }
 
-        // Toggle terminal panel light/dark theme
-        function toggleTerminalTheme() {
-            const panel = document.querySelector('.terminal-panel');
-            if (panel) {
-                panel.classList.toggle('terminal-light');
-                // Save preference to localStorage
-                const isLight = panel.classList.contains('terminal-light');
-                localStorage.setItem('terminal-theme', isLight ? 'light' : 'dark');
-                // Update button icon
-                const btn = document.getElementById('terminal-theme-btn');
-                if (btn) {
-                    if (isLight) {
-                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-                        btn.title = 'Switch to Dark Theme';
-                    } else {
-                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
-                        btn.title = 'Switch to Light Theme';
-                    }
-                }
-            }
-        }
-
-        // Initialize terminal theme from localStorage
-        function initTerminalTheme() {
-            const savedTheme = localStorage.getItem('terminal-theme');
-            if (savedTheme === 'light') {
-                const panel = document.querySelector('.terminal-panel');
-                if (panel) {
-                    panel.classList.add('terminal-light');
-                    const btn = document.getElementById('terminal-theme-btn');
-                    if (btn) {
-                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
-                        btn.title = 'Switch to Dark Theme';
-                    }
-                }
-            }
-        }
+        // Terminal theme now follows the main app theme via CSS variables — no separate toggle needed
+        function toggleTerminalTheme() {}
+        function initTerminalTheme() {}
 
         function appendTerminalOutput(html, className) {
             const output = document.getElementById('terminal-panel-output');
@@ -10448,6 +10464,23 @@ ${content || 'Task completed successfully.'}
                 case 'exit':
                     if (data.exit_code !== 0) {
                         appendTerminalOutput(`<span class="ansi-dim">exit ${data.exit_code}</span>`, 'terminal-exit-line');
+                    }
+                    // Update prompt with current working directory from server
+                    if (data.cwd) {
+                        const cwdEl = document.getElementById('terminal-cwd');
+                        const sshName = cwdEl?.dataset?.sshName || '';
+                        const homeDir = `/home/${sshName.split('@')[0] || 'user'}`;
+                        // Show ~ for home directory, basename for others
+                        let displayPath = data.cwd;
+                        if (data.cwd === homeDir) {
+                            displayPath = '~';
+                        } else if (data.cwd.startsWith(homeDir + '/')) {
+                            displayPath = '~' + data.cwd.slice(homeDir.length);
+                        }
+                        const termPrompt = document.querySelector('.terminal-prompt');
+                        if (termPrompt && sshName) {
+                            termPrompt.textContent = `${sshName}:${displayPath}$`;
+                        }
                     }
                     break;
                 case 'error':
@@ -10596,12 +10629,14 @@ ${content || 'Task completed successfully.'}
                 cwdEl.textContent = data.name;
                 cwdEl.dataset.sshName = data.name;
 
-                // Enable terminal input
+                // Enable terminal input and update prompt
                 const termInput = document.getElementById('terminal-input');
                 if (termInput) {
                     termInput.disabled = false;
-                    termInput.placeholder = `Enter command on ${data.name}...`;
+                    termInput.placeholder = `Enter command...`;
                 }
+                const termPrompt = document.querySelector('.terminal-prompt');
+                if (termPrompt) termPrompt.textContent = `${data.name}:~$`;
 
                 // Add to connections list
                 refreshSSHConnections();
@@ -10650,8 +10685,10 @@ ${content || 'Task completed successfully.'}
             const termInput = document.getElementById('terminal-input');
             if (termInput) {
                 termInput.disabled = false;
-                termInput.placeholder = `Enter command on ${name}...`;
+                termInput.placeholder = `Enter command...`;
             }
+            const termPrompt = document.querySelector('.terminal-prompt');
+            if (termPrompt) termPrompt.textContent = `${name}:~$`;
             refreshSSHConnections();
             appendTerminalOutput(`<span class="ansi-cyan">Switched to ${escapeHtml(name)}</span>`, 'terminal-cmd-line');
         }
@@ -10669,6 +10706,8 @@ ${content || 'Task completed successfully.'}
                         termInput.disabled = true;
                         termInput.placeholder = 'Connect to SSH first...';
                     }
+                    const termPrompt = document.querySelector('.terminal-prompt');
+                    if (termPrompt) termPrompt.textContent = '>';
                 }
 
                 refreshSSHConnections();
@@ -10689,7 +10728,8 @@ ${content || 'Task completed successfully.'}
             terminalHistoryIndex = terminalHistory.length;
 
             // Show command in output
-            appendTerminalOutput(`<span class="ansi-cyan">> ${escapeHtml(command)}</span>`, 'terminal-cmd-line');
+            const promptPrefix = document.querySelector('.terminal-prompt')?.textContent || '>';
+            appendTerminalOutput(`<span class="ansi-green">${escapeHtml(promptPrefix)}</span> <span class="ansi-cyan">${escapeHtml(command)}</span>`, 'terminal-cmd-line');
 
             // Clear input
             document.getElementById('terminal-input').value = '';
@@ -10932,7 +10972,7 @@ ${content || 'Task completed successfully.'}
             agentsContainer.innerHTML = '';
             if (agents && agents.length > 0) {
                 for (const a of agents) {
-                    const cfg = TEAM_ROLE_CONFIG[a.role] || TEAM_ROLE_CONFIG.explorer;
+                    const cfg = getTeamRoleConfig(a.role);
                     const card = document.createElement('div');
                     card.className = 'team-split-agent-card';
                     card.setAttribute('data-agent-id', a.agent_id);
@@ -10981,7 +11021,7 @@ ${content || 'Task completed successfully.'}
                     if (taskEl) taskEl.textContent = task.title;
                     continue;
                 }
-                const cfg = TEAM_ROLE_CONFIG[task.role] || TEAM_ROLE_CONFIG.explorer;
+                const cfg = getTeamRoleConfig(task.role);
                 const card = document.createElement('div');
                 card.className = 'team-split-agent-card';
                 card.setAttribute('data-agent-id', task.assigned_to);
@@ -11032,8 +11072,26 @@ ${content || 'Task completed successfully.'}
             if (content) {
                 const outputEl = card.querySelector('.team-split-agent-output');
                 if (outputEl) {
-                    outputEl.textContent = content;
+                    // Don't overwrite if already has streamed content
+                    const hasStreamed = outputEl.getAttribute('data-streaming') === 'true';
+                    if (!hasStreamed || status === 'error') {
+                        outputEl.textContent = content;
+                    }
                     outputEl.style.display = 'block';
+                    outputEl.removeAttribute('data-streaming');
+                    if (status === 'error') {
+                        outputEl.classList.add('error');
+                        outputEl.classList.remove('success');
+                    } else if (status === 'complete') {
+                        outputEl.classList.add('success');
+                        outputEl.classList.remove('error');
+                    }
+                }
+            } else if (status === 'complete' || status === 'error') {
+                // Apply styling even without new content (streamed content already present)
+                const outputEl = card.querySelector('.team-split-agent-output');
+                if (outputEl && outputEl.style.display === 'block') {
+                    outputEl.removeAttribute('data-streaming');
                     if (status === 'error') {
                         outputEl.classList.add('error');
                         outputEl.classList.remove('success');

@@ -462,16 +462,17 @@ def list_background_tasks() -> Dict[str, Any]:
 
 def glob_files(pattern: str, path: str = None, limit: int = 100) -> Dict[str, Any]:
     """Fast file pattern matching using glob"""
-    base_path = path or get_working_dir() or os.getcwd()
+    base_path = resolve_path(path) if path else (get_working_dir() or os.getcwd())
 
     if not is_path_allowed(base_path, for_write=False):
         return {"error": f"Access denied: {base_path}"}
 
     try:
-        if os.path.isabs(pattern):
-            full_pattern = pattern
+        expanded_pattern = os.path.expanduser(pattern)
+        if os.path.isabs(expanded_pattern):
+            full_pattern = expanded_pattern
         else:
-            full_pattern = os.path.join(base_path, pattern)
+            full_pattern = os.path.join(base_path, expanded_pattern)
 
         matches = glob_module.glob(full_pattern, recursive=True)
 
@@ -512,7 +513,7 @@ def grep_search(pattern: str, path: str = None, glob_pattern: str = None,
                 output_mode: str = "files_with_matches", context_lines: int = 2,
                 ignore_case: bool = False, limit: int = 50) -> Dict[str, Any]:
     """Search for content in files using regex"""
-    base_path = path or get_working_dir() or os.getcwd()
+    base_path = resolve_path(path) if path else (get_working_dir() or os.getcwd())
 
     if not is_path_allowed(base_path, for_write=False):
         return {"error": f"Access denied: {base_path}"}
@@ -615,10 +616,7 @@ def grep_search(pattern: str, path: str = None, glob_pattern: str = None,
 
 def edit_file(path: str, old_string: str, new_string: str, replace_all: bool = False) -> Dict[str, Any]:
     """Edit a file by replacing a specific string"""
-    if not os.path.isabs(path):
-        full_path = os.path.join(get_working_dir() or os.getcwd(), path)
-    else:
-        full_path = path
+    full_path = resolve_path(path, default_to_working_dir=True)
 
     if not is_path_allowed(full_path, for_write=True):
         return {"error": f"Write access denied: {full_path}"}
@@ -671,10 +669,7 @@ def read_files(paths: List[str], encoding: str = "utf-8") -> Dict[str, Any]:
     errors = {}
 
     for path in paths:
-        if not os.path.isabs(path):
-            full_path = os.path.join(get_working_dir() or os.getcwd(), path)
-        else:
-            full_path = path
+        full_path = resolve_path(path, default_to_working_dir=True)
 
         if not is_path_allowed(full_path, for_write=False):
             errors[path] = "Access denied"
