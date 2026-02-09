@@ -193,6 +193,10 @@ async def messages_auto_api(
                         logger.warning(f"[Auto] Client disconnected at iteration {iteration}, stopping")
                         break
 
+                    # Send heartbeat between iterations (prevents frontend SSE timeout during context prep)
+                    if iteration > 1:
+                        yield SSEEventBuilder.heartbeat(0, f"iteration_{iteration}")
+
                     # === Skill Injection (Flask-aligned) ===
                     if iteration == 1:
                         active_skill = consume_active_skill()
@@ -224,6 +228,8 @@ async def messages_auto_api(
                     if should_summarize(messages):
                         logger.info(f"[Context] Approaching limit ({current_tokens:,} tokens), compacting with structured summary...")
                         yield SSEEventBuilder.context_compact('approaching_limit', 'haiku', current_tokens)
+                        # Send heartbeat before compaction (compaction calls Bedrock and can take 30+ seconds)
+                        yield SSEEventBuilder.heartbeat(0, "context_compact")
                         try:
                             original_count = len(messages)
                             result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)

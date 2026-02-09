@@ -1244,16 +1244,12 @@
             padding-bottom: 20px;
         }
 
-        /* Ensure news section is scrollable */
-        #panel-news {
+        /* Ensure news section is scrollable when active */
+        #panel-news.active {
             display: flex;
             flex-direction: column;
             height: 100%;
             overflow: hidden;
-        }
-
-        #panel-news.active {
-            display: flex;
         }
 
         /* Schedule Reminder Notification - Compact */
@@ -5257,6 +5253,13 @@
     min-height: 36px;
 }
 
+.terminal-header-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
 .terminal-cwd {
     color: #7aa2f7;
     font-family: 'SF Mono', Monaco, 'Menlo', monospace;
@@ -5400,6 +5403,34 @@
 .terminal-mode-tab.active {
     background: #292e42;
     color: #7aa2f7;
+}
+
+/* SSH Config Hosts Dropdown */
+.ssh-config-hosts {
+    margin-bottom: 6px;
+}
+
+.ssh-config-hosts select {
+    width: 100%;
+    padding: 5px 8px;
+    border: 1px solid #292e42;
+    border-radius: 4px;
+    background: #1a1b26;
+    color: #c0caf5;
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
+    outline: none;
+    cursor: pointer;
+    appearance: auto;
+}
+
+.ssh-config-hosts select:focus {
+    border-color: #7aa2f7;
+}
+
+.ssh-config-hosts select option {
+    background: #1a1b26;
+    color: #c0caf5;
 }
 
 .ssh-connect-form {
@@ -5605,3 +5636,369 @@
     color: var(--text-primary);
     font-weight: 600;
 }
+
+/* ============ Team Split Panel (Right Panel Tab) ============ */
+
+.team-split-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.team-split-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 40px 20px;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    text-align: center;
+}
+
+.team-split-content {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    overflow: hidden;
+}
+
+.team-split-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+
+.team-split-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.team-split-status-badge {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 8px;
+    border-radius: 10px;
+    white-space: nowrap;
+    color: var(--text-tertiary);
+    background: var(--bg-tertiary);
+}
+
+.team-split-status-badge.planning {
+    color: #7c3aed;
+    background: rgba(124, 58, 237, 0.1);
+}
+
+.team-split-status-badge.executing {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.1);
+}
+
+.team-split-status-badge.synthesizing {
+    color: #d97706;
+    background: rgba(217, 119, 6, 0.1);
+}
+
+.team-split-status-badge.complete {
+    color: #059669;
+    background: rgba(5, 150, 105, 0.1);
+}
+
+.team-split-status-badge.error {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.1);
+}
+
+.team-split-request-preview {
+    font-size: 11px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+
+.team-split-agents {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.team-split-agent-card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--agent-color, var(--border));
+    transition: all 0.3s ease;
+}
+
+.team-split-agent-card.active {
+    box-shadow: 0 0 0 1px var(--agent-color, var(--accent)), 0 2px 8px rgba(0, 0, 0, 0.1);
+    animation: teamAgentPulse 2s ease-in-out infinite;
+}
+
+.team-split-agent-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.team-split-agent-role {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+    flex: 1;
+}
+
+.team-split-agent-badge {
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.team-split-agent-badge.idle {
+    color: var(--text-tertiary);
+    background: var(--bg-tertiary);
+}
+
+.team-split-agent-badge.thinking {
+    color: #7c3aed;
+    background: rgba(124, 58, 237, 0.1);
+    animation: teamAgentPulse 1.5s ease-in-out infinite;
+}
+
+.team-split-agent-badge.executing {
+    color: #2563eb;
+    background: rgba(37, 99, 235, 0.1);
+    animation: teamAgentPulse 1.5s ease-in-out infinite;
+}
+
+.team-split-agent-badge.complete {
+    color: #059669;
+    background: rgba(5, 150, 105, 0.1);
+}
+
+.team-split-agent-badge.error {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.1);
+}
+
+.team-split-agent-task {
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+    margin-bottom: 2px;
+}
+
+.team-split-agent-output {
+    display: none;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    margin-top: 6px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: 6px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    /* Full output - no max-height truncation */
+    overflow-y: auto;
+    max-height: 400px;
+}
+
+.team-split-agent-output.success {
+    border-left: 2px solid #059669;
+}
+
+.team-split-agent-output.error {
+    border-left: 2px solid #dc2626;
+    color: var(--error-text);
+}
+
+/* Team split panel scrollbar */
+.team-split-agents::-webkit-scrollbar {
+    width: 6px;
+}
+
+.team-split-agents::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.team-split-agents::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+}
+
+.team-split-agents::-webkit-scrollbar-thumb:hover {
+    background: var(--text-tertiary);
+}
+
+/* ============ Terminal Panel Light Theme ============ */
+/* Add class "terminal-light" to .terminal-panel to enable light theme */
+
+.terminal-panel.terminal-light {
+    background: #f8f9fa;
+}
+
+.terminal-panel.terminal-light .terminal-panel-header {
+    background: #e9ecef;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.terminal-panel.terminal-light .terminal-cwd {
+    color: #0066cc;
+}
+
+.terminal-panel.terminal-light .terminal-panel-btn {
+    color: #6c757d;
+}
+
+.terminal-panel.terminal-light .terminal-panel-btn:hover {
+    background: #dee2e6;
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .terminal-panel-output {
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .terminal-panel-input-row {
+    background: #e9ecef;
+    border-top: 1px solid #dee2e6;
+}
+
+.terminal-panel.terminal-light .terminal-prompt {
+    color: #198754;
+}
+
+.terminal-panel.terminal-light .terminal-panel-input {
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .terminal-panel-input::placeholder {
+    color: #6c757d;
+}
+
+.terminal-panel.terminal-light .terminal-panel-output::-webkit-scrollbar-thumb {
+    background: #ced4da;
+}
+
+.terminal-panel.terminal-light .terminal-panel-output::-webkit-scrollbar-thumb:hover {
+    background: #adb5bd;
+}
+
+/* SSH Form Light Theme */
+.terminal-panel.terminal-light .terminal-mode-tabs {
+    background: #e9ecef;
+}
+
+.terminal-panel.terminal-light .terminal-mode-tab {
+    color: #6c757d;
+}
+
+.terminal-panel.terminal-light .terminal-mode-tab:hover {
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .terminal-mode-tab.active {
+    background: #ffffff;
+    color: #0066cc;
+}
+
+.terminal-panel.terminal-light .ssh-connect-form {
+    background: #e9ecef;
+    border-bottom: 1px solid #dee2e6;
+}
+
+.terminal-panel.terminal-light .ssh-input {
+    border: 1px solid #ced4da;
+    background: #ffffff;
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .ssh-input:focus {
+    border-color: #0066cc;
+}
+
+.terminal-panel.terminal-light .ssh-input::placeholder {
+    color: #6c757d;
+}
+
+.terminal-panel.terminal-light .ssh-config-hosts select {
+    border: 1px solid #ced4da;
+    background: #ffffff;
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .ssh-config-hosts select:focus {
+    border-color: #0066cc;
+}
+
+.terminal-panel.terminal-light .ssh-config-hosts select option {
+    background: #ffffff;
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .ssh-connect-btn {
+    background: #0066cc;
+    color: #ffffff;
+}
+
+.terminal-panel.terminal-light .ssh-connect-btn:hover {
+    background: #0052a3;
+}
+
+.terminal-panel.terminal-light .ssh-status.connected {
+    color: #198754;
+}
+
+.terminal-panel.terminal-light .ssh-status.connecting {
+    color: #fd7e14;
+}
+
+.terminal-panel.terminal-light .ssh-status.error {
+    color: #dc3545;
+}
+
+.terminal-panel.terminal-light .ssh-connection-item {
+    background: #e9ecef;
+    color: #6c757d;
+}
+
+.terminal-panel.terminal-light .ssh-connection-item.active {
+    border-color: #0066cc;
+    color: #0066cc;
+}
+
+.terminal-panel.terminal-light .ssh-conn-name:hover {
+    color: #212529;
+}
+
+.terminal-panel.terminal-light .ssh-disconnect-btn {
+    color: #6c757d;
+}
+
+.terminal-panel.terminal-light .ssh-disconnect-btn:hover {
+    color: #dc3545;
+}
+
+/* ANSI colors for light theme */
+.terminal-panel.terminal-light .ansi-red { color: #dc3545; }
+.terminal-panel.terminal-light .ansi-green { color: #198754; }
+.terminal-panel.terminal-light .ansi-yellow { color: #fd7e14; }
+.terminal-panel.terminal-light .ansi-blue { color: #0066cc; }
+.terminal-panel.terminal-light .ansi-magenta { color: #6f42c1; }
+.terminal-panel.terminal-light .ansi-cyan { color: #0dcaf0; }
+.terminal-panel.terminal-light .ansi-white { color: #212529; }
+.terminal-panel.terminal-light .ansi-stderr { color: #dc3545; }

@@ -59,6 +59,15 @@ class TerminalExecuteRequest(BaseModel):
     run_in_background: bool = Field(default=False, description="Run in background")
 
 
+class SSHConfigHost(BaseModel):
+    """Parsed SSH config host entry"""
+    name: str = Field(..., description="Host alias from SSH config")
+    hostname: Optional[str] = Field(default=None, description="HostName value")
+    user: Optional[str] = Field(default=None, description="User value")
+    port: Optional[int] = Field(default=None, description="Port value")
+    identity_file: Optional[str] = Field(default=None, description="IdentityFile path")
+
+
 class SSHConnectRequest(BaseModel):
     """SSH connection request"""
     host: str = Field(..., description="Remote host")
@@ -77,7 +86,195 @@ class SSHExecuteRequest(BaseModel):
     timeout: int = Field(default=300, ge=1, le=3600, description="Timeout in seconds")
 
 
+class NLCommandParseRequest(BaseModel):
+    """Natural language command parse request"""
+    input: str = Field(..., description="Natural language input to parse")
+    context: Optional[str] = Field(default=None, description="Additional context (e.g., current directory, OS)")
+
+
+# ============ NL Command Parser ============
+
+# Simple heuristics to detect if input is natural language vs actual command
+def _is_natural_language(text: str) -> bool:
+    """
+    Detect if input is natural language (Chinese/English description) 
+    vs an actual shell command.
+    """
+    text = text.strip()
+    if not text:
+        return False
+    
+    # Common shell command patterns - if starts with these, it's likely a command
+    command_prefixes = [
+        'ls', 'cd', 'pwd', 'cat', 'echo', 'grep', 'find', 'mkdir', 'rm', 'cp', 'mv',
+        'chmod', 'chown', 'sudo', 'apt', 'yum', 'pip', 'npm', 'git', 'docker', 'kubectl',
+        'curl', 'wget', 'ssh', 'scp', 'tar', 'zip', 'unzip', 'ps', 'kill', 'top', 'htop',
+        'df', 'du', 'free', 'whoami', 'who', 'date', 'cal', 'man', 'which', 'whereis',
+        'head', 'tail', 'sort', 'uniq', 'wc', 'awk', 'sed', 'cut', 'tr', 'diff',
+        'touch', 'ln', 'file', 'stat', 'env', 'export', 'source', 'alias', 'history',
+        'python', 'python3', 'node', 'java', 'go', 'cargo', 'make', 'cmake',
+        './', '/', '~/', '$', '|', '>', '<', '&&', '||',
+    ]
+    
+    # Check if starts with a known command
+    first_word = text.split()[0].lower() if text.split() else ''
+    for prefix in command_prefixes:
+        if first_word == prefix or text.startswith(prefix):
+            return False
+    
+    # Contains Chinese characters -> natural language
+    if any('\u4e00' <= char <= '\u9fff' for char in text):
+        return True
+    
+    # Contains common natural language phrases
+    nl_indicators = [
+        'please', 'show me', 'list', 'what', 'how', 'display', 'get', 'find',
+        'check', 'run', 'execute', 'do', 'help', 'tell me', 'i want', 'can you',
+        'repeat', 'again', 'same', 'last', 'previous',
+    ]
+    text_lower = text.lower()
+    for indicator in nl_indicators:
+        if indicator in text_lower:
+            return True
+    
+    # If very short and looks like a command (no spaces or single word with flags)
+    if len(text.split()) <= 2 and not any('\u4e00' <= c <= '\u9fff' for c in text):
+        return False
+    
+    # Default: if it has multiple words and no obvious command structure, treat as NL
+    return len(text.split()) > 2
+
+
+NL_PARSE_SYSTEM_PROMPT = """You are a shell command parser. Your job is to convert natural language descriptions into actual shell commands.
+
+RULES:
+1. Output ONLY the shell command, nothing else
+2. Do not include explanations, markdown, or quotes
+3. If the input is already a valid command, return it as-is
+4. For ambiguous requests, choose the most common/safe interpretation
+5. Support both Chinese and English inputs
+
+EXAMPLES:
+- "list all files" -> ls -la
+- "show current directory" -> pwd
+- "check disk space" -> df -h
+- "show running processes" -> ps aux
+- "repeat whoami" -> whoami
+- "run whoami again" -> whoami
+- "execute ls -la once more" -> ls -la
+- "查看当前目录" -> pwd
+- "列出所有文件" -> ls -la
+- "显示磁盘空间" -> df -h
+- "重复执行whoami" -> whoami
+- "再执行一次ls" -> ls
+- "查看系统内存" -> free -h
+- "显示当前用户" -> whoami
+- "查看网络连接" -> netstat -tuln
+- "显示环境变量" -> env
+- "查看进程" -> ps aux
+- "检查端口占用" -> ss -tuln
+
+Output the command only, no explanation."""
+
+
+async def parse_nl_to_command(nl_input: str, context: str = None) -> dict:
+    """Use Bedrock to parse natural language to shell command."""
+    from ..services.bedrock import get_bedrock_service
+    
+    bedrock = get_bedrock_service()
+    
+    user_content = nl_input
+    if context:
+        user_content = f"Context: {context}\n\nInput: {nl_input}"
+    
+    body = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": 200,
+        "temperature": 0,
+        "system": NL_PARSE_SYSTEM_PROMPT,
+        "messages": [
+            {"role": "user", "content": user_content}
+        ]
+    }
+    
+    try:
+        # Use a fast model for parsing
+        model_id = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+        response = await bedrock.invoke_model(model_id, body)
+        
+        # Extract command from response
+        content = response.get("content", [])
+        if content and len(content) > 0:
+            command = content[0].get("text", "").strip()
+            # Clean up any markdown or quotes
+            command = command.strip('`').strip('"').strip("'")
+            if command.startswith('```'):
+                command = command.split('\n')[1] if '\n' in command else command[3:]
+            command = command.strip('`').strip()
+            return {
+                "success": True,
+                "command": command,
+                "original_input": nl_input,
+                "is_natural_language": True
+            }
+        
+        return {
+            "success": False,
+            "error": "Failed to parse command",
+            "original_input": nl_input
+        }
+        
+    except Exception as e:
+        logger.error(f"NL parse error: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "original_input": nl_input
+        }
+
+
 # ============ Endpoints ============
+
+@router.post("/terminal/parse")
+async def terminal_parse_nl(body: NLCommandParseRequest):
+    """
+    Parse natural language input to shell command.
+    
+    If input is already a valid command, returns it as-is.
+    If input is natural language, uses LLM to parse it.
+    
+    Returns:
+        {
+            "success": bool,
+            "command": str,  # The parsed shell command
+            "original_input": str,
+            "is_natural_language": bool,  # Whether input was detected as NL
+            "error": str  # Only if success=False
+        }
+    """
+    input_text = body.input.strip()
+    
+    if not input_text:
+        return {
+            "success": False,
+            "error": "Empty input",
+            "original_input": input_text
+        }
+    
+    # Check if it's natural language or already a command
+    if _is_natural_language(input_text):
+        # Parse with LLM
+        result = await parse_nl_to_command(input_text, body.context)
+        return result
+    else:
+        # Already a command, return as-is
+        return {
+            "success": True,
+            "command": input_text,
+            "original_input": input_text,
+            "is_natural_language": False
+        }
+
 
 @router.post("/terminal/execute")
 async def terminal_execute(
@@ -252,6 +449,79 @@ async def terminal_kill(pid: int):
 
 
 # ============ SSH Endpoints ============
+
+def _parse_ssh_config() -> list:
+    """Parse ~/.ssh/config and return host entries."""
+    config_path = os.path.expanduser("~/.ssh/config")
+    if not os.path.exists(config_path):
+        return []
+
+    hosts = []
+    current_host = None
+
+    try:
+        with open(config_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                # Split on first whitespace
+                parts = line.split(None, 1)
+                if len(parts) < 2:
+                    continue
+
+                key = parts[0].lower()
+                value = parts[1].strip()
+
+                if key == 'host':
+                    # Skip wildcard entries
+                    if '*' in value or '?' in value:
+                        current_host = None
+                        continue
+                    current_host = {
+                        'name': value,
+                        'hostname': None,
+                        'user': None,
+                        'port': None,
+                        'identity_file': None,
+                    }
+                    hosts.append(current_host)
+                elif current_host is not None:
+                    if key == 'hostname':
+                        current_host['hostname'] = value
+                    elif key == 'user':
+                        current_host['user'] = value
+                    elif key == 'port':
+                        try:
+                            current_host['port'] = int(value)
+                        except ValueError:
+                            pass
+                    elif key == 'identityfile':
+                        current_host['identity_file'] = value
+    except Exception as e:
+        logger.warning(f"Failed to parse SSH config: {e}")
+
+    return hosts
+
+
+@router.get("/terminal/ssh/config")
+async def ssh_get_config():
+    """Read and parse ~/.ssh/config, returning available host entries."""
+    hosts = _parse_ssh_config()
+    return {
+        "hosts": [
+            SSHConfigHost(
+                name=h['name'],
+                hostname=h.get('hostname'),
+                user=h.get('user'),
+                port=h.get('port'),
+                identity_file=h.get('identity_file'),
+            ).model_dump()
+            for h in hosts
+        ]
+    }
+
 
 @router.post("/terminal/ssh/connect")
 async def ssh_connect(body: SSHConnectRequest):

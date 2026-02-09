@@ -20,7 +20,7 @@ const CONFIG = {
         API_DEFAULT: 60000,         // 60s for normal API calls
         FETCH_RETRY: 300000,        // 5 min for fetch with retry
         STREAMING: 900000,          // 15 min for streaming (matches bedrock_read_timeout=900s)
-        SSE_HEARTBEAT: 120000,      // 2 min SSE heartbeat timeout (fallback, server sends every 10s)
+        SSE_HEARTBEAT: 300000,      // 5 min SSE heartbeat timeout (covers context compaction gaps between iterations)
         TOOL_EXECUTION: 300000,     // 5 min per tool execution (matches tool_execution_timeout=300s)
         TOOL_EXECUTION_LONG: 600000,// 10 min for long tasks (builds, installs)
         BACKGROUND_TASK_MAX: 3600000,// 1 hour max for background tasks

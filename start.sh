@@ -10,8 +10,19 @@ echo "  Springo 启动脚本"
 echo "================================"
 
 # 停止可能运行的旧进程
+echo "  清理旧进程..."
 pkill -f "uvicorn api.main:app" 2>/dev/null
-pkill -f "electron springo-app" 2>/dev/null
+pkill -fi "electron" 2>/dev/null
+pkill -f "node.*electron" 2>/dev/null
+# 等进程真正退出，端口释放
+sleep 2
+
+# 再确认 8081 端口没被占用
+if lsof -ti:8081 >/dev/null 2>&1; then
+    echo "  -> 端口 8081 仍被占用，强制释放..."
+    lsof -ti:8081 | xargs kill -9 2>/dev/null
+    sleep 1
+fi
 
 # 检查虚拟环境
 if [ ! -d "venv" ]; then
@@ -27,7 +38,7 @@ source venv/bin/activate
 
 # 安装依赖
 echo "[3/4] 检查依赖..."
-pip install -q fastapi uvicorn pydantic-settings aioboto3 httpx sse-starlette psutil 2>/dev/null
+pip install -q fastapi uvicorn pydantic-settings aioboto3 httpx sse-starlette psutil asyncssh 2>/dev/null
 
 # 后台启动 FastAPI
 echo "[4/4] 启动 FastAPI 后端..."
@@ -53,7 +64,7 @@ echo "  API:     http://localhost:8081"
 echo "  Swagger: http://localhost:8081/docs"
 echo ""
 
-# 启动 Electron 前端
+# 启动 Electron 前端（只启动一个实例）
 echo "  启动 Electron 前端..."
 cd springo-app
 if [ ! -d "node_modules" ]; then

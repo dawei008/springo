@@ -814,6 +814,7 @@
             { name: 'name', description: 'Rename current session (usage: /name New Title)', isBuiltIn: true },
             { name: 'rename', description: 'Alias for /name', isBuiltIn: true },
             { name: 'clear', description: 'Clear current session messages', isBuiltIn: true },
+            { name: 'terminal', description: 'Execute a command inline (usage: /terminal ls -la)', isBuiltIn: true },
         ];
 
         // Show skill picker UI
@@ -3247,6 +3248,7 @@
                             console.log(`[${convId}] Team spawned: ${data.team_id} with ${data.agents?.length} agents`);
                             if (currentConversationId === convId) {
                                 renderTeamPanel(data.team_id, data.agents, data.user_request);
+                                initTeamSplitPanel(data.team_id, data.agents, data.user_request);
                             }
                             break;
 
@@ -3254,6 +3256,7 @@
                             console.log(`[${convId}] Team planning: ${data.team_id}`);
                             if (currentConversationId === convId) {
                                 updateTeamStatus(data.team_id, 'planning', 'Orchestrator decomposing task...');
+                                updateTeamSplitStatus(data.team_id, 'planning', 'Planning...');
                             }
                             break;
 
@@ -3262,6 +3265,8 @@
                             if (currentConversationId === convId) {
                                 renderTeamTaskBoard(data.team_id, data.tasks);
                                 updateTeamStatus(data.team_id, 'executing', 'Agents working...');
+                                addTeamSplitAgents(data.team_id, data.tasks);
+                                updateTeamSplitStatus(data.team_id, 'executing', 'Agents working...');
                             }
                             break;
 
@@ -3269,12 +3274,14 @@
                             console.log(`[${convId}] Agent started: ${data.role} -> ${data.task_title}`);
                             if (currentConversationId === convId) {
                                 updateTeamAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
+                                updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
                             }
                             break;
 
                         case 'team_agent_progress':
                             if (currentConversationId === convId) {
                                 updateTeamAgent(data.team_id, data.agent_id, data.role, data.status, '', data.preview);
+                                updateTeamSplitAgent(data.team_id, data.agent_id, data.role, data.status, '', data.preview);
                             }
                             break;
 
@@ -3283,6 +3290,7 @@
                             if (currentConversationId === convId) {
                                 updateTeamAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
                                 updateTeamTaskStatus(data.team_id, data.agent_id, 'complete');
+                                updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
                             }
                             break;
 
@@ -3291,6 +3299,7 @@
                             if (currentConversationId === convId) {
                                 updateTeamAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
                                 updateTeamTaskStatus(data.team_id, data.agent_id, 'error');
+                                updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
                             }
                             break;
 
@@ -3298,6 +3307,7 @@
                             console.log(`[${convId}] Team synthesizing: ${data.team_id}`);
                             if (currentConversationId === convId) {
                                 updateTeamStatus(data.team_id, 'synthesizing', 'Synthesizing results...');
+                                updateTeamSplitStatus(data.team_id, 'synthesizing', 'Synthesizing...');
                             }
                             break;
 
@@ -3306,6 +3316,7 @@
                             if (currentConversationId === convId) {
                                 updateTeamStatus(data.team_id, 'complete', 'Team complete');
                                 renderTeamResult(data.team_id, data.result, data.total_tokens);
+                                updateTeamSplitStatus(data.team_id, 'complete', 'Complete');
                             }
                             // Append team result to text content for chat history
                             textContent += '\n\n' + data.result;
@@ -3316,6 +3327,7 @@
                             console.error(`[${convId}] Team error: ${data.error}`);
                             if (currentConversationId === convId) {
                                 updateTeamStatus(data.team_id, 'error', `Error: ${data.error}`);
+                                updateTeamSplitStatus(data.team_id, 'error', `Error: ${data.error}`);
                             }
                             break;
 
@@ -4073,6 +4085,7 @@
             'rename': { description: 'Rename current session', handler: handleNameCommand },
             'clear': { description: 'Clear current session messages', handler: handleClearCommand },
             'reset': { description: 'Force reset stuck sessions', handler: handleResetCommand },
+            'terminal': { description: 'Execute a terminal command inline', handler: handleTerminalCommand },
         };
 
         // Handle /reset command - force reset stuck streaming states
@@ -4113,6 +4126,50 @@
             return true;
         }
 
+        // Handle /terminal command - execute command inline in chat
+        // Supports natural language: /terminal 重复执行whoami -> parses to "whoami"
+        async function handleTerminalCommand(args) {
+            const input = args.trim();
+            if (!input) {
+                alert('Usage: /terminal <command>\nExample: /terminal ls -la\nAlso supports: /terminal 查看当前目录');
+                return true;
+            }
+            
+            // Try to parse the input (handles both commands and natural language)
+            try {
+                const res = await fetch(BASE_URL + '/v1/terminal/parse', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: input })
+                });
+                
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.success && data.command) {
+                        // If natural language was parsed, show what command will run
+                        if (data.is_natural_language) {
+                            console.log(`[NL Parse] "${input}" -> "${data.command}"`);
+                        }
+                        executeTerminalFromChat(data.command);
+                    } else {
+                        // Parse failed, try to execute as-is
+                        console.warn('NL parse failed, executing as-is:', data.error);
+                        executeTerminalFromChat(input);
+                    }
+                } else {
+                    // API error, execute as-is
+                    console.warn('NL parse API error, executing as-is');
+                    executeTerminalFromChat(input);
+                }
+            } catch (e) {
+                // Network error, execute as-is
+                console.warn('NL parse network error, executing as-is:', e);
+                executeTerminalFromChat(input);
+            }
+            
+            return true;
+        }
+
         async function sendMessage() {
             const input = document.getElementById('message-input');
             let content = input.value.trim();
@@ -4138,6 +4195,14 @@
                     builtInCommands[cmdName].handler(cmdArgs);
                     return;
                 }
+            }
+
+            // Handle #terminal — inject terminal panel output into chat as context
+            if (content.trim() === '#terminal' || content.startsWith('#terminal ')) {
+                input.value = '';
+                input.style.height = 'auto';
+                injectTerminalOutputToChat(content);
+                return;
             }
 
             // Handle explicit skill selection (via /skillname)
@@ -4619,7 +4684,7 @@ Be concise and helpful in your responses.`;
 
                 // Use native fetch for streaming (no retry wrapper)
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout for streaming
+                const timeoutId = setTimeout(() => controller.abort(), 900000); // 15 minute timeout for streaming (matches bedrock_read_timeout)
 
                 // Link external abort signal
                 if (abortSignal) {
@@ -5680,11 +5745,14 @@ Be concise and helpful in your responses.`;
             }
         }
 
+        let _memorySaveTimer = null;
         async function saveMemorySettings() {
-            const enabled = document.getElementById('settings-memory-enabled').checked;
-            const memoryId = document.getElementById('settings-memory-id').value.trim();
-            const region = document.getElementById('settings-memory-region').value;
-            const s3Bucket = document.getElementById('settings-s3-bucket').value.trim();
+            const enabled = document.getElementById('settings-memory-enabled')?.checked;
+            const memoryId = document.getElementById('settings-memory-id')?.value?.trim();
+            const region = document.getElementById('settings-memory-region')?.value;
+            const s3Bucket = document.getElementById('settings-s3-bucket')?.value?.trim();
+
+            if (enabled === undefined) return; // settings modal not open
 
             try {
                 // Save Memory config
@@ -5714,6 +5782,25 @@ Be concise and helpful in your responses.`;
                 console.error('Failed to save settings:', e);
             }
         }
+
+        // Auto-save memory/S3 settings on input change (debounced)
+        function debouncedSaveMemorySettings() {
+            if (_memorySaveTimer) clearTimeout(_memorySaveTimer);
+            _memorySaveTimer = setTimeout(() => saveMemorySettings(), 800);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const memoryFields = ['settings-memory-id', 'settings-memory-enabled', 'settings-memory-region', 'settings-s3-bucket'];
+            for (const id of memoryFields) {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('change', debouncedSaveMemorySettings);
+                    if (el.type === 'text' || el.tagName === 'INPUT') {
+                        el.addEventListener('input', debouncedSaveMemorySettings);
+                    }
+                }
+            }
+        });
 
         // ==================== Memory Sync Status ====================
         let memorySyncStatusInterval = null;
@@ -10166,36 +10253,47 @@ ${content || 'Task completed successfully.'}
                                 switch (eventType) {
                                     case 'team_spawned':
                                         renderTeamPanel(data.team_id, data.agents, data.user_request);
+                                        initTeamSplitPanel(data.team_id, data.agents, data.user_request);
                                         break;
                                     case 'team_planning':
                                         updateTeamStatus(data.team_id, 'planning', 'Decomposing task...');
+                                        updateTeamSplitStatus(data.team_id, 'planning', 'Planning...');
                                         break;
                                     case 'team_task_board':
                                         renderTeamTaskBoard(data.team_id, data.tasks);
                                         updateTeamStatus(data.team_id, 'executing', 'Agents working...');
+                                        addTeamSplitAgents(data.team_id, data.tasks);
+                                        updateTeamSplitStatus(data.team_id, 'executing', 'Agents working...');
                                         break;
                                     case 'team_agent_start':
                                         updateTeamAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
+                                        updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
                                         break;
                                     case 'team_agent_progress':
                                         updateTeamAgent(data.team_id, data.agent_id, data.role, 'executing', '', data.preview);
+                                        updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'executing', '', data.preview);
                                         break;
                                     case 'team_agent_complete':
                                         updateTeamAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
+                                        updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'complete', data.task_title, data.findings);
                                         break;
                                     case 'team_agent_error':
                                         updateTeamAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
+                                        updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'error', '', data.error);
                                         break;
                                     case 'team_synthesizing':
                                         updateTeamStatus(data.team_id, 'synthesizing', 'Synthesizing results...');
+                                        updateTeamSplitStatus(data.team_id, 'synthesizing', 'Synthesizing...');
                                         break;
                                     case 'team_complete':
                                         finalResult = data.result;
                                         renderTeamResult(data.team_id, data.result, data.total_tokens);
                                         updateTeamStatus(data.team_id, 'complete', 'Complete');
+                                        updateTeamSplitStatus(data.team_id, 'complete', 'Complete');
                                         break;
                                     case 'team_error':
                                         updateTeamStatus(data.team_id, 'error', data.error);
+                                        updateTeamSplitStatus(data.team_id, 'error', data.error);
                                         break;
                                 }
                             } catch (e) {
@@ -10241,8 +10339,7 @@ ${content || 'Task completed successfully.'}
         let terminalHistory = [];
         let terminalHistoryIndex = -1;
 
-        // SSH state
-        let terminalMode = 'local';  // 'local' or 'ssh'
+        // SSH state (terminal is SSH-only)
         let currentSSHConnectionId = null;
 
         function toggleTerminalPanel() {
@@ -10257,6 +10354,9 @@ ${content || 'Task completed successfully.'}
             switchRightPanelTab('terminal');
             btn.classList.add('active');
 
+            // Load SSH config hosts
+            loadSSHConfig();
+
             // Focus the input
             setTimeout(() => {
                 document.getElementById('terminal-input')?.focus();
@@ -10266,6 +10366,44 @@ ${content || 'Task completed successfully.'}
         function clearTerminal() {
             const output = document.getElementById('terminal-panel-output');
             if (output) output.innerHTML = '';
+        }
+
+        // Toggle terminal panel light/dark theme
+        function toggleTerminalTheme() {
+            const panel = document.querySelector('.terminal-panel');
+            if (panel) {
+                panel.classList.toggle('terminal-light');
+                // Save preference to localStorage
+                const isLight = panel.classList.contains('terminal-light');
+                localStorage.setItem('terminal-theme', isLight ? 'light' : 'dark');
+                // Update button icon
+                const btn = document.getElementById('terminal-theme-btn');
+                if (btn) {
+                    if (isLight) {
+                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+                        btn.title = 'Switch to Dark Theme';
+                    } else {
+                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+                        btn.title = 'Switch to Light Theme';
+                    }
+                }
+            }
+        }
+
+        // Initialize terminal theme from localStorage
+        function initTerminalTheme() {
+            const savedTheme = localStorage.getItem('terminal-theme');
+            if (savedTheme === 'light') {
+                const panel = document.querySelector('.terminal-panel');
+                if (panel) {
+                    panel.classList.add('terminal-light');
+                    const btn = document.getElementById('terminal-theme-btn');
+                    if (btn) {
+                        btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+                        btn.title = 'Switch to Dark Theme';
+                    }
+                }
+            }
         }
 
         function appendTerminalOutput(html, className) {
@@ -10283,74 +10421,12 @@ ${content || 'Task completed successfully.'}
             const command = input.value.trim();
             if (!command) return;
 
-            // Route to SSH if in SSH mode
-            if (terminalMode === 'ssh') {
-                return executeSSHCommand(command);
+            // Terminal is SSH-only — require connection
+            if (!currentSSHConnectionId) {
+                appendTerminalOutput(`<span class="ansi-red">No SSH connection active. Please connect first.</span>`, 'terminal-error-line');
+                return;
             }
-
-            // Add to history
-            terminalHistory.push(command);
-            terminalHistoryIndex = terminalHistory.length;
-
-            // Show command in output
-            appendTerminalOutput(`<span class="ansi-blue">$ ${escapeHtml(command)}</span>`, 'terminal-cmd-line');
-
-            // Clear input
-            input.value = '';
-
-            // Show stop button, hide run button
-            document.getElementById('terminal-run-btn').style.display = 'none';
-            document.getElementById('terminal-stop-btn').style.display = '';
-
-            try {
-                const response = await fetch(BASE_URL + '/v1/terminal/execute', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        command: command,
-                        timeout: 300
-                    })
-                });
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let eventType = null;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('event: ')) {
-                            eventType = line.slice(7).trim();
-                        } else if (line.startsWith('data: ')) {
-                            const dataStr = line.slice(6);
-                            if (dataStr === '[DONE]') continue;
-
-                            try {
-                                const data = JSON.parse(dataStr);
-                                handleTerminalEvent(eventType, data);
-                            } catch (e) {
-                                // ignore parse errors
-                            }
-                            eventType = null;
-                        }
-                    }
-                }
-            } catch (e) {
-                appendTerminalOutput(`<span class="ansi-red">Error: ${escapeHtml(e.message)}</span>`, 'terminal-error-line');
-            } finally {
-                // Reset buttons
-                document.getElementById('terminal-run-btn').style.display = '';
-                document.getElementById('terminal-stop-btn').style.display = 'none';
-                terminalCurrentPid = null;
-                input.focus();
-            }
+            return executeSSHCommand(command);
         }
 
         function handleTerminalEvent(eventType, data) {
@@ -10391,6 +10467,9 @@ ${content || 'Task completed successfully.'}
 
         // Terminal input keyboard handling
         document.addEventListener('DOMContentLoaded', function() {
+            // Initialize terminal theme from saved preference
+            initTerminalTheme();
+            
             const termInput = document.getElementById('terminal-input');
             if (termInput) {
                 termInput.addEventListener('keydown', function(e) {
@@ -10427,37 +10506,56 @@ ${content || 'Task completed successfully.'}
 
         // ============ Terminal SSH Mode ============
 
-        function switchTerminalMode(mode) {
-            terminalMode = mode;
+        // SSH config hosts cache
+        let sshConfigHosts = [];
 
-            // Update tabs
-            document.querySelectorAll('.terminal-mode-tab').forEach(tab => {
-                tab.classList.toggle('active', tab.dataset.mode === mode);
-            });
+        async function loadSSHConfig() {
+            const select = document.getElementById('ssh-host-select');
+            const container = document.getElementById('ssh-config-hosts');
+            if (!select || !container) return;
 
-            // Show/hide SSH form
-            const sshForm = document.getElementById('ssh-connect-form');
-            if (sshForm) {
-                sshForm.style.display = mode === 'ssh' ? '' : 'none';
+            try {
+                const res = await fetch(BASE_URL + '/v1/terminal/ssh/config');
+                if (!res.ok) return;
+                const data = await res.json();
+                sshConfigHosts = data.hosts || [];
+
+                if (sshConfigHosts.length === 0) {
+                    container.style.display = 'none';
+                    return;
+                }
+
+                // Populate dropdown
+                select.innerHTML = '<option value="">-- Select from ~/.ssh/config --</option>';
+                for (const host of sshConfigHosts) {
+                    const label = host.user ? `${host.name} (${host.user}@${host.hostname || host.name})` : host.name;
+                    const opt = document.createElement('option');
+                    opt.value = host.name;
+                    opt.textContent = label;
+                    select.appendChild(opt);
+                }
+                container.style.display = '';
+            } catch (e) {
+                console.warn('Failed to load SSH config:', e);
             }
-
-            // Update CWD display
-            const cwdEl = document.getElementById('terminal-cwd');
-            if (mode === 'ssh' && currentSSHConnectionId) {
-                const info = cwdEl.dataset.sshName || 'SSH';
-                cwdEl.textContent = info;
-            } else if (mode === 'local') {
-                cwdEl.textContent = '~/';
-            }
-
-            // Update prompt
-            const prompt = document.querySelector('.terminal-prompt');
-            if (prompt) {
-                prompt.textContent = mode === 'ssh' ? '>' : '$';
-            }
-
-            document.getElementById('terminal-input')?.focus();
         }
+
+        window.onSSHHostSelect = function(hostName) {
+            if (!hostName) return;
+            const host = sshConfigHosts.find(h => h.name === hostName);
+            if (!host) return;
+
+            // Auto-fill fields
+            const hostInput = document.getElementById('ssh-host');
+            const portInput = document.getElementById('ssh-port');
+            const userInput = document.getElementById('ssh-username');
+            const keyInput = document.getElementById('ssh-key-path');
+
+            if (hostInput) hostInput.value = host.hostname || host.name;
+            if (portInput) portInput.value = host.port || 22;
+            if (userInput) userInput.value = host.user || '';
+            if (keyInput) keyInput.value = host.identity_file || '';
+        };
 
         async function sshConnect() {
             const host = document.getElementById('ssh-host')?.value?.trim();
@@ -10497,6 +10595,13 @@ ${content || 'Task completed successfully.'}
                 const cwdEl = document.getElementById('terminal-cwd');
                 cwdEl.textContent = data.name;
                 cwdEl.dataset.sshName = data.name;
+
+                // Enable terminal input
+                const termInput = document.getElementById('terminal-input');
+                if (termInput) {
+                    termInput.disabled = false;
+                    termInput.placeholder = `Enter command on ${data.name}...`;
+                }
 
                 // Add to connections list
                 refreshSSHConnections();
@@ -10542,6 +10647,11 @@ ${content || 'Task completed successfully.'}
             const cwdEl = document.getElementById('terminal-cwd');
             cwdEl.textContent = name;
             cwdEl.dataset.sshName = name;
+            const termInput = document.getElementById('terminal-input');
+            if (termInput) {
+                termInput.disabled = false;
+                termInput.placeholder = `Enter command on ${name}...`;
+            }
             refreshSSHConnections();
             appendTerminalOutput(`<span class="ansi-cyan">Switched to ${escapeHtml(name)}</span>`, 'terminal-cmd-line');
         }
@@ -10553,7 +10663,12 @@ ${content || 'Task completed successfully.'}
                 if (connectionId === currentSSHConnectionId) {
                     currentSSHConnectionId = null;
                     updateSSHStatus('Disconnected', '');
-                    document.getElementById('terminal-cwd').textContent = 'SSH';
+                    document.getElementById('terminal-cwd').textContent = 'Not connected';
+                    const termInput = document.getElementById('terminal-input');
+                    if (termInput) {
+                        termInput.disabled = true;
+                        termInput.placeholder = 'Connect to SSH first...';
+                    }
                 }
 
                 refreshSSHConnections();
@@ -10628,5 +10743,316 @@ ${content || 'Task completed successfully.'}
                 document.getElementById('terminal-stop-btn').style.display = 'none';
                 document.getElementById('terminal-input')?.focus();
             }
+        }
+
+        // ============ #terminal — Read terminal output into chat ============
+
+        function injectTerminalOutputToChat(userInput) {
+            const thisConvId = currentConversationId || Date.now().toString();
+            if (!currentConversationId) {
+                currentConversationId = thisConvId;
+                convRuntime[thisConvId] = { isStreaming: false, attachments: [], messages: [] };
+            }
+            const runtime = getConvRuntime(thisConvId);
+
+            // Hide welcome
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.style.display = 'none';
+
+            // Read terminal panel output
+            const outputEl = document.getElementById('terminal-panel-output');
+            if (!outputEl || !outputEl.textContent.trim()) {
+                runtime.messages.push({ role: 'user', content: userInput, timestamp: Date.now() });
+                runtime.messages.push({
+                    role: 'assistant',
+                    content: 'Terminal panel is empty. Run some commands in the SSH terminal first.',
+                    timestamp: Date.now()
+                });
+                if (currentConversationId === thisConvId) { renderMessages(); scrollToBottom(); }
+                return;
+            }
+
+            // Extract text content from terminal output (preserving line structure)
+            const terminalText = outputEl.innerText.trim();
+
+            // Optional: user can add a question/instruction after #terminal
+            const extra = userInput.trim().substring('#terminal'.length).trim();
+
+            // Build the message that gets sent to AI:
+            // Show #terminal as the visible user message, but append terminal content
+            // so the AI can read and reason about it
+            const messageForAI = extra
+                ? `[SSH Terminal Output]\n\`\`\`\n${terminalText}\n\`\`\`\n\n${extra}`
+                : `[SSH Terminal Output]\n\`\`\`\n${terminalText}\n\`\`\``;
+
+            // Inject into input and let sendMessage() handle the full flow
+            const input = document.getElementById('message-input');
+            input.value = messageForAI;
+            sendMessage();
+        }
+
+        // ============ /terminal — Execute command on remote SSH ============
+
+        async function executeTerminalFromChat(command) {
+            const thisConvId = currentConversationId || Date.now().toString();
+            if (!currentConversationId) {
+                currentConversationId = thisConvId;
+                convRuntime[thisConvId] = { isStreaming: false, attachments: [], messages: [] };
+            }
+            const runtime = getConvRuntime(thisConvId);
+
+            // Hide welcome
+            const welcome = document.getElementById('welcome');
+            if (welcome) welcome.style.display = 'none';
+
+            // Add user message
+            runtime.messages.push({
+                role: 'user',
+                content: `/terminal ${command}`,
+                timestamp: Date.now()
+            });
+            if (currentConversationId === thisConvId) renderMessages();
+
+            // SSH-only: require connection
+            if (!currentSSHConnectionId) {
+                runtime.messages.push({
+                    role: 'assistant',
+                    content: 'No SSH connection active. Please connect to a remote host first via the Terminal panel.',
+                    timestamp: Date.now()
+                });
+                if (currentConversationId === thisConvId) { renderMessages(); scrollToBottom(); }
+                return;
+            }
+
+            const url = BASE_URL + '/v1/terminal/ssh/execute';
+            const body = { connection_id: currentSSHConnectionId, command, timeout: 300 };
+
+            let outputLines = [];
+            let exitCode = null;
+
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+
+                if (!res.ok) {
+                    const errData = await res.json().catch(() => ({}));
+                    throw new Error(errData.detail || res.statusText);
+                }
+
+                const reader = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let eventType = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (line.startsWith('event: ')) {
+                            eventType = line.slice(7).trim();
+                        } else if (line.startsWith('data: ')) {
+                            const dataStr = line.slice(6);
+                            if (dataStr === '[DONE]') continue;
+                            try {
+                                const data = JSON.parse(dataStr);
+
+                                // Also push to terminal panel
+                                handleTerminalEvent(eventType, data);
+
+                                if (eventType === 'output') {
+                                    outputLines.push(data.data || '');
+                                } else if (eventType === 'exit') {
+                                    exitCode = data.exit_code;
+                                } else if (eventType === 'error') {
+                                    outputLines.push(`Error: ${data.message}`);
+                                }
+                            } catch (e) {}
+                            eventType = null;
+                        }
+                    }
+                }
+            } catch (e) {
+                outputLines.push(`Error: ${e.message}`);
+            }
+
+            // Build result message
+            const outputText = outputLines.join('').trimEnd();
+            const exitInfo = exitCode !== null ? `\n[exit code: ${exitCode}]` : '';
+            const resultContent = `\`\`\`\n$ ${command}\n${outputText}${exitInfo}\n\`\`\``;
+
+            runtime.messages.push({
+                role: 'assistant',
+                content: resultContent,
+                timestamp: Date.now()
+            });
+            if (currentConversationId === thisConvId) {
+                renderMessages();
+                scrollToBottom();
+            }
+
+            // Also show command in terminal panel
+            appendTerminalOutput(`<span class="ansi-blue">$ ${escapeHtml(command)}</span>`, 'terminal-cmd-line');
+        }
+
+        // ============ Team Split Panel ============
+
+        let activeTeamSplitId = null;
+
+        function initTeamSplitPanel(teamId, agents, userRequest) {
+            activeTeamSplitId = teamId;
+
+            const placeholder = document.getElementById('team-split-placeholder');
+            const content = document.getElementById('team-split-content');
+            const agentsContainer = document.getElementById('team-split-agents');
+            const statusBadge = document.getElementById('team-split-status-badge');
+            const requestPreview = document.getElementById('team-split-request-preview');
+
+            if (!content || !agentsContainer) return;
+
+            placeholder.style.display = 'none';
+            content.style.display = '';
+
+            // Set header
+            statusBadge.textContent = 'Spawned';
+            statusBadge.className = 'team-split-status-badge';
+            if (requestPreview) {
+                const preview = userRequest && userRequest.length > 80 ? userRequest.substring(0, 80) + '...' : (userRequest || '');
+                requestPreview.textContent = preview;
+            }
+
+            // Create agent cards
+            agentsContainer.innerHTML = '';
+            if (agents && agents.length > 0) {
+                for (const a of agents) {
+                    const cfg = TEAM_ROLE_CONFIG[a.role] || TEAM_ROLE_CONFIG.explorer;
+                    const card = document.createElement('div');
+                    card.className = 'team-split-agent-card';
+                    card.setAttribute('data-agent-id', a.agent_id);
+                    card.style.setProperty('--agent-color', cfg.color);
+                    card.innerHTML = `
+                        <div class="team-split-agent-header">
+                            <svg fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
+                            </svg>
+                            <span class="team-split-agent-role">${cfg.label}</span>
+                            <span class="team-split-agent-badge idle">idle</span>
+                        </div>
+                        <div class="team-split-agent-task"></div>
+                        <div class="team-split-agent-output"></div>
+                    `;
+                    agentsContainer.appendChild(card);
+                }
+            }
+
+            // Auto-switch to Team tab
+            const panel = document.getElementById('right-panel');
+            if (panel && panel.classList.contains('hidden')) {
+                panel.classList.remove('hidden');
+            }
+            switchRightPanelTab('team');
+        }
+
+        function updateTeamSplitStatus(teamId, status, text) {
+            if (teamId !== activeTeamSplitId) return;
+            const badge = document.getElementById('team-split-status-badge');
+            if (!badge) return;
+            badge.textContent = text || status;
+            badge.className = `team-split-status-badge ${status}`;
+        }
+
+        function addTeamSplitAgents(teamId, tasks) {
+            if (teamId !== activeTeamSplitId) return;
+            const agentsContainer = document.getElementById('team-split-agents');
+            if (!agentsContainer) return;
+
+            for (const task of tasks) {
+                const existingCard = agentsContainer.querySelector(`[data-agent-id="${task.assigned_to}"]`);
+                if (existingCard) {
+                    // Update task title
+                    const taskEl = existingCard.querySelector('.team-split-agent-task');
+                    if (taskEl) taskEl.textContent = task.title;
+                    continue;
+                }
+                const cfg = TEAM_ROLE_CONFIG[task.role] || TEAM_ROLE_CONFIG.explorer;
+                const card = document.createElement('div');
+                card.className = 'team-split-agent-card';
+                card.setAttribute('data-agent-id', task.assigned_to);
+                card.style.setProperty('--agent-color', cfg.color);
+                card.innerHTML = `
+                    <div class="team-split-agent-header">
+                        <svg fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
+                        </svg>
+                        <span class="team-split-agent-role">${cfg.label}</span>
+                        <span class="team-split-agent-badge idle">idle</span>
+                    </div>
+                    <div class="team-split-agent-task">${escapeHtml(task.title)}</div>
+                    <div class="team-split-agent-output"></div>
+                `;
+                agentsContainer.appendChild(card);
+            }
+        }
+
+        function updateTeamSplitAgent(teamId, agentId, role, status, taskTitle, content) {
+            if (teamId !== activeTeamSplitId) return;
+            const agentsContainer = document.getElementById('team-split-agents');
+            if (!agentsContainer) return;
+            const card = agentsContainer.querySelector(`[data-agent-id="${agentId}"]`);
+            if (!card) return;
+
+            // Update badge
+            const badge = card.querySelector('.team-split-agent-badge');
+            if (badge) {
+                badge.textContent = status;
+                badge.className = `team-split-agent-badge ${status}`;
+            }
+
+            // Update task title if provided
+            if (taskTitle) {
+                const taskEl = card.querySelector('.team-split-agent-task');
+                if (taskEl) taskEl.textContent = taskTitle;
+            }
+
+            // Pulsing animation
+            if (status === 'thinking' || status === 'executing') {
+                card.classList.add('active');
+            } else {
+                card.classList.remove('active');
+            }
+
+            // Show full output (not truncated, unlike chat cards)
+            if (content) {
+                const outputEl = card.querySelector('.team-split-agent-output');
+                if (outputEl) {
+                    outputEl.textContent = content;
+                    outputEl.style.display = 'block';
+                    if (status === 'error') {
+                        outputEl.classList.add('error');
+                        outputEl.classList.remove('success');
+                    } else if (status === 'complete') {
+                        outputEl.classList.add('success');
+                        outputEl.classList.remove('error');
+                    }
+                }
+            }
+        }
+
+        function resetTeamSplitPanel() {
+            activeTeamSplitId = null;
+            const placeholder = document.getElementById('team-split-placeholder');
+            const content = document.getElementById('team-split-content');
+            const agentsContainer = document.getElementById('team-split-agents');
+
+            if (placeholder) placeholder.style.display = '';
+            if (content) content.style.display = 'none';
+            if (agentsContainer) agentsContainer.innerHTML = '';
         }
 
