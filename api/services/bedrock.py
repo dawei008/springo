@@ -18,21 +18,112 @@ from .error_handler import format_error_response as _eh_format_error, get_http_s
 logger = logging.getLogger(__name__)
 
 
-# Bedrock model mapping
-BEDROCK_MODEL_MAPPING = {
-    "claude-3-5-sonnet-20241022": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-    "claude-3-5-haiku-20241022": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-    "claude-3-opus-20240229": "us.anthropic.claude-3-opus-20240229-v1:0",
-    "claude-3-sonnet-20240229": "us.anthropic.claude-3-sonnet-20240229-v1:0",
-    "claude-3-haiku-20240307": "us.anthropic.claude-3-haiku-20240307-v1:0",
-    "claude-3-7-sonnet-20250219": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-    "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-opus-4-20250514": "us.anthropic.claude-opus-4-20250514-v1:0",
-    "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-    "claude-haiku-4-5-20251001": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
+# Default context limits (200K models)
+_DEFAULT_LIMITS = {
+    "max_context_tokens": 200000,
+    "compact_threshold": 120000,
+    "warning_threshold": 160000,
+    "target_after_summary": 40000,
+    "max_output_tokens": 64000,
 }
+
+# Model Registry — single source of truth for all model capabilities
+MODEL_REGISTRY = {
+    "claude-opus-4-6": {
+        "bedrock_id": "us.anthropic.claude-opus-4-6-v1",
+        "display_name": "Claude Opus 4.6",
+        "family": "opus",
+        "max_context_tokens": 1000000,
+        "compact_threshold": 600000,
+        "warning_threshold": 800000,
+        "target_after_summary": 200000,
+        "max_output_tokens": 64000,
+        "recommended": True,
+    },
+    "claude-opus-4-5-20251101": {
+        "bedrock_id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "display_name": "Claude Opus 4.5",
+        "family": "opus",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-sonnet-4-5-20250929": {
+        "bedrock_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "display_name": "Claude Sonnet 4.5",
+        "family": "sonnet",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-haiku-4-5-20251001": {
+        "bedrock_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "display_name": "Claude Haiku 4.5",
+        "family": "haiku",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-sonnet-4-20250514": {
+        "bedrock_id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+        "display_name": "Claude Sonnet 4",
+        "family": "sonnet",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-opus-4-20250514": {
+        "bedrock_id": "us.anthropic.claude-opus-4-20250514-v1:0",
+        "display_name": "Claude Opus 4",
+        "family": "opus",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-3-7-sonnet-20250219": {
+        "bedrock_id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+        "display_name": "Claude 3.7 Sonnet",
+        "family": "sonnet",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-3-5-sonnet-20241022": {
+        "bedrock_id": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "display_name": "Claude 3.5 Sonnet",
+        "family": "sonnet",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-3-5-haiku-20241022": {
+        "bedrock_id": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+        "display_name": "Claude 3.5 Haiku",
+        "family": "haiku",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-3-opus-20240229": {
+        "bedrock_id": "us.anthropic.claude-3-opus-20240229-v1:0",
+        "display_name": "Claude 3 Opus",
+        "family": "opus",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-3-sonnet-20240229": {
+        "bedrock_id": "us.anthropic.claude-3-sonnet-20240229-v1:0",
+        "display_name": "Claude 3 Sonnet",
+        "family": "sonnet",
+        **_DEFAULT_LIMITS,
+    },
+    "claude-3-haiku-20240307": {
+        "bedrock_id": "us.anthropic.claude-3-haiku-20240307-v1:0",
+        "display_name": "Claude 3 Haiku",
+        "family": "haiku",
+        **_DEFAULT_LIMITS,
+    },
+}
+
+# Backward-compatible flat mapping
+BEDROCK_MODEL_MAPPING = {k: v["bedrock_id"] for k, v in MODEL_REGISTRY.items()}
+
+
+def get_model_limits(model: str) -> dict:
+    """Get context limits for a model. Returns defaults for unknown models."""
+    info = MODEL_REGISTRY.get(model)
+    if info:
+        return {
+            "max_context_tokens": info["max_context_tokens"],
+            "compact_threshold": info["compact_threshold"],
+            "warning_threshold": info["warning_threshold"],
+            "target_after_summary": info["target_after_summary"],
+            "max_output_tokens": info["max_output_tokens"],
+        }
+    return dict(_DEFAULT_LIMITS)
 
 
 def format_error_response(error: Exception, lang: str = "zh") -> dict:

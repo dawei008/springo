@@ -15,11 +15,20 @@ from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-# Token 计数配置
+# Token 计数配置 (defaults — use get_model_limits() for per-model values)
 MAX_TOKENS = 200000
 SUMMARY_THRESHOLD = 120000
 TARGET_AFTER_SUMMARY = 40000
 RECENT_MESSAGES_TO_KEEP = 10
+
+
+def _resolve_limits(model: str = None) -> tuple:
+    """Resolve context limits for a model. Returns (max_tokens, summary_threshold, target_after_summary)."""
+    if model:
+        from .bedrock import get_model_limits
+        limits = get_model_limits(model)
+        return limits["max_context_tokens"], limits["compact_threshold"], limits["target_after_summary"]
+    return MAX_TOKENS, SUMMARY_THRESHOLD, TARGET_AFTER_SUMMARY
 
 # Tool result size limits (bytes) - aligned with Flask
 MAX_TOOL_RESULT_CONTEXT_SIZE = 8 * 1024   # 8KB per tool result in history
@@ -189,16 +198,18 @@ def get_context_stats(
     messages: List[Dict[str, Any]],
     system_prompt: str = "",
     tools: List[Dict] = None,
+    model: str = None,
 ) -> Dict[str, Any]:
     """获取上下文统计信息"""
+    max_tok, summary_thresh, _ = _resolve_limits(model)
     bd = compute_breakdown(messages, system_prompt, tools)
 
     return {
         "total_tokens": bd.total,
-        "max_tokens": MAX_TOKENS,
-        "usage_percent": round(bd.total / MAX_TOKENS * 100, 1) if MAX_TOKENS > 0 else 0,
-        "summary_threshold": SUMMARY_THRESHOLD,
-        "needs_summary": bd.total > SUMMARY_THRESHOLD,
+        "max_tokens": max_tok,
+        "usage_percent": round(bd.total / max_tok * 100, 1) if max_tok > 0 else 0,
+        "summary_threshold": summary_thresh,
+        "needs_summary": bd.total > summary_thresh,
         "message_count": len(messages),
         "breakdown": bd.to_dict(),
     }
@@ -446,14 +457,17 @@ def create_summary_messages(
 
 def split_messages_for_summary(
     messages: List[Dict[str, Any]],
+    model: str = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """分割消息为 (旧消息, 保留消息)
 
     关键：tool_use/tool_result 边界保护
-    1. 从末尾向前走，累计 token 到 TARGET_AFTER_SUMMARY
+    1. 从末尾向前走，累计 token 到 target_after_summary
     2. 确保分割点在 user 消息边界
     3. 如果 user 消息含 tool_result，往前回溯到含 tool_use 的 assistant 消息之前
     """
+    _, _, target_after = _resolve_limits(model)
+
     if len(messages) <= RECENT_MESSAGES_TO_KEEP:
         return [], messages
 
@@ -465,7 +479,7 @@ def split_messages_for_summary(
         msg_tokens = count_message_tokens(messages[i]) + 4  # 结构开销
         cumulative_tokens += msg_tokens
 
-        if cumulative_tokens >= TARGET_AFTER_SUMMARY:
+        if cumulative_tokens >= target_after:
             split_idx = i + 1  # 从 i+1 开始保留
             break
 
@@ -681,6 +695,7 @@ async def summarize_context(
 
 def check_and_prepare_auto_summary(
     messages: List[Dict[str, Any]],
+    model: str = None,
 ) -> Optional[Dict[str, Any]]:
     """检查是否需要摘要，返回准备信息
 
@@ -688,13 +703,13 @@ def check_and_prepare_auto_summary(
         None if no summary needed, else:
         {needs_summary, summary_prompt, old_messages_count, recent_messages, structured_info}
     """
-    if not should_summarize(messages):
+    if not should_summarize(messages, model=model):
         return None
 
     if len(messages) <= RECENT_MESSAGES_TO_KEEP:
         return None
 
-    old_messages, recent_messages = split_messages_for_summary(messages)
+    old_messages, recent_messages = split_messages_for_summary(messages, model=model)
 
     if not old_messages:
         return None
@@ -721,6 +736,7 @@ def get_context_breakdown(
     tools: List[Dict] = None,
     skills: List[Dict] = None,
     memory_files: List[Dict] = None,
+    model: str = None,
 ) -> Dict[str, Any]:
     """详细分解：每个分类返回 {tokens, count, percent}
 
@@ -827,11 +843,12 @@ def get_context_breakdown(
         tokens = breakdown[cat]["tokens"]
         breakdown[cat]["percent"] = round((tokens / total_tokens) * 100, 1) if total_tokens > 0 else 0
 
+    max_tok, _, _ = _resolve_limits(model)
     return {
         "breakdown": breakdown,
         "total_tokens": total_tokens,
-        "max_tokens": MAX_TOKENS,
-        "usage_percent": round((total_tokens / MAX_TOKENS) * 100, 1) if MAX_TOKENS > 0 else 0,
+        "max_tokens": max_tok,
+        "usage_percent": round((total_tokens / max_tok) * 100, 1) if max_tok > 0 else 0,
         "messages_count": len(messages),
     }
 
@@ -840,9 +857,10 @@ def auto_check_context(
     messages: List[Dict[str, Any]],
     system_prompt: str = "",
     tools: List[Dict] = None,
+    model: str = None,
 ) -> Dict[str, Any]:
     """自动检查上下文健康状况"""
-    stats = get_context_stats(messages, system_prompt, tools)
+    stats = get_context_stats(messages, system_prompt, tools, model=model)
 
     warnings = []
     actions = []
@@ -875,7 +893,7 @@ def auto_check_context(
         "healthy": len(warnings) == 0,
         "usage_percent": usage_pct,
         "total_tokens": stats["total_tokens"],
-        "max_tokens": MAX_TOKENS,
+        "max_tokens": stats["max_tokens"],
         "warnings": warnings,
         "recommended_actions": list(set(actions)),
         "breakdown": bd,
@@ -891,9 +909,10 @@ def count_messages_tokens(messages: List[Dict[str, Any]]) -> int:
     return total
 
 
-def should_summarize(messages: List[Dict[str, Any]]) -> bool:
+def should_summarize(messages: List[Dict[str, Any]], model: str = None) -> bool:
     """检查是否需要摘要"""
-    return count_messages_tokens(messages) > SUMMARY_THRESHOLD
+    _, summary_thresh, _ = _resolve_limits(model)
+    return count_messages_tokens(messages) > summary_thresh
 
 
 def truncate_tool_results(

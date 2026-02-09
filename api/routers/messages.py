@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from ..config import settings
 from ..models.requests import MessageRequest, MessageAutoRequest
 from ..models.responses import MessageResponse, ErrorResponse, Usage
-from ..services.bedrock import get_bedrock_service, BedrockService
+from ..services.bedrock import get_bedrock_service, BedrockService, get_model_limits
 from ..services.mcp_manager import get_mcp_manager, MCPManager
 from ..services.context_manager import (
     count_messages_tokens, should_summarize, summarize_context,
@@ -24,7 +24,7 @@ from ..services.context_manager import (
     save_tool_result, save_summary_event,
     split_messages_for_summary, create_summary_messages,
     check_and_prepare_auto_summary,
-    MAX_TOKENS, SUMMARY_THRESHOLD, MAX_INLINE_OUTPUT_SIZE,
+    MAX_INLINE_OUTPUT_SIZE,
     RECENT_MESSAGES_TO_KEEP,
 )
 from ..services.session_store import get_session_store
@@ -263,9 +263,11 @@ async def messages_auto_api(
                         messages_modified = True
 
                     # Step 2: Auto-compact if approaching threshold (structured summary)
+                    current_model = body.get("model", "")
+                    model_limits = get_model_limits(current_model)
                     current_tokens = count_messages_tokens(messages)
-                    if should_summarize(messages):
-                        logger.info(f"[Context] Approaching limit ({current_tokens:,} tokens), compacting with structured summary...")
+                    if should_summarize(messages, model=current_model):
+                        logger.info(f"[Context] Approaching limit ({current_tokens:,}/{model_limits['max_context_tokens']:,} tokens), compacting...")
                         yield SSEEventBuilder.context_compact('approaching_limit', 'haiku', current_tokens)
                         # Send heartbeat before compaction (compaction calls Bedrock and can take 30+ seconds)
                         yield SSEEventBuilder.heartbeat(0, "context_compact")
@@ -290,8 +292,8 @@ async def messages_auto_api(
 
                     # Step 3: Force aggressive truncation if still critical (95%)
                     current_tokens = count_messages_tokens(messages)
-                    if current_tokens > MAX_TOKENS * 0.95:
-                        logger.warning(f"[Context] Critical ({current_tokens:,} tokens), forcing aggressive truncation")
+                    if current_tokens > model_limits["max_context_tokens"] * 0.95:
+                        logger.warning(f"[Context] Critical ({current_tokens:,}/{model_limits['max_context_tokens']:,} tokens), forcing aggressive truncation")
                         messages = truncate_tool_results(messages, max_size=2048)
                         final_tokens = count_messages_tokens(messages)
                         logger.info(f"[Context] After aggressive truncation: {final_tokens:,} tokens")
@@ -604,8 +606,10 @@ async def messages_auto_api(
                 # Step 1: Truncate old tool results
                 messages = prepare_messages_for_api(messages, keep_recent=3)
                 # Step 2: Auto-compact if approaching threshold (structured summary)
-                if should_summarize(messages):
-                    logger.info(f"[Context] Non-stream compact: {count_messages_tokens(messages):,} tokens")
+                ns_model = body.get("model", "")
+                ns_limits = get_model_limits(ns_model)
+                if should_summarize(messages, model=ns_model):
+                    logger.info(f"[Context] Non-stream compact: {count_messages_tokens(messages):,}/{ns_limits['max_context_tokens']:,} tokens")
                     try:
                         original_count = len(messages)
                         result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)
@@ -621,7 +625,7 @@ async def messages_auto_api(
                     except Exception as e:
                         logger.error(f"[Context] Non-stream compact failed: {e}")
                 # Step 3: Force aggressive truncation if still critical
-                if count_messages_tokens(messages) > MAX_TOKENS * 0.95:
+                if count_messages_tokens(messages) > ns_limits["max_context_tokens"] * 0.95:
                     messages = truncate_tool_results(messages, max_size=2048)
                     messages_modified = True
 

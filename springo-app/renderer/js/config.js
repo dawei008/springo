@@ -8,12 +8,12 @@ const BASE_URL = 'http://127.0.0.1:8081';
 
 // Configuration constants - centralized magic numbers
 const CONFIG = {
-    // Token limits
+    // Token limits (defaults — updated dynamically from /v1/models based on selected model)
     TOKENS: {
-        MAX_CONTEXT: 200000,        // Claude context window
-        WARNING_THRESHOLD: 160000,  // Show warning at 80%
-        COMPACT_THRESHOLD: 120000,  // Trigger compaction at 60%
-        MAX_OUTPUT: 64000           // Max tokens for response
+        MAX_CONTEXT: 200000,
+        WARNING_THRESHOLD: 160000,
+        COMPACT_THRESHOLD: 120000,
+        MAX_OUTPUT: 64000
     },
     // Timeouts (in milliseconds) - aligned with backend config.py
     TIMEOUTS: {

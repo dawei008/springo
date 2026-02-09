@@ -531,6 +531,7 @@
             }
 
             loadSettings();
+            await loadModelsFromAPI();
 
             // Initialize context indicator (will be updated when conversation loads)
             updateContextIndicator(null);
@@ -1261,7 +1262,8 @@
                         system: '',
                         tools: window.cachedTools || [],
                         skills: window.loadedSkills || [],
-                        memory_files: []
+                        memory_files: [],
+                        model: settings.model || 'claude-opus-4-6'
                     })
                 });
 
@@ -1341,10 +1343,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         messages: safeMessages,
-                        system: '', // System prompt is handled by backend
+                        system: '',
                         tools: tools,
                         skills: skills,
-                        memory_files: memory_files
+                        memory_files: memory_files,
+                        model: settings.model || 'claude-opus-4-6'
                     })
                 });
 
@@ -1715,7 +1718,7 @@
                 const res = await fetch(`${BASE_URL}/v1/context/stats`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: apiMessages })
+                    body: JSON.stringify({ messages: apiMessages, model: settings.model || 'claude-opus-4-6' })
                 });
                 const stats = await res.json();
 
@@ -5544,6 +5547,7 @@ Be concise and helpful in your responses.`;
             modal.classList.add('active');
             // Load default working directory
             document.getElementById('settings-default-workdir').value = defaultWorkingFolder || '~/Downloads';
+            populateModelDropdowns();
             document.getElementById('settings-model').value = settings.model || 'claude-opus-4-6';
             document.getElementById('settings-max-tokens').value = settings.maxTokens || 16384;
             document.getElementById('settings-temperature').value = settings.temperature || 0.7;
@@ -5576,7 +5580,8 @@ Be concise and helpful in your responses.`;
             settings.temperature = document.getElementById('settings-temperature').value;
             settings.compactModel = document.getElementById('settings-compact-model').value;
             localStorage.setItem('settings', JSON.stringify(settings));
-            // Model select was removed - model is fixed to Opus 4.5
+            // Update token limits for the selected model
+            updateTokenLimits(settings.model);
             // Save AWS credentials
             saveAwsSettings();
             // Save Memory settings
@@ -5584,11 +5589,7 @@ Be concise and helpful in your responses.`;
         }
 
         function loadSettings() {
-            // Migrate old model settings to 4.5 defaults
             migrateSettings();
-
-            // Model select was removed - model is fixed to Opus 4.5
-            // Always use light theme by default
             setTheme('light');
         }
 
@@ -5617,8 +5618,67 @@ Be concise and helpful in your responses.`;
         }
 
         function saveSettings() {
-            // Model is fixed to Opus 4.5, no need to save from selector
             localStorage.setItem('settings', JSON.stringify(settings));
+        }
+
+        // Cached model list from API
+        let _availableModels = [];
+
+        async function loadModelsFromAPI() {
+            try {
+                const res = await fetch(`${BASE_URL}/v1/models`);
+                const data = await res.json();
+                _availableModels = data.data || [];
+                populateModelDropdowns();
+                // Apply limits for current model
+                updateTokenLimits(settings.model || 'claude-opus-4-6');
+            } catch (e) {
+                console.warn('[Models] Failed to load from API, using defaults:', e.message);
+            }
+        }
+
+        function populateModelDropdowns() {
+            const modelSelect = document.getElementById('settings-model');
+            const compactSelect = document.getElementById('settings-compact-model');
+            if (!modelSelect || !compactSelect || !_availableModels.length) return;
+
+            // Default model dropdown
+            modelSelect.innerHTML = '';
+            for (const m of _availableModels) {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = m.display_name + (m.recommended ? ' (Recommended)' : '');
+                modelSelect.appendChild(opt);
+            }
+
+            // Compact model dropdown (same list, different default)
+            compactSelect.innerHTML = '';
+            for (const m of _availableModels) {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.textContent = m.display_name;
+                compactSelect.appendChild(opt);
+            }
+
+            // Set current values
+            modelSelect.value = settings.model || 'claude-opus-4-6';
+            compactSelect.value = settings.compactModel || 'claude-haiku-4-5-20251001';
+
+            // Listen for model change to update token limits
+            modelSelect.addEventListener('change', () => {
+                updateTokenLimits(modelSelect.value);
+            });
+        }
+
+        function updateTokenLimits(modelId) {
+            const model = _availableModels.find(m => m.id === modelId);
+            if (model && model.context) {
+                CONFIG.TOKENS.MAX_CONTEXT = model.context.max_context_tokens;
+                CONFIG.TOKENS.WARNING_THRESHOLD = model.context.warning_threshold;
+                CONFIG.TOKENS.COMPACT_THRESHOLD = model.context.compact_threshold;
+                CONFIG.TOKENS.MAX_OUTPUT = model.context.max_output_tokens;
+                console.log(`[Models] Token limits updated for ${modelId}: ${CONFIG.TOKENS.MAX_CONTEXT.toLocaleString()} context`);
+            }
         }
 
         // ==================== AWS Credentials Management ====================

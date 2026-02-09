@@ -57,6 +57,7 @@ class ContextStatsRequest(BaseModel):
     tools: Optional[List[Dict]] = None
     skills: Optional[List[Dict]] = None
     memory_files: Optional[List[Dict]] = None
+    model: Optional[str] = None
 
 
 class ContextSummarizeRequest(BaseModel):
@@ -150,6 +151,7 @@ async def context_stats(request: ContextStatsRequest) -> Dict[str, Any]:
             messages=request.messages,
             system_prompt=request.system_prompt,
             tools=request.tools,
+            model=request.model,
         )
     except Exception as e:
         logger.error(f"Context stats error: {e}")
@@ -169,6 +171,7 @@ async def context_breakdown(request: ContextStatsRequest) -> Dict[str, Any]:
             tools=request.tools,
             skills=request.skills,
             memory_files=request.memory_files,
+            model=request.model,
         )
     except Exception as e:
         logger.error(f"Context breakdown error: {e}")
