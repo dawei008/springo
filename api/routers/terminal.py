@@ -181,15 +181,20 @@ Output the command only, no explanation."""
 async def parse_nl_to_command(nl_input: str, context: str = None) -> dict:
     """Use Bedrock to parse natural language to shell command."""
     from ..services.bedrock import get_bedrock_service
-    
+    from ..services.model_registry import get_model_info, get_bedrock_id
+
     bedrock = get_bedrock_service()
-    
+
     user_content = nl_input
     if context:
         user_content = f"Context: {context}\n\nInput: {nl_input}"
-    
+
+    # Use a fast model for parsing — look up from registry
+    nl_model_name = "claude-3-5-haiku-20241022"
+    nl_model_info = get_model_info(nl_model_name)
+    nl_api_format = nl_model_info["api_format"] if nl_model_info else "anthropic"
+
     body = {
-        "anthropic_version": "bedrock-2023-05-31",
         "max_tokens": 200,
         "temperature": 0,
         "system": NL_PARSE_SYSTEM_PROMPT,
@@ -197,11 +202,12 @@ async def parse_nl_to_command(nl_input: str, context: str = None) -> dict:
             {"role": "user", "content": user_content}
         ]
     }
-    
+    if nl_api_format == "anthropic":
+        body["anthropic_version"] = "bedrock-2023-05-31"
+
     try:
-        # Use a fast model for parsing
-        model_id = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
-        response = await bedrock.invoke_model(model_id, body)
+        model_id = get_bedrock_id(nl_model_name)
+        response = await bedrock.invoke_model(model_id, body, api_format=nl_api_format)
         
         # Extract command from response
         content = response.get("content", [])

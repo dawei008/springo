@@ -18,7 +18,23 @@ class Settings(BaseSettings):
         default="anthropic.claude-sonnet-4-20250514-v1:0",
         description="Default Bedrock Model ID"
     )
-    
+    compact_model_id: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Model for context compaction"
+    )
+    nl_parse_model_id: str = Field(
+        default="claude-haiku-4-5-20251001",
+        description="Model for natural language to command parsing"
+    )
+    news_format_model_id: str = Field(
+        default="claude-sonnet-4-5-20250929",
+        description="Model for news formatting"
+    )
+    default_chat_model: str = Field(
+        default="claude-opus-4-6",
+        description="Default chat model for new sessions"
+    )
+
     # Server Configuration
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8081, description="Server port")

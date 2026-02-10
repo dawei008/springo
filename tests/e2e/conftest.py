@@ -12,6 +12,9 @@ import os
 FLASK_URL = os.getenv("FLASK_URL", "http://localhost:8080")
 FASTAPI_URL = os.getenv("FASTAPI_URL", "http://localhost:8081")
 
+# Default test model — single constant to change when switching models
+DEFAULT_TEST_MODEL = os.getenv("TEST_MODEL", "claude-sonnet-4-5-20250929")
+
 
 @pytest.fixture
 def flask_url() -> str:

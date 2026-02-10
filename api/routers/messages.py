@@ -82,17 +82,18 @@ async def messages_api(
         )
         
         original_model = msg_request.model
-        
+        api_format = bedrock.get_api_format(original_model)
+
         if msg_request.stream:
             # Streaming response
             async def stream_generator() -> AsyncGenerator[str, None]:
-                async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model):
+                async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
                     yield event
-            
+
             return create_sse_response(stream_generator(), request)
         else:
             # Non-streaming response
-            bedrock_response = await bedrock.invoke_model(model_id, bedrock_body)
+            bedrock_response = await bedrock.invoke_model(model_id, bedrock_body, api_format=api_format)
             
             response = {
                 "id": f"msg_{uuid.uuid4().hex[:24]}",
@@ -331,6 +332,7 @@ async def messages_auto_api(
                     )
 
                     model_id = bedrock.get_bedrock_model_id(original_model)
+                    api_format = bedrock.get_api_format(original_model)
 
                     # Collect response — track ALL content blocks (text + tool_use)
                     content_blocks = []  # All blocks in order
@@ -339,7 +341,7 @@ async def messages_auto_api(
                     _current_block_idx = -1
 
                     # Stream response
-                    async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model):
+                    async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
                         yield event
 
                         # Parse event to track content and tool uses
@@ -655,7 +657,8 @@ async def messages_auto_api(
                 )
 
                 model_id = bedrock.get_bedrock_model_id(original_model)
-                bedrock_response = await bedrock.invoke_model(model_id, bedrock_body)
+                ns_api_format = bedrock.get_api_format(original_model)
+                bedrock_response = await bedrock.invoke_model(model_id, bedrock_body, api_format=ns_api_format)
 
                 stop_reason = bedrock_response.get("stop_reason")
                 content = bedrock_response.get("content", [])

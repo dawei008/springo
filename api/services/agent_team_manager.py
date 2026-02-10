@@ -14,6 +14,7 @@ from ..models.teams import (
     TeamSpawnRequest, ROLE_CONFIGS,
 )
 from .bedrock import get_bedrock_service, BedrockService
+from .model_registry import get_model_info
 from .session_state import get_working_dir
 from ..utils.streaming import SSEEventBuilder
 
@@ -38,6 +39,26 @@ def _with_working_dir(system_prompt: str) -> str:
             f"  - Skills: `{springo_config_dir}/skills/` (each subfolder has SKILL.md)\n"
         )
     return "".join(parts)
+
+
+def _build_body(model_name: str, max_tokens: int, system: str, messages: list) -> dict:
+    """Build a Bedrock request body with conditional anthropic_version."""
+    info = get_model_info(model_name)
+    api_format = info["api_format"] if info else "anthropic"
+    body: dict = {
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    if api_format == "anthropic":
+        body["anthropic_version"] = "bedrock-2023-05-31"
+    return body
+
+
+def _get_api_format(model_name: str) -> str:
+    """Return 'anthropic' or 'converse' for *model_name*."""
+    info = get_model_info(model_name)
+    return info["api_format"] if info else "anthropic"
 
 
 class AgentTeamManager:
@@ -326,15 +347,14 @@ class AgentTeamManager:
         ]
 
         model_id = self.bedrock.get_bedrock_model_id(orchestrator.role.model)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 2048,
-            "system": _with_working_dir(orchestrator.role.system_prompt),
-            "messages": messages,
-        }
+        body = _build_body(
+            orchestrator.role.model, 2048,
+            _with_working_dir(orchestrator.role.system_prompt), messages,
+        )
+        orch_api_format = _get_api_format(orchestrator.role.model)
 
         try:
-            response = await self.bedrock.invoke_model(model_id, body)
+            response = await self.bedrock.invoke_model(model_id, body, api_format=orch_api_format)
             content = response.get("content", [])
             text = ""
             for block in content:
@@ -428,19 +448,18 @@ class AgentTeamManager:
         ]
 
         model_id = self.bedrock.get_bedrock_model_id(agent.role.model)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "system": _with_working_dir(system_prompt),
-            "messages": messages,
-        }
+        body = _build_body(
+            agent.role.model, 4096,
+            _with_working_dir(system_prompt), messages,
+        )
+        agent_api_format = _get_api_format(agent.role.model)
 
         agent.status = "executing"
         full_text = ""
         tokens = {"input_tokens": 0, "output_tokens": 0}
 
         try:
-            async for chunk in self.bedrock.invoke_model_stream_text(model_id, body):
+            async for chunk in self.bedrock.invoke_model_stream_text(model_id, body, api_format=agent_api_format):
                 if chunk["type"] == "delta":
                     text = chunk["text"]
                     full_text += text
@@ -501,16 +520,15 @@ class AgentTeamManager:
         ]
 
         model_id = self.bedrock.get_bedrock_model_id(agent.role.model)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 4096,
-            "system": _with_working_dir(agent.role.system_prompt),
-            "messages": messages,
-        }
+        body = _build_body(
+            agent.role.model, 4096,
+            _with_working_dir(agent.role.system_prompt), messages,
+        )
+        ea_api_format = _get_api_format(agent.role.model)
 
         try:
             agent.status = "executing"
-            response = await self.bedrock.invoke_model(model_id, body)
+            response = await self.bedrock.invoke_model(model_id, body, api_format=ea_api_format)
             content = response.get("content", [])
             text = ""
             for block in content:
@@ -562,16 +580,15 @@ class AgentTeamManager:
         ]
 
         model_id = self.bedrock.get_bedrock_model_id(orchestrator.role.model)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 8192,
-            "system": _with_working_dir(orchestrator.role.system_prompt),
-            "messages": messages,
-        }
+        body = _build_body(
+            orchestrator.role.model, 8192,
+            _with_working_dir(orchestrator.role.system_prompt), messages,
+        )
+        synth_api_format = _get_api_format(orchestrator.role.model)
 
         full_text = ""
         try:
-            async for chunk in self.bedrock.invoke_model_stream_text(model_id, body):
+            async for chunk in self.bedrock.invoke_model_stream_text(model_id, body, api_format=synth_api_format):
                 if chunk["type"] == "delta":
                     text = chunk["text"]
                     full_text += text
@@ -616,15 +633,14 @@ class AgentTeamManager:
         ]
 
         model_id = self.bedrock.get_bedrock_model_id(orchestrator.role.model)
-        body = {
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 8192,
-            "system": _with_working_dir(orchestrator.role.system_prompt),
-            "messages": messages,
-        }
+        body = _build_body(
+            orchestrator.role.model, 8192,
+            _with_working_dir(orchestrator.role.system_prompt), messages,
+        )
+        synth_ns_api_format = _get_api_format(orchestrator.role.model)
 
         try:
-            response = await self.bedrock.invoke_model(model_id, body)
+            response = await self.bedrock.invoke_model(model_id, body, api_format=synth_ns_api_format)
             content = response.get("content", [])
             text = ""
             for block in content:

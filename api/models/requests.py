@@ -66,6 +66,8 @@ class ToolChoice(BaseModel):
 
 class MessageRequest(BaseModel):
     """消息请求模型 - 兼容 Anthropic API 格式"""
+    # Default fallback model; overridden at runtime by the frontend's selected model
+    # and configurable via SPRINGO_DEFAULT_CHAT_MODEL in settings
     model: str = Field(default="claude-opus-4-6", description="Model ID")
     messages: List[Message] = Field(..., description="Conversation messages")
     max_tokens: int = Field(default=16384, ge=1, le=200000, description="Max output tokens")

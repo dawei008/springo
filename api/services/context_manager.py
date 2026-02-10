@@ -619,11 +619,13 @@ async def summarize_context(
     summary_text = ""
     if bedrock_service:
         try:
-            _compact_model_id = compact_model or "us.anthropic.claude-haiku-4-5-20251001-v1:0"
-            # Resolve short model names via bedrock mapping
-            if not _compact_model_id.startswith("us."):
-                from .bedrock import BEDROCK_MODEL_MAPPING
-                _compact_model_id = BEDROCK_MODEL_MAPPING.get(_compact_model_id, f"us.anthropic.{_compact_model_id}-v1:0")
+            from ..config import get_settings
+            _settings = get_settings()
+            _compact_model_id = compact_model or _settings.compact_model_id
+            # Resolve short model names via model registry
+            if not _compact_model_id.startswith(("us.", "deepseek.", "minimax.", "moonshotai.", "moonshot.", "qwen.", "zai.")):
+                from .model_registry import get_bedrock_id
+                _compact_model_id = get_bedrock_id(_compact_model_id)
             result = await bedrock_service.invoke_model(
                 model_id=_compact_model_id,
                 messages=[{"role": "user", "content": summary_prompt}],

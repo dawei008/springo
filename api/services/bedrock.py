@@ -14,116 +14,15 @@ from botocore.config import Config
 
 from ..config import settings
 from .error_handler import format_error_response as _eh_format_error, get_http_status, should_retry, parse_error
+from .model_registry import (
+    MODEL_REGISTRY,
+    BEDROCK_MODEL_MAPPING,
+    get_model_limits,
+    get_bedrock_id,
+    get_model_info,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# Default context limits (200K models)
-_DEFAULT_LIMITS = {
-    "max_context_tokens": 200000,
-    "compact_threshold": 120000,
-    "warning_threshold": 160000,
-    "target_after_summary": 40000,
-    "max_output_tokens": 64000,
-}
-
-# Model Registry — single source of truth for all model capabilities
-MODEL_REGISTRY = {
-    "claude-opus-4-6": {
-        "bedrock_id": "us.anthropic.claude-opus-4-6-v1",
-        "display_name": "Claude Opus 4.6",
-        "family": "opus",
-        "max_context_tokens": 1000000,
-        "compact_threshold": 600000,
-        "warning_threshold": 800000,
-        "target_after_summary": 200000,
-        "max_output_tokens": 64000,
-        "recommended": True,
-    },
-    "claude-opus-4-5-20251101": {
-        "bedrock_id": "us.anthropic.claude-opus-4-5-20251101-v1:0",
-        "display_name": "Claude Opus 4.5",
-        "family": "opus",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-sonnet-4-5-20250929": {
-        "bedrock_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "display_name": "Claude Sonnet 4.5",
-        "family": "sonnet",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-haiku-4-5-20251001": {
-        "bedrock_id": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "display_name": "Claude Haiku 4.5",
-        "family": "haiku",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-sonnet-4-20250514": {
-        "bedrock_id": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-        "display_name": "Claude Sonnet 4",
-        "family": "sonnet",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-opus-4-20250514": {
-        "bedrock_id": "us.anthropic.claude-opus-4-20250514-v1:0",
-        "display_name": "Claude Opus 4",
-        "family": "opus",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-3-7-sonnet-20250219": {
-        "bedrock_id": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
-        "display_name": "Claude 3.7 Sonnet",
-        "family": "sonnet",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-3-5-sonnet-20241022": {
-        "bedrock_id": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "display_name": "Claude 3.5 Sonnet",
-        "family": "sonnet",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-3-5-haiku-20241022": {
-        "bedrock_id": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        "display_name": "Claude 3.5 Haiku",
-        "family": "haiku",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-3-opus-20240229": {
-        "bedrock_id": "us.anthropic.claude-3-opus-20240229-v1:0",
-        "display_name": "Claude 3 Opus",
-        "family": "opus",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-3-sonnet-20240229": {
-        "bedrock_id": "us.anthropic.claude-3-sonnet-20240229-v1:0",
-        "display_name": "Claude 3 Sonnet",
-        "family": "sonnet",
-        **_DEFAULT_LIMITS,
-    },
-    "claude-3-haiku-20240307": {
-        "bedrock_id": "us.anthropic.claude-3-haiku-20240307-v1:0",
-        "display_name": "Claude 3 Haiku",
-        "family": "haiku",
-        **_DEFAULT_LIMITS,
-    },
-}
-
-# Backward-compatible flat mapping
-BEDROCK_MODEL_MAPPING = {k: v["bedrock_id"] for k, v in MODEL_REGISTRY.items()}
-
-
-def get_model_limits(model: str) -> dict:
-    """Get context limits for a model. Returns defaults for unknown models."""
-    info = MODEL_REGISTRY.get(model)
-    if info:
-        return {
-            "max_context_tokens": info["max_context_tokens"],
-            "compact_threshold": info["compact_threshold"],
-            "warning_threshold": info["warning_threshold"],
-            "target_after_summary": info["target_after_summary"],
-            "max_output_tokens": info["max_output_tokens"],
-        }
-    return dict(_DEFAULT_LIMITS)
 
 
 def format_error_response(error: Exception, lang: str = "zh") -> dict:
@@ -131,9 +30,11 @@ def format_error_response(error: Exception, lang: str = "zh") -> dict:
     return _eh_format_error(error, lang=lang)
 
 
-# Default system prompt (aligned with Flask shared.py)
-DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
+# ---------------------------------------------------------------------------
+# System prompts — split into common (model-agnostic) + Anthropic-specific
+# ---------------------------------------------------------------------------
 
+ANTHROPIC_SYSTEM_PROMPT = """
 ## CRITICAL RULE - NO EMOJIS (STRICTLY ENFORCED)
 
 **ABSOLUTELY DO NOT use any emojis, emoticons, or unicode symbols in your responses.** This is a strict requirement:
@@ -142,6 +43,10 @@ DEFAULT_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various
 - Use plain text only: "Done", "Error", "Success", "-", "->", "*"
 - This applies to ALL responses and ALL generated files
 - Violation of this rule is considered a critical error
+"""
+
+# Default system prompt (aligned with Flask shared.py)
+COMMON_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
 
 ## CRITICAL: Always Use Absolute Paths
 
@@ -346,6 +251,18 @@ The task runs in a separate session and results are returned when complete.
 - File operations are restricted to allowed directories
 """
 
+# Combined prompt for backward compatibility (used when api_format is unknown)
+DEFAULT_SYSTEM_PROMPT = COMMON_SYSTEM_PROMPT + ANTHROPIC_SYSTEM_PROMPT
+
+
+def _get_system_prompt_for_model(model_name: str) -> str:
+    """Return the appropriate system prompt based on model's api_format."""
+    info = get_model_info(model_name)
+    if info and info.get("api_format") == "converse":
+        return COMMON_SYSTEM_PROMPT
+    # Default to full prompt (common + anthropic) for Claude and unknown models
+    return COMMON_SYSTEM_PROMPT + ANTHROPIC_SYSTEM_PROMPT
+
 
 class BedrockService:
     """异步 Bedrock 服务"""
@@ -404,7 +321,17 @@ class BedrockService:
     
     def get_bedrock_model_id(self, model: str) -> str:
         """获取 Bedrock 模型 ID"""
-        return BEDROCK_MODEL_MAPPING.get(model, f"us.anthropic.{model}-v1:0")
+        return get_bedrock_id(model)
+
+    @staticmethod
+    def get_api_format(model: str) -> str:
+        """Return the api_format for *model* ('anthropic' or 'converse').
+
+        Defaults to 'anthropic' for backward compatibility when the model
+        is not found in the registry.
+        """
+        info = get_model_info(model)
+        return info["api_format"] if info else "anthropic"
     
     def convert_request_to_bedrock(
         self,
@@ -422,20 +349,28 @@ class BedrockService:
         model = request.get("model", "claude-opus-4-6")
         bedrock_model_id = self.get_bedrock_model_id(model)
 
+        # Determine api_format for this model
+        model_info = get_model_info(model)
+        api_format = model_info["api_format"] if model_info else "anthropic"
+
         bedrock_body = {
-            "anthropic_version": "bedrock-2023-05-31",
             "max_tokens": request.get("max_tokens", 16384),
             "messages": copy.deepcopy(request.get("messages", [])),
         }
-        
+
+        # Only add anthropic_version for Anthropic-format models
+        if api_format == "anthropic":
+            bedrock_body["anthropic_version"] = "bedrock-2023-05-31"
+
         # Copy optional parameters
         for key in ["temperature", "top_p", "top_k", "stop_sequences", "tool_choice"]:
             if key in request and request[key] is not None:
                 bedrock_body[key] = request[key]
-        
+
         # Handle system prompt - inject SPRINGO.md content
+        # Use model-appropriate system prompt (common only for Converse models)
         from ..utils.springo_md import load_springo_md
-        system_prompt = request.get("system") or DEFAULT_SYSTEM_PROMPT
+        system_prompt = request.get("system") or _get_system_prompt_for_model(model)
         springo_md = load_springo_md()
         if springo_md:
             system_prompt = system_prompt.replace("{SPRINGO_MD_PLACEHOLDER}", springo_md)
@@ -489,9 +424,17 @@ class BedrockService:
         self,
         model_id: str,
         body: Dict[str, Any],
-        max_retries: int = 3
+        max_retries: int = 3,
+        api_format: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """异步非流式调用 Bedrock (with 429 retry)"""
+        """异步非流式调用 Bedrock (with 429 retry).
+
+        When *api_format* is ``"converse"`` the call is routed through the
+        Converse API; otherwise the legacy ``invoke_model`` path is used.
+        """
+        if api_format == "converse":
+            return await self._converse_invoke(model_id, body, max_retries=max_retries)
+
         import random
 
         for attempt in range(max_retries):
@@ -524,14 +467,23 @@ class BedrockService:
         model_id: str,
         body: Dict[str, Any],
         original_model: str,
-        max_retries: int = 3
+        max_retries: int = 3,
+        api_format: Optional[str] = None,
     ) -> AsyncGenerator[str, None]:
         """
         异步流式调用 Bedrock (with 429 retry)
 
+        When *api_format* is ``"converse"`` the call is routed through
+        ``_converse_stream``; otherwise the legacy InvokeModel path is used.
+
         Yields:
             SSE formatted strings
         """
+        if api_format == "converse":
+            async for evt in self._converse_stream(model_id, body, original_model, max_retries=max_retries):
+                yield evt
+            return
+
         import random
 
         # Retry connection phase for 429 throttling
@@ -643,15 +595,24 @@ class BedrockService:
         self,
         model_id: str,
         body: Dict[str, Any],
-        max_retries: int = 3
+        max_retries: int = 3,
+        api_format: Optional[str] = None,
     ) -> AsyncGenerator[dict, None]:
         """
         Streaming call that yields simple parsed dicts for agent team use.
+
+        When *api_format* is ``"converse"`` the call is routed through
+        ``_converse_stream_text``; otherwise the legacy InvokeModel path is used.
 
         Yields:
             {"type": "delta", "text": "chunk"}
             {"type": "usage", "input_tokens": N, "output_tokens": N}
         """
+        if api_format == "converse":
+            async for evt in self._converse_stream_text(model_id, body, max_retries=max_retries):
+                yield evt
+            return
+
         import random
 
         response = None
@@ -714,6 +675,443 @@ class BedrockService:
 
         except Exception as e:
             logger.error(f"Bedrock stream_text error: {e}")
+            raise
+        finally:
+            if client_ctx:
+                try:
+                    await client_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
+    # ------------------------------------------------------------------
+    # Converse API helpers (for non-Anthropic models)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_converse_messages(messages: list) -> list:
+        """Convert Anthropic-format messages to Converse API format.
+
+        Converse expects:
+          [{"role": "user", "content": [{"text": "..."}]}, ...]
+
+        Anthropic messages may have ``content`` as a plain string or a list of
+        typed blocks (text, image, tool_use, tool_result, ...).
+        """
+        converse_msgs = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if isinstance(content, str):
+                converse_msgs.append({
+                    "role": role,
+                    "content": [{"text": content}] if content else [{"text": " "}],
+                })
+            elif isinstance(content, list):
+                blocks = []
+                for block in content:
+                    if isinstance(block, str):
+                        blocks.append({"text": block})
+                    elif isinstance(block, dict):
+                        btype = block.get("type", "")
+                        if btype == "text":
+                            blocks.append({"text": block.get("text", "")})
+                        elif btype == "image":
+                            # Pass through image blocks for vision models
+                            source = block.get("source", {})
+                            blocks.append({
+                                "image": {
+                                    "format": source.get("media_type", "image/png").split("/")[-1],
+                                    "source": {"bytes": source.get("data", "")},
+                                }
+                            })
+                        elif btype == "tool_use":
+                            blocks.append({
+                                "toolUse": {
+                                    "toolUseId": block.get("id", ""),
+                                    "name": block.get("name", ""),
+                                    "input": block.get("input", {}),
+                                }
+                            })
+                        elif btype == "tool_result":
+                            result_content = block.get("content", "")
+                            if isinstance(result_content, str):
+                                result_blocks = [{"text": result_content}]
+                            elif isinstance(result_content, list):
+                                result_blocks = []
+                                for rb in result_content:
+                                    if isinstance(rb, str):
+                                        result_blocks.append({"text": rb})
+                                    elif isinstance(rb, dict) and rb.get("type") == "text":
+                                        result_blocks.append({"text": rb.get("text", "")})
+                                    else:
+                                        result_blocks.append({"text": json.dumps(rb)})
+                            else:
+                                result_blocks = [{"text": str(result_content)}]
+                            blocks.append({
+                                "toolResult": {
+                                    "toolUseId": block.get("tool_use_id", ""),
+                                    "content": result_blocks,
+                                    "status": "error" if block.get("is_error") else "success",
+                                }
+                            })
+                        else:
+                            # Fallback: serialize unknown block as text
+                            blocks.append({"text": json.dumps(block)})
+                if not blocks:
+                    blocks = [{"text": " "}]
+                converse_msgs.append({"role": role, "content": blocks})
+            else:
+                converse_msgs.append({
+                    "role": role,
+                    "content": [{"text": str(content)}],
+                })
+        return converse_msgs
+
+    @staticmethod
+    def _to_converse_tools(tools: list) -> list:
+        """Convert Anthropic tool definitions to Converse toolConfig format."""
+        converse_tools = []
+        for tool in tools:
+            spec = {
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "inputSchema": {
+                    "json": tool.get("input_schema", tool.get("inputSchema", {}))
+                },
+            }
+            converse_tools.append({"toolSpec": spec})
+        return converse_tools
+
+    def _build_converse_kwargs(
+        self, model_id: str, body: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Build kwargs dict for ``client.converse()`` / ``client.converse_stream()``."""
+        system_prompt = body.get("system", "")
+        system_block = [{"text": system_prompt}] if system_prompt else []
+
+        messages = self._to_converse_messages(body.get("messages", []))
+
+        inference_config: Dict[str, Any] = {}
+        if "max_tokens" in body:
+            inference_config["maxTokens"] = body["max_tokens"]
+        if "temperature" in body:
+            inference_config["temperature"] = body["temperature"]
+        if "top_p" in body:
+            inference_config["topP"] = body["top_p"]
+        if "stop_sequences" in body:
+            inference_config["stopSequences"] = body["stop_sequences"]
+
+        kwargs: Dict[str, Any] = {
+            "modelId": model_id,
+            "messages": messages,
+        }
+        if system_block:
+            kwargs["system"] = system_block
+        if inference_config:
+            kwargs["inferenceConfig"] = inference_config
+
+        # Convert tools if present
+        tools = body.get("tools")
+        if tools:
+            converse_tools = self._to_converse_tools(tools)
+            kwargs["toolConfig"] = {"tools": converse_tools}
+
+            # tool_choice mapping
+            tool_choice = body.get("tool_choice")
+            if tool_choice:
+                tc_type = tool_choice.get("type", "auto")
+                if tc_type == "any":
+                    kwargs["toolConfig"]["toolChoice"] = {"any": {}}
+                elif tc_type == "tool":
+                    kwargs["toolConfig"]["toolChoice"] = {
+                        "tool": {"name": tool_choice.get("name", "")}
+                    }
+                else:
+                    kwargs["toolConfig"]["toolChoice"] = {"auto": {}}
+
+        return kwargs
+
+    async def _converse_invoke(
+        self,
+        model_id: str,
+        body: Dict[str, Any],
+        max_retries: int = 3,
+    ) -> Dict[str, Any]:
+        """Non-streaming Converse API call.  Returns an Anthropic-shaped response."""
+        import random
+
+        kwargs = self._build_converse_kwargs(model_id, body)
+
+        for attempt in range(max_retries):
+            try:
+                async with self.session.client(
+                    "bedrock-runtime",
+                    region_name=self.region,
+                    config=self.config,
+                ) as client:
+                    response = await client.converse(**kwargs)
+
+                # Convert Converse response to Anthropic-like shape
+                content_blocks = []
+                for block in response.get("output", {}).get("message", {}).get("content", []):
+                    if "text" in block:
+                        content_blocks.append({"type": "text", "text": block["text"]})
+                    elif "toolUse" in block:
+                        tu = block["toolUse"]
+                        content_blocks.append({
+                            "type": "tool_use",
+                            "id": tu.get("toolUseId", ""),
+                            "name": tu.get("name", ""),
+                            "input": tu.get("input", {}),
+                        })
+
+                stop_reason_map = {
+                    "end_turn": "end_turn",
+                    "tool_use": "tool_use",
+                    "max_tokens": "max_tokens",
+                    "stop_sequence": "stop_sequence",
+                }
+                raw_stop = response.get("stopReason", "end_turn")
+                stop_reason = stop_reason_map.get(raw_stop, raw_stop)
+
+                usage = response.get("usage", {})
+
+                return {
+                    "content": content_blocks,
+                    "stop_reason": stop_reason,
+                    "usage": {
+                        "input_tokens": usage.get("inputTokens", 0),
+                        "output_tokens": usage.get("outputTokens", 0),
+                    },
+                }
+            except Exception as e:
+                error_str = str(e)
+                is_throttle = "ThrottlingException" in error_str or "429" in error_str or "Too Many Requests" in error_str
+                if is_throttle and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 5)
+                    logger.warning(f"Converse 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                    await asyncio.sleep(backoff)
+                    continue
+                raise
+
+    async def _converse_stream(
+        self,
+        model_id: str,
+        body: Dict[str, Any],
+        original_model: str,
+        max_retries: int = 3,
+    ) -> AsyncGenerator[str, None]:
+        """Streaming Converse API call.  Yields SSE-formatted strings identical
+        to those produced by ``invoke_model_stream`` so the frontend needs no changes."""
+        import random
+
+        kwargs = self._build_converse_kwargs(model_id, body)
+
+        # Retry connection phase
+        response = None
+        client_ctx = None
+        for attempt in range(max_retries):
+            try:
+                client_ctx = self.session.client(
+                    "bedrock-runtime",
+                    region_name=self.region,
+                    config=self.config,
+                )
+                client = await client_ctx.__aenter__()
+                response = await client.converse_stream(**kwargs)
+                break
+            except Exception as e:
+                error_str = str(e)
+                is_throttle = "ThrottlingException" in error_str or "429" in error_str or "Too Many Requests" in error_str
+                if is_throttle and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 5)
+                    logger.warning(f"Converse stream 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                    if client_ctx:
+                        try:
+                            await client_ctx.__aexit__(None, None, None)
+                        except Exception:
+                            pass
+                    await asyncio.sleep(backoff)
+                    continue
+                if client_ctx:
+                    try:
+                        await client_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                raise
+
+        try:
+            message_id = f"msg_{uuid.uuid4().hex[:24]}"
+            current_block_index = -1
+            started_message = False
+            input_tokens = 0
+            output_tokens = 0
+
+            async for event in response["stream"]:
+                # -- messageStart --
+                if "messageStart" in event:
+                    started_message = True
+                    role = event["messageStart"].get("role", "assistant")
+                    msg = {
+                        "id": message_id,
+                        "type": "message",
+                        "role": role,
+                        "content": [],
+                        "model": original_model,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 0, "output_tokens": 0},
+                    }
+                    yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': msg})}\n\n"
+
+                # -- contentBlockStart --
+                elif "contentBlockStart" in event:
+                    cbs = event["contentBlockStart"]
+                    current_block_index = cbs.get("contentBlockIndex", current_block_index + 1)
+                    start_block = cbs.get("start", {})
+                    if "toolUse" in start_block:
+                        tu = start_block["toolUse"]
+                        content_block = {
+                            "type": "tool_use",
+                            "id": tu.get("toolUseId", ""),
+                            "name": tu.get("name", ""),
+                            "input": {},
+                        }
+                    else:
+                        content_block = {"type": "text", "text": ""}
+                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': content_block})}\n\n"
+
+                # -- contentBlockDelta --
+                elif "contentBlockDelta" in event:
+                    cbd = event["contentBlockDelta"]
+                    idx = cbd.get("contentBlockIndex", current_block_index)
+                    delta_block = cbd.get("delta", {})
+
+                    if "text" in delta_block:
+                        delta = {"type": "text_delta", "text": delta_block["text"]}
+                    elif "reasoningContent" in delta_block:
+                        rc = delta_block["reasoningContent"]
+                        delta = {"type": "thinking_delta", "thinking": rc.get("text", "")}
+                    elif "toolUse" in delta_block:
+                        delta = {"type": "input_json_delta", "partial_json": delta_block["toolUse"].get("input", "")}
+                    else:
+                        continue
+
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': idx, 'delta': delta})}\n\n"
+
+                # -- contentBlockStop --
+                elif "contentBlockStop" in event:
+                    idx = event["contentBlockStop"].get("contentBlockIndex", current_block_index)
+                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': idx})}\n\n"
+
+                # -- messageStop --
+                elif "messageStop" in event:
+                    raw_stop = event["messageStop"].get("stopReason", "end_turn")
+                    stop_map = {"end_turn": "end_turn", "tool_use": "tool_use", "max_tokens": "max_tokens", "stop_sequence": "stop_sequence"}
+                    stop_reason = stop_map.get(raw_stop, raw_stop)
+                    delta_data = {
+                        "type": "message_delta",
+                        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                        "usage": {"output_tokens": output_tokens},
+                    }
+                    yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
+                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+                # -- metadata (usage) --
+                elif "metadata" in event:
+                    usage = event["metadata"].get("usage", {})
+                    input_tokens = usage.get("inputTokens", 0)
+                    output_tokens = usage.get("outputTokens", 0)
+
+            # Ensure message_start was sent
+            if not started_message:
+                empty_msg = {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": original_model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                }
+                yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': empty_msg})}\n\n"
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Converse streaming error: {e}")
+            error_data = format_error_response(e)
+            yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
+        finally:
+            if client_ctx:
+                try:
+                    await client_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+
+    async def _converse_stream_text(
+        self,
+        model_id: str,
+        body: Dict[str, Any],
+        max_retries: int = 3,
+    ) -> AsyncGenerator[dict, None]:
+        """Converse streaming that yields simple dicts for agent team use.
+
+        Same yield format as ``invoke_model_stream_text``.
+        """
+        import random
+
+        kwargs = self._build_converse_kwargs(model_id, body)
+
+        response = None
+        client_ctx = None
+        for attempt in range(max_retries):
+            try:
+                client_ctx = self.session.client(
+                    "bedrock-runtime",
+                    region_name=self.region,
+                    config=self.config,
+                )
+                client = await client_ctx.__aenter__()
+                response = await client.converse_stream(**kwargs)
+                break
+            except Exception as e:
+                error_str = str(e)
+                is_throttle = "ThrottlingException" in error_str or "429" in error_str or "Too Many Requests" in error_str
+                if is_throttle and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 5)
+                    logger.warning(f"Converse stream_text 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                    if client_ctx:
+                        try:
+                            await client_ctx.__aexit__(None, None, None)
+                        except Exception:
+                            pass
+                    await asyncio.sleep(backoff)
+                    continue
+                if client_ctx:
+                    try:
+                        await client_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                raise
+
+        try:
+            async for event in response["stream"]:
+                if "contentBlockDelta" in event:
+                    delta = event["contentBlockDelta"].get("delta", {})
+                    if "text" in delta:
+                        yield {"type": "delta", "text": delta["text"]}
+                elif "metadata" in event:
+                    usage = event["metadata"].get("usage", {})
+                    if usage:
+                        yield {
+                            "type": "usage",
+                            "input_tokens": usage.get("inputTokens", 0),
+                            "output_tokens": usage.get("outputTokens", 0),
+                        }
+        except Exception as e:
+            logger.error(f"Converse stream_text error: {e}")
             raise
         finally:
             if client_ctx:

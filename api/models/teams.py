@@ -7,12 +7,17 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Literal
 from datetime import datetime
 
+# Module-level constants for team model defaults.
+# These can be changed in one place; for full env-var override use config.py settings.
+DEFAULT_TEAM_SMART_MODEL = "claude-sonnet-4-5-20250929"
+DEFAULT_TEAM_FAST_MODEL = "claude-haiku-4-5-20251001"
+
 
 class AgentRole(BaseModel):
     """Agent 角色定义"""
     name: str = Field(..., description="Role name (orchestrator, explorer, researcher, implementer, reviewer)")
     system_prompt: str = Field(default="", description="Role-specific system prompt")
-    model: str = Field(default="claude-haiku-4-5-20251001", description="Model to use for this role")
+    model: str = Field(default=DEFAULT_TEAM_FAST_MODEL, description="Model to use for this role")
     tools_available: List[str] = Field(default_factory=list, description="Tool names this role can access")
     purpose: str = Field(default="", description="Brief description of role purpose")
 
@@ -59,7 +64,7 @@ class TeamSpawnRequest(BaseModel):
     """创建团队请求"""
     user_request: str = Field(..., description="The user's request to decompose into agent tasks")
     max_parallel_agents: int = Field(default=3, ge=1, le=6, description="Max agents to run in parallel")
-    model: str = Field(default="claude-sonnet-4-5-20250929", description="Orchestrator model")
+    model: str = Field(default=DEFAULT_TEAM_SMART_MODEL, description="Orchestrator model")
     context: Optional[str] = Field(default=None, description="Additional context for the team")
 
 
@@ -72,7 +77,7 @@ class TeamExecuteRequest(BaseModel):
 ROLE_CONFIGS = {
     "orchestrator": AgentRole(
         name="orchestrator",
-        model="claude-sonnet-4-5-20250929",
+        model=DEFAULT_TEAM_SMART_MODEL,
         purpose="Dynamic task decomposition and result synthesis",
         system_prompt=(
             "You are the orchestrator agent. Your job is to:\n"
@@ -92,7 +97,7 @@ ROLE_CONFIGS = {
     ),
     "explorer": AgentRole(
         name="explorer",
-        model="claude-haiku-4-5-20251001",
+        model=DEFAULT_TEAM_FAST_MODEL,
         purpose="Code and data exploration",
         system_prompt=(
             "You are an explorer agent. Your job is to explore code, data, and files to find relevant information.\n"
@@ -102,7 +107,7 @@ ROLE_CONFIGS = {
     ),
     "researcher": AgentRole(
         name="researcher",
-        model="claude-haiku-4-5-20251001",
+        model=DEFAULT_TEAM_FAST_MODEL,
         purpose="Web search and documentation research",
         system_prompt=(
             "You are a researcher agent. Your job is to find information from documentation, web search results, and reference materials.\n"
@@ -112,7 +117,7 @@ ROLE_CONFIGS = {
     ),
     "implementer": AgentRole(
         name="implementer",
-        model="claude-sonnet-4-5-20250929",
+        model=DEFAULT_TEAM_SMART_MODEL,
         purpose="Code writing and implementation",
         system_prompt=(
             "You are an implementer agent. Your job is to write code, create implementations, and make changes.\n"
@@ -122,7 +127,7 @@ ROLE_CONFIGS = {
     ),
     "reviewer": AgentRole(
         name="reviewer",
-        model="claude-haiku-4-5-20251001",
+        model=DEFAULT_TEAM_FAST_MODEL,
         purpose="Quality review and verification",
         system_prompt=(
             "You are a reviewer agent. Your job is to review code, findings, and implementations for quality.\n"

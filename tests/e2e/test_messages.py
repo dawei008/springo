@@ -6,6 +6,8 @@ import pytest
 import httpx
 import json
 
+from .conftest import DEFAULT_TEST_MODEL
+
 
 @pytest.mark.asyncio
 @pytest.mark.e2e
@@ -18,7 +20,7 @@ async def test_messages_endpoint_exists(fastapi_client: httpx.AsyncClient):
     response = await fastapi_client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "messages": [{"role": "user", "content": "test"}],
             "max_tokens": 10,
             "stream": False
@@ -41,7 +43,7 @@ async def test_messages_non_streaming_format(fastapi_client: httpx.AsyncClient):
     response = await fastapi_client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "messages": [{"role": "user", "content": "Say hello"}],
             "max_tokens": 50,
             "stream": False
@@ -83,7 +85,7 @@ async def test_messages_streaming_format(fastapi_client: httpx.AsyncClient):
         "POST",
         "/v1/messages",
         json={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "messages": [{"role": "user", "content": "Say hi"}],
             "max_tokens": 30,
             "stream": True
@@ -119,7 +121,7 @@ async def test_messages_auto_endpoint_exists(fastapi_client: httpx.AsyncClient):
     response = await fastapi_client.post(
         "/v1/messages-auto",
         json={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "messages": [{"role": "user", "content": "test"}],
             "max_tokens": 10,
             "stream": False
@@ -142,7 +144,7 @@ async def test_messages_request_validation(fastapi_client: httpx.AsyncClient):
     response = await fastapi_client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "max_tokens": 10
         }
     )
@@ -152,7 +154,7 @@ async def test_messages_request_validation(fastapi_client: httpx.AsyncClient):
     response = await fastapi_client.post(
         "/v1/messages",
         json={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "messages": [{"role": "user", "content": "test"}],
             "max_tokens": -1
         }
@@ -174,7 +176,7 @@ async def test_messages_comparison(
     Note: Requires both servers running.
     """
     request_body = {
-        "model": "claude-sonnet-4-5-20250929",
+        "model": DEFAULT_TEST_MODEL,
         "messages": [{"role": "user", "content": "Count from 1 to 3"}],
         "max_tokens": 50,
         "stream": False

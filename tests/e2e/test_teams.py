@@ -6,6 +6,8 @@ import pytest
 import httpx
 import json
 
+from .conftest import DEFAULT_TEST_MODEL
+
 
 @pytest.mark.asyncio
 @pytest.mark.e2e
@@ -221,7 +223,7 @@ async def test_teams_spawn_with_context(fastapi_client: httpx.AsyncClient):
             "user_request": "Review this function",
             "context": "The function is a sorting algorithm",
             "max_parallel_agents": 3,
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
         },
         timeout=30,
     )

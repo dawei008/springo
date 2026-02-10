@@ -1263,7 +1263,7 @@
                         tools: window.cachedTools || [],
                         skills: window.loadedSkills || [],
                         memory_files: [],
-                        model: settings.model || 'claude-opus-4-6'
+                        model: settings.model || getDefaultModel()
                     })
                 });
 
@@ -1347,7 +1347,7 @@
                         tools: tools,
                         skills: skills,
                         memory_files: memory_files,
-                        model: settings.model || 'claude-opus-4-6'
+                        model: settings.model || getDefaultModel()
                     })
                 });
 
@@ -1718,7 +1718,7 @@
                 const res = await fetch(`${BASE_URL}/v1/context/stats`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: apiMessages, model: settings.model || 'claude-opus-4-6' })
+                    body: JSON.stringify({ messages: apiMessages, model: settings.model || getDefaultModel() })
                 });
                 const stats = await res.json();
 
@@ -4609,7 +4609,7 @@
             const abortController = resetAbortController(convId);
             const abortSignal = abortController.signal;
 
-            const model = settings.model || 'claude-opus-4-6';
+            const model = settings.model || getDefaultModel();
             const maxTokens = parseInt(settings.maxTokens || 16384);
             const temperature = parseFloat(settings.temperature || 0.7);
 
@@ -4731,7 +4731,7 @@ Be concise and helpful in your responses.`;
                     messages: apiMessages,
                     // NOTE: tools not sent - backend manages tools via get_tool_definitions()
                     stream: true,  // Enable streaming
-                    compact_model: settings.compactModel || 'claude-haiku-4-5-20251001',  // Model for context compaction
+                    compact_model: settings.compactModel || getDefaultCompactModel(),  // Model for context compaction
                     session_id: convId  // Session ID for tool-results storage (matches session directory)
                 };
                 console.log(`[${convId}] Request body (streaming):`, JSON.stringify(requestBody).substring(0, 200));
@@ -4747,12 +4747,14 @@ Be concise and helpful in your responses.`;
 
                 // Use auto mode for server-side tool execution (faster)
                 const apiEndpoint = AUTO_TOOL_EXECUTION ? '/v1/messages-auto' : '/v1/messages';
+                // Only send anthropic-version header for Anthropic (Claude) models
+                const reqHeaders = { 'Content-Type': 'application/json' };
+                if (model.startsWith('claude-')) {
+                    reqHeaders['anthropic-version'] = '2023-06-01';
+                }
                 const response = await fetch(`${BASE_URL}${apiEndpoint}`, {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'anthropic-version': '2023-06-01'
-                    },
+                    headers: reqHeaders,
                     body: JSON.stringify(requestBody),
                     signal: controller.signal
                 });
@@ -5548,12 +5550,12 @@ Be concise and helpful in your responses.`;
             // Load default working directory
             document.getElementById('settings-default-workdir').value = defaultWorkingFolder || '~/Downloads';
             populateModelDropdowns();
-            document.getElementById('settings-model').value = settings.model || 'claude-opus-4-6';
+            document.getElementById('settings-model').value = settings.model || getDefaultModel();
             document.getElementById('settings-max-tokens').value = settings.maxTokens || 16384;
             document.getElementById('settings-temperature').value = settings.temperature || 0.7;
             document.getElementById('temp-value').textContent = settings.temperature || 0.7;
             // Compact model setting (default to Haiku 4.5)
-            document.getElementById('settings-compact-model').value = settings.compactModel || 'claude-haiku-4-5-20251001';
+            document.getElementById('settings-compact-model').value = settings.compactModel || getDefaultCompactModel();
             // Load AWS credentials settings
             loadAwsSettings();
             // Load Memory settings
@@ -5596,15 +5598,17 @@ Be concise and helpful in your responses.`;
         function migrateSettings() {
             let needsSave = false;
 
-            // Migrate compact model: 3.5 Haiku -> 4.5 Haiku
+            // [Legacy migration] Migrate compact model: 3.5 Haiku -> 4.5 Haiku
+            // Kept for backward compatibility with users who have old stored settings
             if (settings.compactModel === 'claude-3-5-haiku-20241022' ||
                 settings.compactModel === 'claude-3-haiku-20240307') {
-                settings.compactModel = 'claude-haiku-4-5-20251001';
+                settings.compactModel = getDefaultCompactModel();
                 needsSave = true;
-                console.log('[Settings Migration] compactModel upgraded to Haiku 4.5');
+                console.log('[Settings Migration] compactModel upgraded to', settings.compactModel);
             }
 
-            // Migrate main model: 3.5 Sonnet -> 4.5 Sonnet
+            // [Legacy migration] Migrate main model: 3.5 Sonnet -> 4.5 Sonnet
+            // Kept for backward compatibility with users who have old stored settings
             if (settings.model === 'claude-3-5-sonnet-20241022') {
                 settings.model = 'claude-sonnet-4-5-20250929';
                 needsSave = true;
@@ -5623,46 +5627,85 @@ Be concise and helpful in your responses.`;
 
         // Cached model list from API
         let _availableModels = [];
+        // Provider-grouped models from API (provider -> model[])
+        let _modelsByProvider = {};
+        // Default model IDs from API (avoids hardcoding)
+        let _defaultModel = 'claude-opus-4-6';
+        let _defaultCompactModel = 'claude-haiku-4-5-20251001';
+
+        // Provider display names for optgroup headers
+        const _providerLabels = {
+            anthropic: 'Anthropic',
+            deepseek: 'DeepSeek',
+            minimax: 'MiniMax',
+            moonshot: 'Moonshot (Kimi)',
+            qwen: 'Qwen',
+            zai: 'Z.AI (GLM)',
+        };
 
         async function loadModelsFromAPI() {
             try {
                 const res = await fetch(`${BASE_URL}/v1/models`);
                 const data = await res.json();
                 _availableModels = data.data || [];
+                _modelsByProvider = data.models || {};
+                if (data.default_model) _defaultModel = data.default_model;
+                if (data.default_compact_model) _defaultCompactModel = data.default_compact_model;
                 populateModelDropdowns();
                 // Apply limits for current model
-                updateTokenLimits(settings.model || 'claude-opus-4-6');
+                updateTokenLimits(settings.model || _defaultModel);
             } catch (e) {
                 console.warn('[Models] Failed to load from API, using defaults:', e.message);
             }
         }
 
+        function getDefaultModel() {
+            return _defaultModel;
+        }
+
+        function getDefaultCompactModel() {
+            return _defaultCompactModel;
+        }
+
         function populateModelDropdowns() {
             const modelSelect = document.getElementById('settings-model');
             const compactSelect = document.getElementById('settings-compact-model');
-            if (!modelSelect || !compactSelect || !_availableModels.length) return;
+            if (!modelSelect || !compactSelect) return;
+            if (!Object.keys(_modelsByProvider).length && !_availableModels.length) return;
 
-            // Default model dropdown
-            modelSelect.innerHTML = '';
-            for (const m of _availableModels) {
-                const opt = document.createElement('option');
-                opt.value = m.id;
-                opt.textContent = m.display_name + (m.recommended ? ' (Recommended)' : '');
-                modelSelect.appendChild(opt);
+            // Helper: populate a <select> with optgroup sections per provider
+            function fillSelect(selectEl) {
+                selectEl.innerHTML = '';
+                const providers = Object.keys(_modelsByProvider);
+                if (providers.length) {
+                    for (const provider of providers) {
+                        const group = document.createElement('optgroup');
+                        group.label = _providerLabels[provider] || provider;
+                        for (const m of _modelsByProvider[provider]) {
+                            const opt = document.createElement('option');
+                            opt.value = m.id;
+                            opt.textContent = m.display_name;
+                            group.appendChild(opt);
+                        }
+                        selectEl.appendChild(group);
+                    }
+                } else {
+                    // Fallback: flat list (backward compat)
+                    for (const m of _availableModels) {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.textContent = m.display_name;
+                        selectEl.appendChild(opt);
+                    }
+                }
             }
 
-            // Compact model dropdown (same list, different default)
-            compactSelect.innerHTML = '';
-            for (const m of _availableModels) {
-                const opt = document.createElement('option');
-                opt.value = m.id;
-                opt.textContent = m.display_name;
-                compactSelect.appendChild(opt);
-            }
+            fillSelect(modelSelect);
+            fillSelect(compactSelect);
 
             // Set current values
-            modelSelect.value = settings.model || 'claude-opus-4-6';
-            compactSelect.value = settings.compactModel || 'claude-haiku-4-5-20251001';
+            modelSelect.value = settings.model || _defaultModel;
+            compactSelect.value = settings.compactModel || _defaultCompactModel;
 
             // Listen for model change to update token limits
             modelSelect.addEventListener('change', () => {
@@ -7044,7 +7087,7 @@ Be concise and helpful in your responses.`;
             }
 
             try {
-                const m = encodeURIComponent(settings.model || 'claude-opus-4-6');
+                const m = encodeURIComponent(settings.model || getDefaultModel());
                 const customTopics = '';  // Now handled server-side via interests
                 let url = force ? `${BASE_URL}/v1/news/fetch?force=true&model=${m}` : `${BASE_URL}/v1/news/fetch?model=${m}`;
                 if (customTopics) url += `&topics=${encodeURIComponent(customTopics)}`;

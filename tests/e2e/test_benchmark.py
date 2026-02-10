@@ -8,6 +8,8 @@ import asyncio
 import time
 from typing import List, Tuple
 
+from .conftest import DEFAULT_TEST_MODEL
+
 
 # ============ Benchmark Utilities ============
 
@@ -176,7 +178,7 @@ async def test_benchmark_messages_endpoint(fastapi_client: httpx.AsyncClient):
     total_time, status_codes, success_count = await make_concurrent_requests(
         fastapi_client, "POST", "/v1/messages", n,
         json_data={
-            "model": "claude-sonnet-4-5-20250929",
+            "model": DEFAULT_TEST_MODEL,
             "max_tokens": 50,
             "messages": [{"role": "user", "content": "Say hello in one word"}],
             "stream": False

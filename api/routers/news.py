@@ -246,28 +246,38 @@ def _format_news_with_structured_output(raw_text: str) -> Optional[Dict]:
     """Use Bedrock Structured Output to format news into JSON (Phase 2)."""
     try:
         import boto3
-        bedrock_client = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_DEFAULT_REGION', 'us-west-2'))
-        model_id = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+        from ..services.model_registry import get_model_info, get_bedrock_id
 
-        response = bedrock_client.invoke_model(
-            modelId=model_id,
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 4096,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"""Extract and format the news items from the following text into structured JSON.
+        bedrock_client = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_DEFAULT_REGION', 'us-west-2'))
+
+        # Look up model from registry
+        news_format_model = "claude-sonnet-4-5-20250929"
+        model_id = get_bedrock_id(news_format_model)
+        news_info = get_model_info(news_format_model)
+        news_api_format = news_info["api_format"] if news_info else "anthropic"
+
+        request_body: Dict[str, Any] = {
+            "max_tokens": 4096,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"""Extract and format the news items from the following text into structured JSON.
 
 Raw news data:
 {raw_text}
 
 Use the format_news_output tool to return the structured result. Include all news items found."""
-                    }
-                ],
-                "tools": [NEWS_OUTPUT_SCHEMA],
-                "tool_choice": {"type": "tool", "name": "format_news_output"}
-            }),
+                }
+            ],
+            "tools": [NEWS_OUTPUT_SCHEMA],
+            "tool_choice": {"type": "tool", "name": "format_news_output"}
+        }
+        if news_api_format == "anthropic":
+            request_body["anthropic_version"] = "bedrock-2023-05-31"
+
+        response = bedrock_client.invoke_model(
+            modelId=model_id,
+            body=json.dumps(request_body),
             contentType="application/json",
             accept="application/json"
         )
