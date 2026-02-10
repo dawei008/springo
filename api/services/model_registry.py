@@ -102,17 +102,6 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_tools": True,
         "api_format": "converse",
     },
-    "deepseek-r1": {
-        "bedrock_id": "us.deepseek.r1-v1:0",
-        "provider": "deepseek",
-        "display_name": "DeepSeek R1",
-        "context_window": 128000,
-        "max_output": 32000,
-        "supports_vision": False,
-        "supports_thinking": True,
-        "supports_tools": False,
-        "api_format": "converse",
-    },
 
     # -----------------------------------------------------------------------
     # MiniMax  (api_format = "converse")

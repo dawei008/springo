@@ -5613,6 +5613,7 @@ Be concise and helpful in your responses.`;
                 'claude-sonnet-4-20250514': 'claude-sonnet-4-5-20250929',
                 'claude-opus-4-20250514': 'claude-opus-4-6',
                 'claude-opus-4-5-20251101': 'claude-opus-4-6',
+                'deepseek-r1': 'deepseek-v3.2',
                 'deepseek-v3.1': 'deepseek-v3.2',
                 'minimax-m2': 'minimax-m2.1',
                 'kimi-k2-thinking': 'kimi-k2.5',
