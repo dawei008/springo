@@ -70,7 +70,11 @@
             // Create modal
             const modal = document.createElement('div');
             modal.className = 'image-preview-modal';
-            modal.innerHTML = `<img src="${imageSrc}" alt="Image preview">`;
+            modal.innerHTML = '';
+            const img = document.createElement('img');
+            img.src = imageSrc;
+            img.alt = 'Image preview';
+            modal.appendChild(img);
 
             // Close on click
             modal.addEventListener('click', () => modal.remove());

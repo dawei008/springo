@@ -10,7 +10,6 @@ import logging
 from ..services.model_registry import (
     MODEL_REGISTRY,
     BEDROCK_MODEL_MAPPING,
-    list_models_by_provider,
     get_model_limits,
 )
 

@@ -5,6 +5,8 @@ News Router for FastAPI
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
+
+from ..services.model_registry import MODEL_REGISTRY
 import logging
 import asyncio
 import json
@@ -251,7 +253,8 @@ def _format_news_with_structured_output(raw_text: str) -> Optional[Dict]:
         bedrock_client = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_DEFAULT_REGION', 'us-west-2'))
 
         # Look up model from registry
-        news_format_model = "claude-sonnet-4-5-20250929"
+        from ..config import settings
+        news_format_model = settings.news_format_model_id
         model_id = get_bedrock_id(news_format_model)
         news_info = get_model_info(news_format_model)
         news_api_format = news_info["api_format"] if news_info else "anthropic"
@@ -525,6 +528,14 @@ async def fetch_news(
     Uses Claude Agent to read LTM and search for personalized news.
     """
     global _news_cache
+
+    # Validate model against registry if provided
+    if model and model not in MODEL_REGISTRY:
+        valid_models = sorted(MODEL_REGISTRY.keys())
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model: {model}. Valid models: {valid_models}"
+        )
 
     force_refresh = force and force.lower() == 'true'
 

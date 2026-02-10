@@ -620,18 +620,44 @@ async def summarize_context(
     if bedrock_service:
         try:
             from ..config import get_settings
+            from .model_registry import get_model_info, get_bedrock_id
             _settings = get_settings()
-            _compact_model_id = compact_model or _settings.compact_model_id
-            # Resolve short model names via model registry
+            _compact_model_name = compact_model or _settings.compact_model_id
+
+            # Determine api_format for the compact model
+            _compact_api_format = "anthropic"
+            _model_info = get_model_info(_compact_model_name)
+            if _model_info:
+                _compact_api_format = _model_info.get("api_format", "anthropic")
+
+            # Guard: summarization only supports anthropic-format models.
+            # If a converse-format model is configured, fall back to a safe default.
+            _FALLBACK_COMPACT_MODEL = "claude-3-5-haiku-20241022"
+            if _compact_api_format == "converse":
+                logger.warning(
+                    f"Compact model '{_compact_model_name}' uses converse API format "
+                    f"which is not supported for summarization. "
+                    f"Falling back to '{_FALLBACK_COMPACT_MODEL}'."
+                )
+                _compact_model_name = _FALLBACK_COMPACT_MODEL
+                _compact_api_format = "anthropic"
+
+            # Resolve short model name to Bedrock ID
+            _compact_model_id = _compact_model_name
             if not _compact_model_id.startswith(("us.", "deepseek.", "minimax.", "moonshotai.", "moonshot.", "qwen.", "zai.")):
-                from .model_registry import get_bedrock_id
-                _compact_model_id = get_bedrock_id(_compact_model_id)
+                _compact_model_id = get_bedrock_id(_compact_model_name)
+
+            # Build the request body (anthropic InvokeModel format)
+            _compact_body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 4096,
+                "temperature": 0.3,
+                "messages": [{"role": "user", "content": summary_prompt}],
+            }
             result = await bedrock_service.invoke_model(
                 model_id=_compact_model_id,
-                messages=[{"role": "user", "content": summary_prompt}],
-                max_tokens=4096,
-                stream=False,
-                temperature=0.3,
+                body=_compact_body,
+                api_format=_compact_api_format,
             )
             if result and isinstance(result, dict):
                 content = result.get("content", [])

@@ -17,6 +17,7 @@ from ..config import settings
 from ..models.requests import MessageRequest, MessageAutoRequest
 from ..models.responses import MessageResponse, ErrorResponse, Usage
 from ..services.bedrock import get_bedrock_service, BedrockService, get_model_limits
+from ..services.model_registry import MODEL_REGISTRY
 from ..services.mcp_manager import get_mcp_manager, MCPManager
 from ..services.context_manager import (
     count_messages_tokens, should_summarize, summarize_context,
@@ -64,8 +65,22 @@ async def messages_api(
                 "error": {"type": "invalid_request", "message": str(ve)}
             })
         
+        # Validate model against registry
+        if msg_request.model not in MODEL_REGISTRY:
+            valid_models = sorted(MODEL_REGISTRY.keys())
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request",
+                        "message": f"Unknown model: {msg_request.model}. Valid models: {valid_models}"
+                    }
+                }
+            )
+
         logger.info(f"Messages API: model={msg_request.model}, stream={msg_request.stream}, messages={len(msg_request.messages)}")
-        
+
         # Get working directory from session state
         from ..services.session_state import get_working_dir
         working_dir = get_working_dir() or None
@@ -154,11 +169,39 @@ async def messages_auto_api(
                 "error": {"type": "invalid_request", "message": str(ve)}
             })
         
+        # Validate model against registry
+        if msg_request.model not in MODEL_REGISTRY:
+            valid_models = sorted(MODEL_REGISTRY.keys())
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request",
+                        "message": f"Unknown model: {msg_request.model}. Valid models: {valid_models}"
+                    }
+                }
+            )
+
         logger.info(f"Messages Auto API: model={msg_request.model}, max_iterations={msg_request.max_tool_iterations}")
 
         # Read session_id from header OR body (Flask compat)
         session_id = x_session_id or body.get("session_id")
         compact_model = msg_request.compact_model
+
+        # Validate compact_model if provided
+        if compact_model and compact_model not in MODEL_REGISTRY:
+            valid_models = sorted(MODEL_REGISTRY.keys())
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request",
+                        "message": f"Unknown compact_model: {compact_model}. Valid models: {valid_models}"
+                    }
+                }
+            )
 
         # Get working directory from session state
         from ..services.session_state import get_working_dir

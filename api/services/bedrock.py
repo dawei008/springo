@@ -2,6 +2,7 @@
 Springo Bedrock Async Service
 异步 Bedrock 服务 - 使用 aioboto3
 """
+import base64
 import json
 import uuid
 import logging
@@ -719,10 +720,14 @@ class BedrockService:
                         elif btype == "image":
                             # Pass through image blocks for vision models
                             source = block.get("source", {})
+                            data = source.get("data", "")
+                            # Converse API expects raw bytes, Anthropic stores base64
+                            if isinstance(data, str):
+                                data = base64.b64decode(data)
                             blocks.append({
                                 "image": {
                                     "format": source.get("media_type", "image/png").split("/")[-1],
-                                    "source": {"bytes": source.get("data", "")},
+                                    "source": {"bytes": data},
                                 }
                             })
                         elif btype == "tool_use":
@@ -947,6 +952,10 @@ class BedrockService:
             started_message = False
             input_tokens = 0
             output_tokens = 0
+            # Deferred stop_reason: metadata (with token counts) arrives AFTER
+            # messageStop in the Converse stream, so we must wait for it before
+            # emitting the message_delta / message_stop SSE events.
+            pending_stop_reason = None
 
             async for event in response["stream"]:
                 # -- messageStart --
@@ -1007,22 +1016,40 @@ class BedrockService:
 
                 # -- messageStop --
                 elif "messageStop" in event:
+                    # Save the stop reason but do NOT yield yet -- the metadata
+                    # event (with actual output_tokens) arrives after this.
                     raw_stop = event["messageStop"].get("stopReason", "end_turn")
                     stop_map = {"end_turn": "end_turn", "tool_use": "tool_use", "max_tokens": "max_tokens", "stop_sequence": "stop_sequence"}
-                    stop_reason = stop_map.get(raw_stop, raw_stop)
-                    delta_data = {
-                        "type": "message_delta",
-                        "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                        "usage": {"output_tokens": output_tokens},
-                    }
-                    yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
-                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                    pending_stop_reason = stop_map.get(raw_stop, raw_stop)
 
                 # -- metadata (usage) --
                 elif "metadata" in event:
                     usage = event["metadata"].get("usage", {})
                     input_tokens = usage.get("inputTokens", 0)
                     output_tokens = usage.get("outputTokens", 0)
+
+                    # If we have a pending stop, emit the deferred SSE events
+                    # now that we have the real token counts.
+                    if pending_stop_reason is not None:
+                        delta_data = {
+                            "type": "message_delta",
+                            "delta": {"stop_reason": pending_stop_reason, "stop_sequence": None},
+                            "usage": {"output_tokens": output_tokens},
+                        }
+                        yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
+                        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                        pending_stop_reason = None
+
+            # Edge case: messageStop received but metadata never arrived --
+            # emit the deferred events with whatever token count we have.
+            if pending_stop_reason is not None:
+                delta_data = {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": pending_stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": output_tokens},
+                }
+                yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
+                yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
             # Ensure message_start was sent
             if not started_message:

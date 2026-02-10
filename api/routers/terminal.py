@@ -190,7 +190,7 @@ async def parse_nl_to_command(nl_input: str, context: str = None) -> dict:
         user_content = f"Context: {context}\n\nInput: {nl_input}"
 
     # Use a fast model for parsing — look up from registry
-    nl_model_name = "claude-3-5-haiku-20241022"
+    nl_model_name = settings.nl_parse_model_id
     nl_model_info = get_model_info(nl_model_name)
     nl_api_format = nl_model_info["api_format"] if nl_model_info else "anthropic"
 
