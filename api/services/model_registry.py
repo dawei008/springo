@@ -181,7 +181,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "max_output": 128000,
         "supports_vision": False,
         "supports_thinking": False,
-        "supports_tools": True,
+        "supports_tools": False,
         "api_format": "converse",
     },
 }
