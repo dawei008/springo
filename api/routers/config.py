@@ -20,6 +20,24 @@ router = APIRouter()
 _working_dir: str = os.getcwd()
 
 
+def _sync_working_dir(path: str):
+    """Sync working directory to session_state and mcp_tools modules"""
+    try:
+        from ..services.session_state import set_working_dir as _set_session_wd
+        _set_session_wd(path)
+    except Exception as e:
+        logger.debug(f"Failed to sync working_dir to session_state: {e}")
+    try:
+        from mcp_tools.config import set_working_dir as _set_mcp_wd
+        _set_mcp_wd(path)
+    except Exception as e:
+        logger.debug(f"Failed to sync working_dir to mcp_tools: {e}")
+
+
+# Sync initial working_dir on module load
+_sync_working_dir(_working_dir)
+
+
 # ============ Models ============
 
 class WorkingDirRequest(BaseModel):
@@ -102,6 +120,8 @@ async def set_working_dir(request: WorkingDirRequest):
             _working_dir = request.working_dir
         except Exception as e:
             logger.warning(f"Could not create directory: {e}")
+    # Sync to session_state and mcp_tools so tools use the correct working dir
+    _sync_working_dir(_working_dir)
     return WorkingDirResponse(working_dir=_working_dir)
 
 
