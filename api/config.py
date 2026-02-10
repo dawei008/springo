@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # AWS Configuration
     aws_region: str = Field(default="us-west-2", description="AWS Region")
     bedrock_model_id: str = Field(
-        default="anthropic.claude-sonnet-4-20250514-v1:0",
+        default="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         description="Default Bedrock Model ID"
     )
     compact_model_id: str = Field(

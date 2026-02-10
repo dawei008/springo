@@ -5602,21 +5602,34 @@ Be concise and helpful in your responses.`;
         function migrateSettings() {
             let needsSave = false;
 
-            // [Legacy migration] Migrate compact model: 3.5 Haiku -> 4.5 Haiku
-            // Kept for backward compatibility with users who have old stored settings
-            if (settings.compactModel === 'claude-3-5-haiku-20241022' ||
-                settings.compactModel === 'claude-3-haiku-20240307') {
-                settings.compactModel = getDefaultCompactModel();
+            // [Legacy migration] Migrate models removed from registry to latest equivalents
+            const removedModelMigration = {
+                'claude-3-haiku-20240307': 'claude-haiku-4-5-20251001',
+                'claude-3-sonnet-20240229': 'claude-sonnet-4-5-20250929',
+                'claude-3-opus-20240229': 'claude-opus-4-6',
+                'claude-3-5-haiku-20241022': 'claude-haiku-4-5-20251001',
+                'claude-3-5-sonnet-20241022': 'claude-sonnet-4-5-20250929',
+                'claude-3-7-sonnet-20250219': 'claude-sonnet-4-5-20250929',
+                'claude-sonnet-4-20250514': 'claude-sonnet-4-5-20250929',
+                'claude-opus-4-20250514': 'claude-opus-4-6',
+                'claude-opus-4-5-20251101': 'claude-opus-4-6',
+                'deepseek-v3.1': 'deepseek-v3.2',
+                'minimax-m2': 'minimax-m2.1',
+                'kimi-k2-thinking': 'kimi-k2.5',
+                'qwen3-235b': 'qwen3-32b',
+                'qwen3-vl-235b': 'qwen3-coder-480b',
+                'qwen3-coder-30b': 'qwen3-coder-480b',
+                'glm-4.7-flash': 'glm-4.7',
+            };
+            if (removedModelMigration[settings.model]) {
+                settings.model = removedModelMigration[settings.model];
+                needsSave = true;
+                console.log('[Settings Migration] model upgraded to', settings.model);
+            }
+            if (removedModelMigration[settings.compactModel]) {
+                settings.compactModel = removedModelMigration[settings.compactModel];
                 needsSave = true;
                 console.log('[Settings Migration] compactModel upgraded to', settings.compactModel);
-            }
-
-            // [Legacy migration] Migrate main model: 3.5 Sonnet -> 4.5 Sonnet
-            // Kept for backward compatibility with users who have old stored settings
-            if (settings.model === 'claude-3-5-sonnet-20241022') {
-                settings.model = 'claude-sonnet-4-5-20250929';
-                needsSave = true;
-                console.log('[Settings Migration] model upgraded to Sonnet 4.5');
             }
 
             if (needsSave) {

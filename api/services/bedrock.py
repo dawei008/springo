@@ -21,6 +21,7 @@ from .model_registry import (
     get_model_limits,
     get_bedrock_id,
     get_model_info,
+    model_supports_tools,
 )
 
 logger = logging.getLogger(__name__)
@@ -392,8 +393,8 @@ class BedrockService:
             )
         bedrock_body["system"] = system_prompt
         
-        # Handle tools
-        if include_tools:
+        # Handle tools (skip for models that don't support tool use)
+        if include_tools and model_supports_tools(model):
             if request.get("tools"):
                 bedrock_body["tools"] = request["tools"]
             elif tools:

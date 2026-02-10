@@ -632,7 +632,7 @@ async def summarize_context(
 
             # Guard: summarization only supports anthropic-format models.
             # If a converse-format model is configured, fall back to a safe default.
-            _FALLBACK_COMPACT_MODEL = "claude-3-5-haiku-20241022"
+            _FALLBACK_COMPACT_MODEL = "claude-haiku-4-5-20251001"
             if _compact_api_format == "converse":
                 logger.warning(
                     f"Compact model '{_compact_model_name}' uses converse API format "
