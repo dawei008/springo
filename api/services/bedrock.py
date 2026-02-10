@@ -419,7 +419,7 @@ class BedrockService:
         (time prefix injection would otherwise leak into persisted sessions).
         """
         import copy
-        model = request.get("model", "claude-sonnet-4-5-20250929")
+        model = request.get("model", "claude-opus-4-6")
         bedrock_model_id = self.get_bedrock_model_id(model)
 
         bedrock_body = {

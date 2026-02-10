@@ -7044,7 +7044,7 @@ Be concise and helpful in your responses.`;
             }
 
             try {
-                const m = encodeURIComponent(settings.model || 'claude-sonnet-4-5-20250929');
+                const m = encodeURIComponent(settings.model || 'claude-opus-4-6');
                 const customTopics = '';  // Now handled server-side via interests
                 let url = force ? `${BASE_URL}/v1/news/fetch?force=true&model=${m}` : `${BASE_URL}/v1/news/fetch?model=${m}`;
                 if (customTopics) url += `&topics=${encodeURIComponent(customTopics)}`;

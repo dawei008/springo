@@ -66,7 +66,7 @@ class ToolChoice(BaseModel):
 
 class MessageRequest(BaseModel):
     """消息请求模型 - 兼容 Anthropic API 格式"""
-    model: str = Field(default="claude-sonnet-4-5-20250929", description="Model ID")
+    model: str = Field(default="claude-opus-4-6", description="Model ID")
     messages: List[Message] = Field(..., description="Conversation messages")
     max_tokens: int = Field(default=16384, ge=1, le=200000, description="Max output tokens")
     
