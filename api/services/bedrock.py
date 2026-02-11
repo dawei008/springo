@@ -22,6 +22,7 @@ from .model_registry import (
     get_bedrock_id,
     get_model_info,
     model_supports_tools,
+    model_needs_tool_flattening,
 )
 
 logger = logging.getLogger(__name__)
@@ -358,6 +359,7 @@ class BedrockService:
         bedrock_body = {
             "max_tokens": request.get("max_tokens", 16384),
             "messages": copy.deepcopy(request.get("messages", [])),
+            "_original_model": model,  # used by _build_converse_kwargs
         }
 
         # Only add anthropic_version for Anthropic-format models
@@ -775,6 +777,46 @@ class BedrockService:
         return converse_msgs
 
     @staticmethod
+    def _flatten_tool_content_blocks(messages: list) -> list:
+        """Convert toolUse/toolResult content blocks to plain text.
+
+        Some models (e.g. GLM 4.7) support tool calls via the Converse API
+        but their Bedrock integration cannot deserialize toolUse/toolResult
+        content blocks when they appear in *message history*.  This helper
+        rewrites those blocks to human-readable text so the model still sees
+        the information while the API remains happy.
+        """
+        out = []
+        for msg in messages:
+            new_blocks = []
+            for block in msg.get("content", []):
+                if "toolUse" in block:
+                    tu = block["toolUse"]
+                    input_str = json.dumps(tu.get("input", {}), ensure_ascii=False)
+                    new_blocks.append({
+                        "text": f"[Tool call: {tu.get('name', '')}({input_str})]"
+                    })
+                elif "toolResult" in block:
+                    tr = block["toolResult"]
+                    parts = []
+                    for c in tr.get("content", []):
+                        parts.append(c.get("text", json.dumps(c, ensure_ascii=False)))
+                    status = tr.get("status", "success")
+                    result_text = "\n".join(parts)
+                    # Truncate very long tool results to avoid bloating context
+                    if len(result_text) > 4000:
+                        result_text = result_text[:4000] + "\n...(truncated)"
+                    new_blocks.append({
+                        "text": f"[Tool result ({status}):\n{result_text}]"
+                    })
+                else:
+                    new_blocks.append(block)
+            if not new_blocks:
+                new_blocks = [{"text": " "}]
+            out.append({"role": msg["role"], "content": new_blocks})
+        return out
+
+    @staticmethod
     def _to_converse_tools(tools: list) -> list:
         """Convert Anthropic tool definitions to Converse toolConfig format."""
         converse_tools = []
@@ -793,10 +835,16 @@ class BedrockService:
         self, model_id: str, body: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Build kwargs dict for ``client.converse()`` / ``client.converse_stream()``."""
+        original_model = body.pop("_original_model", None)
         system_prompt = body.get("system", "")
         system_block = [{"text": system_prompt}] if system_prompt else []
 
         messages = self._to_converse_messages(body.get("messages", []))
+
+        # Flatten toolUse/toolResult blocks for models whose Bedrock
+        # integration cannot deserialize them in message history.
+        if original_model and model_needs_tool_flattening(original_model):
+            messages = self._flatten_tool_content_blocks(messages)
 
         inference_config: Dict[str, Any] = {}
         if "max_tokens" in body:
@@ -901,6 +949,41 @@ class BedrockService:
                     continue
                 raise
 
+    @staticmethod
+    async def _iter_with_heartbeat(async_iter, interval: float = 15.0):
+        """Wrap an async iterator to yield heartbeat sentinels during long waits.
+
+        Yields tuples of ``("event", item)`` for real events and
+        ``("heartbeat", None)`` when *interval* seconds elapse without a
+        new event.  This prevents the frontend SSE connection from timing
+        out while waiting for slow Bedrock models (e.g. large Converse
+        models with long time-to-first-token).
+
+        Importantly, the underlying ``__anext__`` future is **not**
+        cancelled on timeout – we simply keep waiting for it while
+        emitting heartbeats.
+        """
+        it = async_iter.__aiter__()
+        pending = asyncio.ensure_future(it.__anext__())
+        try:
+            while True:
+                done, _ = await asyncio.wait({pending}, timeout=interval)
+                if done:
+                    try:
+                        yield ("event", pending.result())
+                    except StopAsyncIteration:
+                        return
+                    pending = asyncio.ensure_future(it.__anext__())
+                else:
+                    yield ("heartbeat", None)
+        finally:
+            if not pending.done():
+                pending.cancel()
+                try:
+                    await pending
+                except (asyncio.CancelledError, StopAsyncIteration):
+                    pass
+
     async def _converse_stream(
         self,
         model_id: str,
@@ -911,8 +994,11 @@ class BedrockService:
         """Streaming Converse API call.  Yields SSE-formatted strings identical
         to those produced by ``invoke_model_stream`` so the frontend needs no changes."""
         import random
+        from ..utils.streaming import SSEEventBuilder
 
         kwargs = self._build_converse_kwargs(model_id, body)
+
+        heartbeat_interval = settings.sse_heartbeat_interval  # default 10s
 
         # Retry connection phase
         response = None
@@ -925,7 +1011,30 @@ class BedrockService:
                     config=self.config,
                 )
                 client = await client_ctx.__aenter__()
-                response = await client.converse_stream(**kwargs)
+                # Wrap the initial API call with heartbeats – the
+                # converse_stream() call itself can block for a very long
+                # time on cold-start / large-model scenarios and must not
+                # cause the frontend SSE connection to time out.
+                api_call = asyncio.ensure_future(
+                    client.converse_stream(**kwargs)
+                )
+                try:
+                    while True:
+                        done, _ = await asyncio.wait(
+                            {api_call}, timeout=heartbeat_interval
+                        )
+                        if done:
+                            break
+                        yield SSEEventBuilder.heartbeat(0, "model_connecting")
+                    response = api_call.result()
+                except BaseException:
+                    if not api_call.done():
+                        api_call.cancel()
+                        try:
+                            await api_call
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    raise
                 break
             except Exception as e:
                 error_str = str(e)
@@ -958,7 +1067,12 @@ class BedrockService:
             # emitting the message_delta / message_stop SSE events.
             pending_stop_reason = None
 
-            async for event in response["stream"]:
+            async for item_type, event in self._iter_with_heartbeat(
+                response["stream"], interval=heartbeat_interval
+            ):
+                if item_type == "heartbeat":
+                    yield SSEEventBuilder.heartbeat(0, "model_thinking")
+                    continue
                 # -- messageStart --
                 if "messageStart" in event:
                     started_message = True
@@ -1086,11 +1200,13 @@ class BedrockService:
     ) -> AsyncGenerator[dict, None]:
         """Converse streaming that yields simple dicts for agent team use.
 
-        Same yield format as ``invoke_model_stream_text``.
+        Same yield format as ``invoke_model_stream_text``, plus
+        ``{"type": "heartbeat"}`` sentinels during long waits.
         """
         import random
 
         kwargs = self._build_converse_kwargs(model_id, body)
+        heartbeat_interval = settings.sse_heartbeat_interval  # default 10s
 
         response = None
         client_ctx = None
@@ -1102,7 +1218,28 @@ class BedrockService:
                     config=self.config,
                 )
                 client = await client_ctx.__aenter__()
-                response = await client.converse_stream(**kwargs)
+                # Wrap the initial API call with heartbeats to prevent
+                # downstream SSE connections from timing out.
+                api_call = asyncio.ensure_future(
+                    client.converse_stream(**kwargs)
+                )
+                try:
+                    while True:
+                        done, _ = await asyncio.wait(
+                            {api_call}, timeout=heartbeat_interval
+                        )
+                        if done:
+                            break
+                        yield {"type": "heartbeat"}
+                    response = api_call.result()
+                except BaseException:
+                    if not api_call.done():
+                        api_call.cancel()
+                        try:
+                            await api_call
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    raise
                 break
             except Exception as e:
                 error_str = str(e)
@@ -1125,7 +1262,12 @@ class BedrockService:
                 raise
 
         try:
-            async for event in response["stream"]:
+            async for item_type, event in self._iter_with_heartbeat(
+                response["stream"], interval=heartbeat_interval
+            ):
+                if item_type == "heartbeat":
+                    yield {"type": "heartbeat"}
+                    continue
                 if "contentBlockDelta" in event:
                     delta = event["contentBlockDelta"].get("delta", {})
                     if "text" in delta:

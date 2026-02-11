@@ -460,7 +460,10 @@ class AgentTeamManager:
 
         try:
             async for chunk in self.bedrock.invoke_model_stream_text(model_id, body, api_format=agent_api_format):
-                if chunk["type"] == "delta":
+                if chunk["type"] == "heartbeat":
+                    # Forward heartbeat to keep SSE connection alive
+                    await event_queue.put(SSEEventBuilder.heartbeat(0.0))
+                elif chunk["type"] == "delta":
                     text = chunk["text"]
                     full_text += text
                     # Push delta event to queue
@@ -589,7 +592,9 @@ class AgentTeamManager:
         full_text = ""
         try:
             async for chunk in self.bedrock.invoke_model_stream_text(model_id, body, api_format=synth_api_format):
-                if chunk["type"] == "delta":
+                if chunk["type"] == "heartbeat":
+                    yield SSEEventBuilder.heartbeat(0.0)
+                elif chunk["type"] == "delta":
                     text = chunk["text"]
                     full_text += text
                     yield SSEEventBuilder.team_synthesis_delta(team.team_id, text)

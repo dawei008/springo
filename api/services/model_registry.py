@@ -181,10 +181,16 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "max_output": 128000,
         "supports_vision": False,
         "supports_thinking": False,
-        "supports_tools": False,
+        "supports_tools": True,
         "api_format": "converse",
     },
 }
+
+# Models whose Bedrock Converse API integration cannot deserialize
+# toolUse / toolResult content blocks in *message history*.  They support
+# tool calls in the current turn, but past tool interactions must be
+# flattened to plain text before re-sending.
+_FLATTEN_TOOL_HISTORY_MODELS = {"glm-4.7"}
 
 # Backward-compatible flat mapping: short_name -> bedrock_id
 BEDROCK_MODEL_MAPPING: Dict[str, str] = {
@@ -219,6 +225,11 @@ def get_bedrock_id(model_name: str) -> str:
     if info:
         return info["bedrock_id"]
     return model_name
+
+
+def model_needs_tool_flattening(model_name: str) -> bool:
+    """Return True if past toolUse/toolResult blocks must be flattened to text."""
+    return model_name in _FLATTEN_TOOL_HISTORY_MODELS
 
 
 def list_all_models() -> Dict[str, ModelInfo]:
