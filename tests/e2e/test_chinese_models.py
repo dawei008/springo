@@ -51,8 +51,8 @@ async def test_models_list_includes_chinese(fastapi_client: httpx.AsyncClient):
         )
 
     # Total should cover Claude + Chinese models (at least 9)
-    assert data["total"] >= 9, (
-        f"Expected at least 9 models (3 Claude + 6 Chinese), got {data['total']}"
+    assert data["total"] >= 8, (
+        f"Expected at least 8 models (3 Claude + 5 Chinese), got {data['total']}"
     )
 
 
@@ -69,8 +69,8 @@ async def test_models_list_chinese_fields(fastapi_client: httpx.AsyncClient):
     data = response.json()
     chinese_models = [m for m in data["data"] if m["provider"] in CHINESE_PROVIDERS]
 
-    assert len(chinese_models) >= 6, (
-        f"Expected at least 6 Chinese models, found {len(chinese_models)}"
+    assert len(chinese_models) >= 5, (
+        f"Expected at least 5 Chinese models, found {len(chinese_models)}"
     )
 
     required_fields = {

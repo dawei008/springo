@@ -410,6 +410,20 @@ class SSEEventBuilder:
         })
 
     @staticmethod
+    def team_agent_tool(team_id: str, agent_id: str, role: str,
+                        tool_name: str, status: str, result_preview: str = "") -> str:
+        """Agent tool execution event (start / complete / error)"""
+        return format_sse_event('team_agent_tool', {
+            'type': 'team_agent_tool',
+            'team_id': team_id,
+            'agent_id': agent_id,
+            'role': role,
+            'tool_name': tool_name,
+            'status': status,
+            'result_preview': result_preview[:200] if result_preview else "",
+        })
+
+    @staticmethod
     def team_synthesis_delta(team_id: str, delta: str) -> str:
         """Streaming text chunk from synthesis phase"""
         return format_sse_event('team_synthesis_delta', {

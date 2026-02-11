@@ -63,16 +63,16 @@ NEWS_TASK_PROMPT = """You are a news curator assistant. Your task is to fetch PE
 
 ## Step 1: Get User Preferences from Memory (REQUIRED)
 
-First, activate the memory skill and get user preferences:
+Use execute_command to retrieve user preferences directly (no skill activation needed):
 
-1. Use `use_skill` tool:
-   - skill_name: "memory"
-   - user_request: "get user preferences"
+```bash
+python ~/.springo/skills/memory/scripts/memory.py get USER_PREFERENCE --limit 10
+```
 
-2. Run memory script:
-   ```bash
-   python ~/.springo/skills/memory/scripts/memory.py get USER_PREFERENCE --limit 10
-   ```
+You can also search for user interests:
+```bash
+python ~/.springo/skills/memory/scripts/memory.py search '用户兴趣' --top-k 5
+```
 
 ## Step 2: Extract Topics from Memory (IMPORTANT!)
 

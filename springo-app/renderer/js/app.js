@@ -557,6 +557,9 @@
             // Ensure default working folder is in workspace list
             ensureDefaultFolderInWorkspace();
 
+            // Prune workspace folders that no longer exist on disk
+            await pruneDeletedWorkingFolders();
+
             renderWorkingFolders();
 
             // Load conversations from backend JSONL storage
@@ -3301,6 +3304,12 @@
                             }
                             break;
 
+                        case 'team_agent_tool':
+                            if (currentConversationId === convId) {
+                                appendTeamAgentToolEvent(data.team_id, data.agent_id, data.role, data.tool_name, data.status, data.result_preview);
+                            }
+                            break;
+
                         case 'team_synthesis_delta':
                             // Stream synthesis to chat window (not team panel)
                             textContent += data.delta;
@@ -3619,11 +3628,58 @@
                 if (outputEl.style.display === 'none' || !outputEl.style.display) {
                     outputEl.style.display = 'block';
                     outputEl.setAttribute('data-streaming', 'true');
+                    // Set a default expanded height if not already user-resized
+                    if (!card.style.height) {
+                        card.style.height = '180px';
+                    }
                 }
                 outputEl.textContent += delta;
                 outputEl.scrollTop = outputEl.scrollHeight;
             }
 
+        }
+
+        function appendTeamAgentToolEvent(teamId, agentId, role, toolName, status, resultPreview) {
+            if (teamId !== activeTeamSplitId) return;
+            const agentsContainer = document.getElementById('team-split-agents');
+            if (!agentsContainer) return;
+            const card = agentsContainer.querySelector(`[data-agent-id="${agentId}"]`);
+            if (!card) return;
+
+            const outputEl = card.querySelector('.team-split-agent-output');
+            if (!outputEl) return;
+
+            if (outputEl.style.display === 'none' || !outputEl.style.display) {
+                outputEl.style.display = 'block';
+                outputEl.setAttribute('data-streaming', 'true');
+                if (!card.style.height) {
+                    card.style.height = '180px';
+                }
+            }
+
+            if (status === 'start') {
+                outputEl.textContent += `\n[tool] ${toolName} ...`;
+            } else if (status === 'complete') {
+                // Replace trailing "..." with done marker
+                const text = outputEl.textContent;
+                const pending = `\n[tool] ${toolName} ...`;
+                if (text.endsWith(pending)) {
+                    outputEl.textContent = text.slice(0, -3) + 'done';
+                } else {
+                    outputEl.textContent += ` done`;
+                }
+                outputEl.textContent += '\n';
+            } else if (status === 'error') {
+                const text = outputEl.textContent;
+                const pending = `\n[tool] ${toolName} ...`;
+                if (text.endsWith(pending)) {
+                    outputEl.textContent = text.slice(0, -3) + 'error';
+                } else {
+                    outputEl.textContent += ` error`;
+                }
+                outputEl.textContent += '\n';
+            }
+            outputEl.scrollTop = outputEl.scrollHeight;
         }
 
         // Append streaming synthesis delta to the Team tab split panel
@@ -6332,6 +6388,38 @@ Be concise and helpful in your responses.`;
             }
         }
 
+        // Remove workspace folders whose paths no longer exist on disk
+        async function pruneDeletedWorkingFolders() {
+            if (workingFolders.length === 0) return;
+            try {
+                const response = await fetch(`${BASE_URL}/v1/config/check-paths`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(workingFolders)
+                });
+                if (!response.ok) return;
+                const result = await response.json();
+                const before = workingFolders.length;
+                workingFolders = workingFolders.filter(f => result[f] !== false);
+                if (workingFolders.length < before) {
+                    console.log(`[Workspace] Pruned ${before - workingFolders.length} deleted folder(s)`);
+                    // If default folder was deleted, clear it
+                    if (defaultWorkingFolder && result[defaultWorkingFolder] === false) {
+                        console.log(`[Workspace] Default folder deleted: ${defaultWorkingFolder}`);
+                        defaultWorkingFolder = workingFolders[0] || '';
+                    }
+                    // If current working dir was deleted, switch to default
+                    if (currentWorkingDir && result[currentWorkingDir] === false) {
+                        console.log(`[Workspace] Current working dir deleted: ${currentWorkingDir}`);
+                        currentWorkingDir = defaultWorkingFolder || workingFolders[0] || '';
+                    }
+                    saveWorkspaceCache();
+                }
+            } catch (e) {
+                console.warn('[Workspace] Failed to check folder paths:', e.message);
+            }
+        }
+
         // ========== Workspace Functions ==========
 
         function renderWorkingFolders() {
@@ -6531,6 +6619,26 @@ Be concise and helpful in your responses.`;
                     });
                     if (response.ok) {
                         const data = await response.json();
+                        // If the requested folder doesn't exist on disk, fall back
+                        if (data.exists === false) {
+                            console.warn(`Working directory not found on disk: ${folder}`);
+                            const fallback = defaultWorkingFolder || workingFolders[0] || '';
+                            if (fallback && fallback !== folder) {
+                                console.log(`Falling back to: ${fallback}`);
+                                currentWorkingDir = fallback;
+                                // Update the current conversation to use the fallback
+                                if (currentConversationId) {
+                                    const conv = conversations.find(c => c.id === currentConversationId);
+                                    if (conv) conv.workingDir = fallback;
+                                    const runtime = convRuntime[currentConversationId];
+                                    if (runtime) runtime.workingDir = fallback;
+                                }
+                                updateWorkingDirDisplay(fallback);
+                                renderWorkingFolders();
+                                // Sync the fallback folder to the server
+                                return updateServerWorkingDir(fallback, 1);
+                            }
+                        }
                         console.log('Working directory synced to server:', data.working_dir);
                         return true;
                     } else {
@@ -6747,7 +6855,8 @@ Be concise and helpful in your responses.`;
                 document.addEventListener('mousemove', (e) => {
                     if (!isResizing) return;
                     const diff = startX - e.clientX;
-                    const newWidth = Math.min(600, Math.max(200, startWidth + diff));
+                    const maxW = Math.floor(window.innerWidth * 0.7);
+                    const newWidth = Math.min(maxW, Math.max(200, startWidth + diff));
                     panel.style.width = newWidth + 'px';
                     rightPanelWidth = newWidth;
                 });
@@ -10422,7 +10531,7 @@ ${content || 'Task completed successfully.'}
                 const decoder = new TextDecoder();
                 let buffer = '';
                 let eventType = null;
-                let finalResult = '';
+                let synthesisText = '';
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -10442,7 +10551,7 @@ ${content || 'Task completed successfully.'}
                             try {
                                 const data = JSON.parse(dataStr);
 
-                                // Handle team SSE events (Team tab only)
+                                // Handle team SSE events
                                 switch (eventType) {
                                     case 'team_spawned':
                                         initTeamSplitPanel(data.team_id, data.agents, data.user_request);
@@ -10469,15 +10578,25 @@ ${content || 'Task completed successfully.'}
                                     case 'team_agent_delta':
                                         appendTeamAgentDelta(data.team_id, data.agent_id, data.role, data.delta);
                                         break;
+                                    case 'team_agent_tool':
+                                        appendTeamAgentToolEvent(data.team_id, data.agent_id, data.role, data.tool_name, data.status, data.result_preview);
+                                        break;
                                     case 'team_synthesis_delta':
-                                        // Synthesis shown in chat, not team panel
+                                        // Stream synthesis text into the chat window
+                                        synthesisText += data.delta;
+                                        if (currentConversationId === thisConvId) {
+                                            debouncedUpdateAssistantMessage(thisConvId, synthesisText, [], false);
+                                        }
                                         break;
                                     case 'team_synthesizing':
                                         updateTeamSplitStatus(data.team_id, 'synthesizing', 'Synthesizing...');
                                         break;
                                     case 'team_complete':
-                                        finalResult = data.result;
                                         updateTeamSplitStatus(data.team_id, 'complete', 'Complete');
+                                        // Use streamed synthesis text, fall back to complete result
+                                        if (!synthesisText && data.result) {
+                                            synthesisText = data.result;
+                                        }
                                         break;
                                     case 'team_error':
                                         updateTeamSplitStatus(data.team_id, 'error', data.error);
@@ -10491,17 +10610,29 @@ ${content || 'Task completed successfully.'}
                     }
                 }
 
-                // Add assistant message with team result
-                if (finalResult) {
-                    runtime.messages.push({
-                        role: 'assistant',
-                        content: finalResult,
-                        timestamp: Date.now(),
-                        _teamMode: true
-                    });
-                    if (currentConversationId === thisConvId) {
-                        renderMessages();
+                // Finalize the streamed assistant message
+                if (synthesisText) {
+                    // Clear any pending debounced updates
+                    if (streamingUIDebounce.timers[thisConvId]) {
+                        clearTimeout(streamingUIDebounce.timers[thisConvId]);
+                        delete streamingUIDebounce.timers[thisConvId];
                     }
+                    delete streamingUIDebounce.pending[thisConvId];
+
+                    // Mark the message with _teamMode and do final render
+                    const lastMsg = runtime.messages[runtime.messages.length - 1];
+                    if (lastMsg && lastMsg.role === 'assistant') {
+                        lastMsg.content = synthesisText;
+                        lastMsg._teamMode = true;
+                    } else {
+                        runtime.messages.push({
+                            role: 'assistant',
+                            content: synthesisText,
+                            timestamp: Date.now(),
+                            _teamMode: true
+                        });
+                    }
+                    updateAssistantMessage(thisConvId, synthesisText, [], true);
                 }
 
                 updateConversationStatus(thisConvId, 'completed');
@@ -11081,6 +11212,42 @@ ${content || 'Task completed successfully.'}
 
         // ============ Team Split Panel ============
 
+        // Drag-to-resize for individual agent cards
+        function initTeamCardResize(card) {
+            const handle = card.querySelector('.team-split-agent-resize');
+            if (!handle) return;
+
+            let startY = 0;
+            let startH = 0;
+
+            function onMouseDown(e) {
+                e.preventDefault();
+                startY = e.clientY;
+                startH = card.getBoundingClientRect().height;
+                handle.classList.add('dragging');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+            }
+
+            function onMouseMove(e) {
+                const delta = e.clientY - startY;
+                const newH = Math.max(40, startH + delta);
+                card.style.height = newH + 'px';
+            }
+
+            function onMouseUp() {
+                handle.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+
+            handle.addEventListener('mousedown', onMouseDown);
+        }
+
         let activeTeamSplitId = null;
 
         function initTeamSplitPanel(teamId, agents, userRequest) {
@@ -11124,7 +11291,9 @@ ${content || 'Task completed successfully.'}
                         </div>
                         <div class="team-split-agent-task"></div>
                         <div class="team-split-agent-output"></div>
+                        <div class="team-split-agent-resize"></div>
                     `;
+                    initTeamCardResize(card);
                     agentsContainer.appendChild(card);
                 }
             }
@@ -11173,7 +11342,9 @@ ${content || 'Task completed successfully.'}
                     </div>
                     <div class="team-split-agent-task">${escapeHtml(task.title)}</div>
                     <div class="team-split-agent-output"></div>
+                    <div class="team-split-agent-resize"></div>
                 `;
+                initTeamCardResize(card);
                 agentsContainer.appendChild(card);
             }
         }
@@ -11215,6 +11386,10 @@ ${content || 'Task completed successfully.'}
                         outputEl.textContent = content;
                     }
                     outputEl.style.display = 'block';
+                    // Auto-expand card if not user-resized
+                    if (!card.style.height) {
+                        card.style.height = '180px';
+                    }
                     outputEl.removeAttribute('data-streaming');
                     if (status === 'error') {
                         outputEl.classList.add('error');

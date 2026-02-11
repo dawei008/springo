@@ -47,6 +47,7 @@ class WorkingDirRequest(BaseModel):
 class WorkingDirResponse(BaseModel):
     success: bool = True
     working_dir: str
+    exists: bool = True  # whether the requested path exists on disk
 
 
 class WarmupResponse(BaseModel):
@@ -110,19 +111,29 @@ async def get_working_dir():
 
 @router.post("/config/working-dir", response_model=WorkingDirResponse)
 async def set_working_dir(request: WorkingDirRequest):
-    """设置工作目录"""
+    """设置工作目录
+
+    If the requested path exists, switch to it.
+    If not, keep the current working directory and return exists=False
+    so the frontend can fall back to a default folder.
+    """
     global _working_dir
-    if request.working_dir and os.path.isdir(request.working_dir):
-        _working_dir = request.working_dir
-    elif request.working_dir:
-        try:
-            os.makedirs(request.working_dir, exist_ok=True)
-            _working_dir = request.working_dir
-        except Exception as e:
-            logger.warning(f"Could not create directory: {e}")
+    requested = request.working_dir
+    path_exists = bool(requested and os.path.isdir(requested))
+
+    if path_exists:
+        _working_dir = requested
+    # Don't auto-create missing directories — let the frontend decide
+
     # Sync to session_state and mcp_tools so tools use the correct working dir
     _sync_working_dir(_working_dir)
-    return WorkingDirResponse(working_dir=_working_dir)
+    return WorkingDirResponse(working_dir=_working_dir, exists=path_exists)
+
+
+@router.post("/config/check-paths")
+async def check_paths(paths: List[str]) -> Dict[str, bool]:
+    """Check which paths exist on disk. Used to prune stale workspace folders."""
+    return {p: os.path.isdir(p) for p in paths}
 
 
 # ============ Warmup ============
@@ -291,7 +302,10 @@ async def set_memory_config(request: MemoryConfigRequest) -> Dict[str, Any]:
         from ..services.memory_sync import load_memory_config, save_memory_config, auto_setup_memory_strategies
         config = load_memory_config()
         if request.memory_id is not None:
-            config["memory_id"] = request.memory_id
+            # Only update memory_id if the new value is non-empty,
+            # to prevent accidental clearing from partial UI updates
+            if request.memory_id or not config.get("memory_id"):
+                config["memory_id"] = request.memory_id
         if request.memory_region is not None:
             config["memory_region"] = request.memory_region
         if request.memory_enabled is not None:

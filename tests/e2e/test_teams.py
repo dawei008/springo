@@ -20,7 +20,6 @@ async def test_teams_spawn(fastapi_client: httpx.AsyncClient):
         "/v1/teams/spawn",
         json={
             "user_request": "Explain the project structure of this codebase",
-            "max_parallel_agents": 2,
         },
         timeout=30,
     )
@@ -168,7 +167,6 @@ async def test_teams_execute_streaming(fastapi_client: httpx.AsyncClient):
         "/v1/teams/spawn",
         json={
             "user_request": "What is 2+2? Give a one-word answer.",
-            "max_parallel_agents": 2,
         },
         timeout=30,
     )
@@ -222,7 +220,6 @@ async def test_teams_spawn_with_context(fastapi_client: httpx.AsyncClient):
         json={
             "user_request": "Review this function",
             "context": "The function is a sorting algorithm",
-            "max_parallel_agents": 3,
             "model": DEFAULT_TEST_MODEL,
         },
         timeout=30,

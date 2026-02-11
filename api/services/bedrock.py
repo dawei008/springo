@@ -21,6 +21,7 @@ from .model_registry import (
     get_model_limits,
     get_bedrock_id,
     get_model_info,
+    get_max_tools,
     model_supports_tools,
     model_needs_tool_flattening,
 )
@@ -28,9 +29,97 @@ from .model_registry import (
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Bedrock beta header injection for 1M context window
+# ---------------------------------------------------------------------------
+# Models with context_window > 200K need the beta header on Bedrock to unlock
+# the extended context.  The header is harmless for models that don't need it.
+_BEDROCK_BETA_CONTEXT_1M = "context-1m-2025-08-07"
+
+
+def _register_beta_header(client, model_name: str) -> None:
+    """Register an event hook on *client* to inject the ``x-amz-bedrock-beta``
+    header when the model's configured context_window exceeds 200 000 tokens.
+
+    This is required for Claude Sonnet 4 / 4.5 and may also apply to Opus 4.6.
+    """
+    info = MODEL_REGISTRY.get(model_name)
+    if not info or info.get("context_window", 200000) <= 200000:
+        return
+    if info.get("api_format") != "anthropic":
+        return  # Only needed for InvokeModel (Anthropic format)
+
+    def _inject(request, **_kwargs):
+        request.headers["x-amz-bedrock-beta"] = _BEDROCK_BETA_CONTEXT_1M
+
+    # Use wildcard to cover InvokeModel and InvokeModelWithResponseStream
+    client.meta.events.register("before-sign.bedrock-runtime.*", _inject)
+
+
 def format_error_response(error: Exception, lang: str = "zh") -> dict:
     """Format error into structured response — delegates to error_handler module"""
     return _eh_format_error(error, lang=lang)
+
+
+# ---------------------------------------------------------------------------
+# Tool priority for Converse models with limited tool capacity.
+# Tools are selected in tier order until max_tools is reached.
+# ---------------------------------------------------------------------------
+# Tier 1: Core tools — always included
+_TOOL_TIER1 = {
+    # File operations
+    "read_file", "read_files", "write_file", "edit", "list_directory",
+    "create_directory", "delete_file", "move_file", "search_files",
+    "get_file_info", "glob", "grep",
+    # Execution & tasks
+    "execute_command", "get_task_status", "list_background_tasks", "task",
+    # Git
+    "git",
+    # User interaction & workflow
+    "ask_user", "todo_read", "todo_write", "delegate_task",
+    "summarize_context", "tool_search", "use_skill", "scheduler",
+}
+# Tier 2: Web & knowledge
+_TOOL_TIER2_PREFIXES = (
+    "web-search__", "fetch__", "aws-knowledge__", "context7__",
+    "strands-agents__",
+)
+# Tier 3: GitHub, AWS tools
+_TOOL_TIER3_PREFIXES = (
+    "github__", "aws-pricing__", "aws-diagram__", "huggingface__",
+)
+# Everything else (builder-mcp, playwright, pencil, etc.) is tier 4.
+
+
+def _prioritize_tools(tools: list, max_tools: int) -> list:
+    """Select up to *max_tools* from *tools*, prioritising core tools."""
+    if max_tools <= 0 or len(tools) <= max_tools:
+        return tools
+
+    tier1, tier2, tier3, tier4 = [], [], [], []
+    for t in tools:
+        name = t.get("name", "")
+        if name in _TOOL_TIER1:
+            tier1.append(t)
+        elif any(name.startswith(p) for p in _TOOL_TIER2_PREFIXES):
+            tier2.append(t)
+        elif any(name.startswith(p) for p in _TOOL_TIER3_PREFIXES):
+            tier3.append(t)
+        else:
+            tier4.append(t)
+
+    selected: list = []
+    for tier in (tier1, tier2, tier3, tier4):
+        remaining = max_tools - len(selected)
+        if remaining <= 0:
+            break
+        selected.extend(tier[:remaining])
+
+    logger.info(
+        f"Tool limit applied: {len(tools)} -> {len(selected)} "
+        f"(max_tools={max_tools}, tiers={len(tier1)}/{len(tier2)}/{len(tier3)}/{len(tier4)})"
+    )
+    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +336,32 @@ task(
 
 The task runs in a separate session and results are returned when complete.
 
+## Long-Term Memory (LTM)
+
+You have access to the user's long-term memory stored in AgentCore. This contains:
+- **User preferences**: interests, habits, preferred tools, languages, and working style
+- **Conversation facts**: projects they work on, technical decisions, names, key information shared previously
+- **Conversation summaries**: past discussion topics and outcomes
+- **Episodic records**: structured interaction history
+
+**WHEN to retrieve memory** (proactively, without being asked):
+- At the START of a new conversation — retrieve user preferences to personalize your responses
+- When the user asks about past discussions ("你还记得...", "之前我们讨论过...", "上次...")
+- When the user asks to find information they shared before
+- When tasks benefit from knowing user preferences (e.g., formatting style, language preference, project context)
+- When user asks for "最新新闻"/"latest news" — check memory for their interests first
+
+**HOW to retrieve memory** (direct command, no skill activation needed):
+```
+execute_command("python ~/.springo/skills/memory/scripts/memory.py search '查询关键词'")
+execute_command("python ~/.springo/skills/memory/scripts/memory.py get USER_PREFERENCE --limit 5")
+execute_command("python ~/.springo/skills/memory/scripts/memory.py get SEMANTIC --limit 5")
+```
+
+Available strategies: SEMANTIC, USER_PREFERENCE, SUMMARIZATION, EPISODIC
+
+**IMPORTANT**: DO NOT fabricate memories. If you cannot retrieve memory or the result is empty, say so honestly.
+
 ## Safety
 
 - Commands are checked for dangerous patterns
@@ -397,10 +512,13 @@ class BedrockService:
         
         # Handle tools (skip for models that don't support tool use)
         if include_tools and model_supports_tools(model):
-            if request.get("tools"):
-                bedrock_body["tools"] = request["tools"]
-            elif tools:
-                bedrock_body["tools"] = tools
+            raw_tools = request.get("tools") or tools or []
+            if raw_tools:
+                # Apply tool limit for Converse models with max_tools set
+                max_t = get_max_tools(model)
+                if max_t > 0 and len(raw_tools) > max_t:
+                    raw_tools = _prioritize_tools(raw_tools, max_t)
+                bedrock_body["tools"] = raw_tools
         
         # Inject current time into last user message
         if bedrock_body.get("messages"):
@@ -442,7 +560,7 @@ class BedrockService:
         import random
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
-        body.pop("_original_model", None)
+        original_model = body.pop("_original_model", None) or ""
 
         for attempt in range(max_retries):
             try:
@@ -451,6 +569,7 @@ class BedrockService:
                     region_name=self.region,
                     config=self.config
                 ) as client:
+                    _register_beta_header(client, original_model)
                     response = await client.invoke_model(
                         modelId=model_id,
                         body=json.dumps(body),
@@ -468,7 +587,7 @@ class BedrockService:
                     await asyncio.sleep(backoff)
                     continue
                 raise
-    
+
     async def invoke_model_stream(
         self,
         model_id: str,
@@ -507,6 +626,7 @@ class BedrockService:
                     config=self.config
                 )
                 client = await client_ctx.__aenter__()
+                _register_beta_header(client, original_model)
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body),
@@ -626,7 +746,7 @@ class BedrockService:
         import random
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
-        body.pop("_original_model", None)
+        original_model = body.pop("_original_model", None) or ""
 
         response = None
         client_ctx = None
@@ -638,6 +758,7 @@ class BedrockService:
                     config=self.config
                 )
                 client = await client_ctx.__aenter__()
+                _register_beta_header(client, original_model)
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body),
@@ -787,43 +908,139 @@ class BedrockService:
 
     @staticmethod
     def _flatten_tool_content_blocks(messages: list) -> list:
-        """Convert toolUse/toolResult content blocks to plain text.
+        """Strip toolUse/toolResult blocks from message history.
 
         Some models (e.g. GLM 4.7) support tool calls via the Converse API
         but their Bedrock integration cannot deserialize toolUse/toolResult
-        content blocks when they appear in *message history*.  This helper
-        rewrites those blocks to human-readable text so the model still sees
-        the information while the API remains happy.
+        content blocks when they appear in *message history*.
+
+        Previous approaches converted these blocks to descriptive text, but
+        GLM 4.7 would mimic/echo ANY text that resembles tool information,
+        causing it to output the flattened history instead of making real
+        tool calls.
+
+        Current approach:
+        - Assistant messages: DROP toolUse blocks entirely (keep only text).
+        - User messages: Replace toolResult blocks with just the result
+          content as plain text — no tool names, IDs, or parameters.
         """
         out = []
         for msg in messages:
             new_blocks = []
             for block in msg.get("content", []):
                 if "toolUse" in block:
-                    tu = block["toolUse"]
-                    input_str = json.dumps(tu.get("input", {}), ensure_ascii=False)
-                    new_blocks.append({
-                        "text": f"[Tool call: {tu.get('name', '')}({input_str})]"
-                    })
+                    # Drop tool calls from assistant history entirely
+                    pass
                 elif "toolResult" in block:
+                    # Keep only the result content as plain text
                     tr = block["toolResult"]
                     parts = []
                     for c in tr.get("content", []):
                         parts.append(c.get("text", json.dumps(c, ensure_ascii=False)))
-                    status = tr.get("status", "success")
                     result_text = "\n".join(parts)
-                    # Truncate very long tool results to avoid bloating context
                     if len(result_text) > 4000:
                         result_text = result_text[:4000] + "\n...(truncated)"
-                    new_blocks.append({
-                        "text": f"[Tool result ({status}):\n{result_text}]"
-                    })
+                    if result_text.strip():
+                        new_blocks.append({"text": result_text})
                 else:
                     new_blocks.append(block)
             if not new_blocks:
                 new_blocks = [{"text": " "}]
             out.append({"role": msg["role"], "content": new_blocks})
         return out
+
+    @staticmethod
+    def _extract_text_tool_calls(
+        text: str, tool_names: set[str] | None = None,
+    ) -> list[dict]:
+        """Parse function-call-like text and return synthetic tool_use blocks.
+
+        GLM 4.7 on Bedrock sometimes returns ``stopReason: tool_use`` but
+        embeds the tool invocation as plain text instead of a proper
+        ``toolUse`` content block.  Patterns handled:
+
+        1. ``brave_web_search(query="NVIDIA H200", freshness="pw")``
+        2. ``read_file({"path": "/some/file"})``  (JSON arg)
+        3. Echoed flattened history: ``[Tool call: name(...)]``
+
+        *tool_names*, if provided, limits matches to known tool names (both
+        exact and suffix matches are tried so that ``brave_web_search``
+        resolves to ``web-search__brave_web_search``).
+        """
+        import re
+
+        calls: list[dict] = []
+
+        # Find all function-call patterns.  We use a two-pass approach:
+        # first locate `name(` then find the matching `)` handling braces.
+        for m in re.finditer(r'([\w][\w\-\.]*)\(', text):
+            raw_name = m.group(1)
+            start = m.end()  # position right after '('
+
+            # Resolve to a known tool name
+            resolved_name = raw_name
+            if tool_names:
+                if raw_name in tool_names:
+                    resolved_name = raw_name
+                else:
+                    suffix_matches = [
+                        tn for tn in tool_names
+                        if tn.endswith(raw_name) or tn.endswith(f"__{raw_name}")
+                    ]
+                    if suffix_matches:
+                        resolved_name = suffix_matches[0]
+                    else:
+                        continue
+
+            # Find the matching closing paren, accounting for nested braces
+            depth = 1
+            pos = start
+            while pos < len(text) and depth > 0:
+                ch = text[pos]
+                if ch == '(':
+                    depth += 1
+                elif ch == ')':
+                    depth -= 1
+                elif ch == '"':
+                    # Skip string contents
+                    pos += 1
+                    while pos < len(text) and text[pos] != '"':
+                        if text[pos] == '\\':
+                            pos += 1  # skip escaped char
+                        pos += 1
+                pos += 1
+            if depth != 0:
+                continue
+            params_str = text[start:pos - 1].strip()
+
+            # Try to parse as JSON first (handles {"key": "value"} format)
+            params: dict = {}
+            if params_str.startswith('{'):
+                try:
+                    params = json.loads(params_str)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            if not params:
+                # Fall back to key=value parsing
+                for kv in re.finditer(
+                    r'(\w+)\s*=\s*(?:"((?:[^"\\]|\\.)*)"|\'((?:[^\'\\]|\\.)*)\'|(\S+?)(?:\s*[,)]|$))',
+                    params_str,
+                ):
+                    key = kv.group(1)
+                    val = kv.group(2) if kv.group(2) is not None else (
+                        kv.group(3) if kv.group(3) is not None else kv.group(4)
+                    )
+                    if val is not None:
+                        params[key] = val
+
+            calls.append({
+                "type": "tool_use",
+                "id": f"tooluse_{uuid.uuid4().hex[:24]}",
+                "name": resolved_name,
+                "input": params,
+            })
+
+        return calls
 
     @staticmethod
     def _to_converse_tools(tools: list) -> list:
@@ -906,6 +1123,12 @@ class BedrockService:
 
         kwargs = self._build_converse_kwargs(model_id, body)
 
+        # _ghost_tool_retries: extra retries when the model returns
+        # stopReason=tool_use but no toolUse block (intermittent Bedrock bug
+        # seen with GLM 4.7).
+        _GHOST_TOOL_MAX_RETRIES = 2
+        ghost_tool_attempt = 0
+
         for attempt in range(max_retries):
             try:
                 async with self.session.client(
@@ -937,6 +1160,48 @@ class BedrockService:
                 }
                 raw_stop = response.get("stopReason", "end_turn")
                 stop_reason = stop_reason_map.get(raw_stop, raw_stop)
+
+                # GLM 4.7 workaround: stopReason=tool_use but no toolUse
+                # block — the tool call may be embedded as plain text, or
+                # missing entirely (intermittent Bedrock bug).
+                has_tool_block = any(b.get("type") == "tool_use" for b in content_blocks)
+                if stop_reason == "tool_use" and not has_tool_block:
+                    # Try to recover from text first
+                    tool_names = {
+                        t.get("toolSpec", {}).get("name", "")
+                        for t in kwargs.get("toolConfig", {}).get("tools", [])
+                    }
+                    full_text = " ".join(
+                        b["text"] for b in content_blocks if b.get("type") == "text"
+                    )
+                    parsed = self._extract_text_tool_calls(full_text, tool_names or None)
+                    if parsed:
+                        content_blocks.extend(parsed)
+                        logger.info(
+                            f"Recovered {len(parsed)} tool call(s) from text for model {model_id}"
+                        )
+                    elif ghost_tool_attempt < _GHOST_TOOL_MAX_RETRIES:
+                        # Retry with toolChoice forced to "any" — the model
+                        # intended a tool call but Bedrock dropped the block.
+                        # Forcing toolChoice often makes the backend produce
+                        # a proper toolUse block.
+                        ghost_tool_attempt += 1
+                        if "toolConfig" in kwargs:
+                            kwargs["toolConfig"]["toolChoice"] = {"any": {}}
+                        logger.warning(
+                            f"Ghost tool_use (attempt {ghost_tool_attempt}/{_GHOST_TOOL_MAX_RETRIES}): "
+                            f"retrying {model_id} with toolChoice=any"
+                        )
+                        await asyncio.sleep(0.5)
+                        continue
+                    else:
+                        # Exhausted retries — downgrade to end_turn so the
+                        # caller doesn't enter an infinite tool loop.
+                        stop_reason = "end_turn"
+                        logger.warning(
+                            f"stopReason=tool_use but no toolUse block after "
+                            f"{_GHOST_TOOL_MAX_RETRIES} retries for {model_id}"
+                        )
 
                 usage = response.get("usage", {})
 
@@ -1075,6 +1340,9 @@ class BedrockService:
             # messageStop in the Converse stream, so we must wait for it before
             # emitting the message_delta / message_stop SSE events.
             pending_stop_reason = None
+            # GLM 4.7 workaround: track text and toolUse presence
+            _stream_text_parts: list[str] = []
+            _stream_has_tool_use = False
 
             async for item_type, event in self._iter_with_heartbeat(
                 response["stream"], interval=heartbeat_interval
@@ -1104,6 +1372,7 @@ class BedrockService:
                     current_block_index = cbs.get("contentBlockIndex", current_block_index + 1)
                     start_block = cbs.get("start", {})
                     if "toolUse" in start_block:
+                        _stream_has_tool_use = True
                         tu = start_block["toolUse"]
                         content_block = {
                             "type": "tool_use",
@@ -1122,6 +1391,7 @@ class BedrockService:
                     delta_block = cbd.get("delta", {})
 
                     if "text" in delta_block:
+                        _stream_text_parts.append(delta_block["text"])
                         delta = {"type": "text_delta", "text": delta_block["text"]}
                     elif "reasoningContent" in delta_block:
                         rc = delta_block["reasoningContent"]
@@ -1155,6 +1425,155 @@ class BedrockService:
                     # If we have a pending stop, emit the deferred SSE events
                     # now that we have the real token counts.
                     if pending_stop_reason is not None:
+                        # GLM 4.7 workaround: inject synthetic tool_use blocks
+                        if pending_stop_reason == "tool_use" and not _stream_has_tool_use:
+                            tool_names = {
+                                t.get("toolSpec", {}).get("name", "")
+                                for t in kwargs.get("toolConfig", {}).get("tools", [])
+                            }
+                            full_text = "".join(_stream_text_parts)
+                            parsed = self._extract_text_tool_calls(full_text, tool_names or None)
+                            if not parsed:
+                                # Text parse failed — retry via non-streaming
+                                # call with toolChoice=any to force a tool call.
+                                retry_kwargs = dict(kwargs)
+                                if "toolConfig" in retry_kwargs:
+                                    retry_kwargs["toolConfig"] = dict(retry_kwargs["toolConfig"])
+                                    retry_kwargs["toolConfig"]["toolChoice"] = {"any": {}}
+                                for _ghost_try in range(2):
+                                    logger.info(
+                                        f"Stream ghost tool_use retry {_ghost_try + 1}/2 for {model_id} (toolChoice=any)"
+                                    )
+                                    try:
+                                        async with self.session.client(
+                                            "bedrock-runtime",
+                                            region_name=self.region,
+                                            config=self.config,
+                                        ) as retry_client:
+                                            retry_resp = await retry_client.converse(**retry_kwargs)
+                                        retry_content = retry_resp.get("output", {}).get("message", {}).get("content", [])
+                                        for rb in retry_content:
+                                            if "toolUse" in rb:
+                                                tu = rb["toolUse"]
+                                                parsed.append({
+                                                    "type": "tool_use",
+                                                    "id": tu.get("toolUseId", f"tooluse_{uuid.uuid4().hex[:24]}"),
+                                                    "name": tu.get("name", ""),
+                                                    "input": tu.get("input", {}),
+                                                })
+                                        if parsed:
+                                            break
+                                    except Exception as retry_err:
+                                        logger.warning(f"Stream ghost retry failed: {retry_err}")
+                                    await asyncio.sleep(0.5)
+
+                            if parsed:
+                                logger.info(
+                                    f"Stream: recovered {len(parsed)} tool call(s) for {model_id}"
+                                )
+                                for tc in parsed:
+                                    current_block_index += 1
+                                    cb = {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": {}}
+                                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': cb})}\n\n"
+                                    input_json = json.dumps(tc.get("input", {}))
+                                    delta = {"type": "input_json_delta", "partial_json": input_json}
+                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': delta})}\n\n"
+                                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
+                            else:
+                                pending_stop_reason = "end_turn"
+                                logger.warning(
+                                    f"Stream: ghost tool_use unrecoverable after retries for {model_id}"
+                                )
+
+                        # Empty-response-after-tool-results retry: some models
+                        # (e.g. Kimi K2.5) consume output tokens but return
+                        # empty text deltas after receiving tool results.
+                        # Retry once with a nudge in the system prompt.
+                        if pending_stop_reason == "end_turn" and output_tokens > 0:
+                            full_text = "".join(_stream_text_parts).strip()
+                            if not full_text and not _stream_has_tool_use:
+                                msgs = kwargs.get("messages", [])
+                                last_msg = msgs[-1] if msgs else {}
+                                has_tool_results = (
+                                    last_msg.get("role") == "user"
+                                    and isinstance(last_msg.get("content"), list)
+                                    and any(
+                                        isinstance(b, dict) and "toolResult" in b
+                                        for b in last_msg["content"]
+                                    )
+                                )
+                                if has_tool_results:
+                                    logger.warning(
+                                        f"Empty response ({output_tokens} output tokens) after tool "
+                                        f"results for {model_id}, retrying with nudge..."
+                                    )
+                                    try:
+                                        retry_kwargs = dict(kwargs)
+                                        sys_parts = list(retry_kwargs.get("system", []))
+                                        sys_parts.append({
+                                            "text": (
+                                                "\n\nIMPORTANT: You MUST process the tool results "
+                                                "above and provide a complete, visible text response "
+                                                "to the user. Do not respond with empty content."
+                                            )
+                                        })
+                                        retry_kwargs["system"] = sys_parts
+                                        async with self.session.client(
+                                            "bedrock-runtime",
+                                            region_name=self.region,
+                                            config=self.config,
+                                        ) as retry_client:
+                                            retry_resp = await retry_client.converse(**retry_kwargs)
+                                        retry_content = (
+                                            retry_resp.get("output", {})
+                                            .get("message", {})
+                                            .get("content", [])
+                                        )
+                                        retry_texts = [
+                                            rb["text"]
+                                            for rb in retry_content
+                                            if isinstance(rb, dict)
+                                            and "text" in rb
+                                            and rb["text"].strip()
+                                        ]
+                                        if retry_texts:
+                                            combined = "\n".join(retry_texts)
+                                            logger.info(
+                                                f"Empty-response retry recovered {len(combined)} "
+                                                f"chars for {model_id}"
+                                            )
+                                            current_block_index += 1
+                                            cb = {"type": "text", "text": ""}
+                                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': cb})}\n\n"
+                                            delta = {"type": "text_delta", "text": combined}
+                                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': delta})}\n\n"
+                                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
+                                            # Also check if retry wanted tool_use
+                                            retry_tool_uses = [
+                                                rb for rb in retry_content
+                                                if isinstance(rb, dict) and "toolUse" in rb
+                                            ]
+                                            if retry_tool_uses:
+                                                pending_stop_reason = "tool_use"
+                                                for rtu in retry_tool_uses:
+                                                    tu = rtu["toolUse"]
+                                                    current_block_index += 1
+                                                    tu_id = tu.get("toolUseId", f"tooluse_{uuid.uuid4().hex[:24]}")
+                                                    cb = {"type": "tool_use", "id": tu_id, "name": tu.get("name", ""), "input": {}}
+                                                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': cb})}\n\n"
+                                                    input_json = json.dumps(tu.get("input", {}))
+                                                    delta = {"type": "input_json_delta", "partial_json": input_json}
+                                                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': delta})}\n\n"
+                                                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
+                                            retry_usage = retry_resp.get("usage", {})
+                                            output_tokens += retry_usage.get("outputTokens", 0)
+                                        else:
+                                            logger.warning(
+                                                f"Empty-response retry also returned empty for {model_id}"
+                                            )
+                                    except Exception as retry_err:
+                                        logger.warning(f"Empty-response retry failed: {retry_err}")
+
                         delta_data = {
                             "type": "message_delta",
                             "delta": {"stop_reason": pending_stop_reason, "stop_sequence": None},
@@ -1167,6 +1586,54 @@ class BedrockService:
             # Edge case: messageStop received but metadata never arrived --
             # emit the deferred events with whatever token count we have.
             if pending_stop_reason is not None:
+                # GLM 4.7 workaround (same as metadata handler above)
+                if pending_stop_reason == "tool_use" and not _stream_has_tool_use:
+                    tool_names = {
+                        t.get("toolSpec", {}).get("name", "")
+                        for t in kwargs.get("toolConfig", {}).get("tools", [])
+                    }
+                    full_text = "".join(_stream_text_parts)
+                    parsed = self._extract_text_tool_calls(full_text, tool_names or None)
+                    if not parsed:
+                        edge_retry_kwargs = dict(kwargs)
+                        if "toolConfig" in edge_retry_kwargs:
+                            edge_retry_kwargs["toolConfig"] = dict(edge_retry_kwargs["toolConfig"])
+                            edge_retry_kwargs["toolConfig"]["toolChoice"] = {"any": {}}
+                        for _ghost_try in range(2):
+                            try:
+                                async with self.session.client(
+                                    "bedrock-runtime",
+                                    region_name=self.region,
+                                    config=self.config,
+                                ) as retry_client:
+                                    retry_resp = await retry_client.converse(**edge_retry_kwargs)
+                                retry_content = retry_resp.get("output", {}).get("message", {}).get("content", [])
+                                for rb in retry_content:
+                                    if "toolUse" in rb:
+                                        tu = rb["toolUse"]
+                                        parsed.append({
+                                            "type": "tool_use",
+                                            "id": tu.get("toolUseId", f"tooluse_{uuid.uuid4().hex[:24]}"),
+                                            "name": tu.get("name", ""),
+                                            "input": tu.get("input", {}),
+                                        })
+                                if parsed:
+                                    break
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5)
+                    if parsed:
+                        for tc in parsed:
+                            current_block_index += 1
+                            cb = {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": {}}
+                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': cb})}\n\n"
+                            input_json = json.dumps(tc.get("input", {}))
+                            delta = {"type": "input_json_delta", "partial_json": input_json}
+                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': current_block_index, 'delta': delta})}\n\n"
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': current_block_index})}\n\n"
+                    else:
+                        pending_stop_reason = "end_turn"
+
                 delta_data = {
                     "type": "message_delta",
                     "delta": {"stop_reason": pending_stop_reason, "stop_sequence": None},

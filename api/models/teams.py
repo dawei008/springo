@@ -63,7 +63,6 @@ class Team(BaseModel):
 class TeamSpawnRequest(BaseModel):
     """创建团队请求"""
     user_request: str = Field(..., description="The user's request to decompose into agent tasks")
-    max_parallel_agents: int = Field(default=3, ge=1, le=6, description="Max agents to run in parallel")
     model: str = Field(default=DEFAULT_TEAM_SMART_MODEL, description="Orchestrator model")
     context: Optional[str] = Field(default=None, description="Additional context for the team")
 
@@ -82,7 +81,7 @@ ROLE_CONFIGS = {
         system_prompt=(
             "You are the orchestrator agent. Your job is to:\n"
             "1. Analyze the user's request and judge its complexity\n"
-            "2. Decompose it into 1-6 subtasks (simple questions may need only 1 agent)\n"
+            "2. Decompose it into 1-10 subtasks (simple questions may need only 1 agent)\n"
             "3. Assign roles to each subtask - use built-in roles or create custom ones\n"
             "4. Synthesize findings from all agents into a coherent response\n\n"
             "Built-in roles: explorer, researcher, implementer, reviewer\n"
@@ -101,6 +100,8 @@ ROLE_CONFIGS = {
         purpose="Code and data exploration",
         system_prompt=(
             "You are an explorer agent. Your job is to explore code, data, and files to find relevant information.\n"
+            "You have access to tools: use read_file, glob, grep, execute_command, etc. to explore the codebase.\n"
+            "ALWAYS use tools to gather real information — do NOT guess or hallucinate file contents.\n"
             "Be thorough but concise in your findings. Report what you found clearly.\n"
             "Do NOT use emojis. Use plain text only."
         ),
@@ -110,7 +111,10 @@ ROLE_CONFIGS = {
         model=DEFAULT_TEAM_FAST_MODEL,
         purpose="Web search and documentation research",
         system_prompt=(
-            "You are a researcher agent. Your job is to find information from documentation, web search results, and reference materials.\n"
+            "You are a researcher agent. Your job is to find information using available tools.\n"
+            "Use web search tools (web-search__brave_web_search, web-search__brave_news_search, etc.) "
+            "to find up-to-date information. Use tool_search to discover available tools.\n"
+            "ALWAYS use tools to search — do NOT make up information.\n"
             "Provide well-organized findings with sources when available.\n"
             "Do NOT use emojis. Use plain text only."
         ),
@@ -121,6 +125,8 @@ ROLE_CONFIGS = {
         purpose="Code writing and implementation",
         system_prompt=(
             "You are an implementer agent. Your job is to write code, create implementations, and make changes.\n"
+            "You have access to tools: use write_file, read_file, execute_command, etc. to implement code.\n"
+            "ALWAYS use tools to read existing code before modifying it.\n"
             "Follow existing code patterns. Be precise and test-aware.\n"
             "Do NOT use emojis. Use plain text only."
         ),
@@ -131,6 +137,7 @@ ROLE_CONFIGS = {
         purpose="Quality review and verification",
         system_prompt=(
             "You are a reviewer agent. Your job is to review code, findings, and implementations for quality.\n"
+            "Use tools (read_file, grep, execute_command) to verify claims and check code.\n"
             "Look for issues, suggest improvements, and verify correctness.\n"
             "Do NOT use emojis. Use plain text only."
         ),

@@ -6,7 +6,7 @@ Single source of truth for all supported Bedrock models (Claude + Chinese LLMs).
 from typing import Dict, List, Optional, TypedDict
 
 
-class ModelInfo(TypedDict):
+class ModelInfo(TypedDict, total=False):
     bedrock_id: str
     provider: str
     display_name: str
@@ -16,6 +16,7 @@ class ModelInfo(TypedDict):
     supports_thinking: bool
     supports_tools: bool
     api_format: str  # "anthropic" or "converse"
+    max_tools: int   # optional: limit tools sent to this model
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +125,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "converse",
+        "max_tools": 40,
     },
 
     # -----------------------------------------------------------------------
@@ -139,6 +141,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "converse",
+        "max_tools": 40,
     },
 
     # -----------------------------------------------------------------------
@@ -154,6 +157,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "converse",
+        "max_tools": 50,
     },
 
     # -----------------------------------------------------------------------
@@ -169,17 +173,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "converse",
-    },
-    "qwen3-next-80b": {
-        "bedrock_id": "qwen.qwen3-next-80b-a3b",
-        "provider": "qwen",
-        "display_name": "Qwen3 Next 80B",
-        "context_window": 262144,   # 256K (Bedrock-probed)
-        "max_output": 65536,
-        "supports_vision": False,
-        "supports_thinking": False,
-        "supports_tools": True,
-        "api_format": "converse",
+        "max_tools": 40,
     },
     # -----------------------------------------------------------------------
     # Z.AI (GLM)  (api_format = "converse")
@@ -194,6 +188,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "converse",
+        "max_tools": 40,
     },
 }
 
@@ -241,6 +236,14 @@ def get_bedrock_id(model_name: str) -> str:
 def model_needs_tool_flattening(model_name: str) -> bool:
     """Return True if past toolUse/toolResult blocks must be flattened to text."""
     return model_name in _FLATTEN_TOOL_HISTORY_MODELS
+
+
+def get_max_tools(model_name: str) -> int:
+    """Return the max number of tools a model can handle. 0 = unlimited."""
+    info = MODEL_REGISTRY.get(model_name)
+    if info:
+        return info.get("max_tools", 0)
+    return 0
 
 
 def list_all_models() -> Dict[str, ModelInfo]:

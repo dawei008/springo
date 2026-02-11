@@ -61,18 +61,16 @@ async def execute_team(team_id: str, request: TeamExecuteRequest = None):
         if not team:
             raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
 
-        max_parallel = 3  # default
-
         if request and request.stream:
             async def team_stream() -> AsyncGenerator[str, None]:
-                async for event in manager.execute_team(team_id, max_parallel):
+                async for event in manager.execute_team(team_id):
                     yield event
 
             return create_sse_response(team_stream())
         else:
             # Non-streaming: collect all events and return final result
             events = []
-            async for event in manager.execute_team(team_id, max_parallel):
+            async for event in manager.execute_team(team_id):
                 events.append(event)
 
             team = manager.get_team(team_id)
