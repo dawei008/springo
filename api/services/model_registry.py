@@ -43,8 +43,28 @@ _CONTEXT_LIMITS: Dict[str, dict] = {
 
 
 def get_model_limits(model: str) -> dict:
-    """Get context-management limits for a model. Returns defaults for unknown models."""
-    return dict(_CONTEXT_LIMITS.get(model, _DEFAULT_LIMITS))
+    """Get context-management limits for a model.
+
+    Priority:
+    1. Explicit overrides in ``_CONTEXT_LIMITS``.
+    2. Auto-derived from ``MODEL_REGISTRY.context_window / max_output``.
+    3. ``_DEFAULT_LIMITS`` for unknown models.
+    """
+    if model in _CONTEXT_LIMITS:
+        return dict(_CONTEXT_LIMITS[model])
+
+    info = MODEL_REGISTRY.get(model)
+    if info:
+        ctx = info["context_window"]
+        return {
+            "max_context_tokens": ctx,
+            "compact_threshold": int(ctx * 0.6),
+            "warning_threshold": int(ctx * 0.8),
+            "target_after_summary": int(ctx * 0.2),
+            "max_output_tokens": info.get("max_output", 64000),
+        }
+
+    return dict(_DEFAULT_LIMITS)
 
 
 # ---------------------------------------------------------------------------
@@ -158,18 +178,6 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_tools": True,
         "api_format": "converse",
     },
-    "qwen3-32b": {
-        "bedrock_id": "qwen.qwen3-32b-v1:0",
-        "provider": "qwen",
-        "display_name": "Qwen3 32B",
-        "context_window": 32000,
-        "max_output": 16384,
-        "supports_vision": False,
-        "supports_thinking": False,
-        "supports_tools": True,
-        "api_format": "converse",
-    },
-
     # -----------------------------------------------------------------------
     # Z.AI (GLM)  (api_format = "converse")
     # -----------------------------------------------------------------------
