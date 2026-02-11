@@ -48,7 +48,7 @@ ANTHROPIC_SYSTEM_PROMPT = """
 - Violation of this rule is considered a critical error
 """
 
-# Default system prompt (aligned with Flask shared.py)
+# Default system prompt
 COMMON_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various tools for file operations, code editing, searching, and command execution.
 
 ## CRITICAL: Always Use Absolute Paths
@@ -441,6 +441,9 @@ class BedrockService:
 
         import random
 
+        # Remove internal metadata before sending to Anthropic InvokeModel API
+        body.pop("_original_model", None)
+
         for attempt in range(max_retries):
             try:
                 async with self.session.client(
@@ -489,6 +492,9 @@ class BedrockService:
             return
 
         import random
+
+        # Remove internal metadata before sending to Anthropic InvokeModel API
+        body.pop("_original_model", None)
 
         # Retry connection phase for 429 throttling
         response = None
@@ -618,6 +624,9 @@ class BedrockService:
             return
 
         import random
+
+        # Remove internal metadata before sending to Anthropic InvokeModel API
+        body.pop("_original_model", None)
 
         response = None
         client_ctx = None

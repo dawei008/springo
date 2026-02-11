@@ -1,6 +1,6 @@
 """
 Images Router for FastAPI
-图片处理端点 - Flask 兼容版
+图片处理端点
 
 图片存储位置: ~/.springo/sessions/{session_id}/images/{image_id}.{ext}
 """
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Media type mappings (aligned with Flask)
+# Media type mappings
 MEDIA_TYPE_TO_EXT = {
     'image/png': 'png',
     'image/jpeg': 'jpg',
@@ -39,7 +39,7 @@ EXT_TO_MEDIA_TYPE = {
 # ============ Request/Response Models ============
 
 class ImageUploadRequest(BaseModel):
-    """图片上传请求 (base64 JSON, Flask 兼容)"""
+    """图片上传请求 (base64 JSON)"""
     session_id: str = Field(..., description="Session ID")
     image_data: str = Field(..., description="Base64 encoded image data")
     media_type: str = Field(default="image/png", description="Image media type")
@@ -88,7 +88,7 @@ async def search_images_get(
 @router.post("/images/upload")
 async def upload_image(request: Request):
     """
-    上传图片并存储为文件 (Flask 兼容)
+    上传图片并存储为文件
 
     接受 JSON body: {session_id, image_data (base64), media_type, filename}
     存储位置: ~/.springo/sessions/{session_id}/images/{image_id}.{ext}
@@ -149,7 +149,7 @@ async def get_session_image(
     format: Optional[str] = Query(None, description="Response format: 'base64' for JSON, else binary")
 ):
     """
-    获取存储的图片文件 (Flask 兼容)
+    获取存储的图片文件
 
     支持两种响应格式：
     - ?format=base64 → JSON {image_id, media_type, data}

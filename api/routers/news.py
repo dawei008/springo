@@ -1,6 +1,6 @@
 """
 News Router for FastAPI
-新闻搜索端点 (News Agent 集成) - Flask 兼容版
+新闻搜索端点 (News Agent 集成)
 """
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -47,7 +47,7 @@ class NewsSearchResponse(BaseModel):
     error: Optional[str] = None
 
 
-# ============ News Cache (Flask compatible) ============
+# ============ News Cache ============
 
 _news_cache: Dict[str, Any] = {
     'news': [],
@@ -139,7 +139,7 @@ CRITICAL: Your FINAL response must be ONLY the JSON object, no other text.
 
 
 async def _execute_news_agent_task(model: str = None, custom_topics: str = None):
-    """Execute the news fetch task using internal API (same as Flask)."""
+    """Execute the news fetch task using internal API."""
     import httpx
 
     try:
@@ -522,7 +522,7 @@ async def fetch_news(
     count: int = Query(10, description="Number of articles to fetch", ge=1, le=50)
 ) -> Dict[str, Any]:
     """
-    获取个性化新闻 (Flask 兼容格式)
+    获取个性化新闻
 
     Frontend expects: {success, status, news, topics, timestamp, cached}
     Uses Claude Agent to read LTM and search for personalized news.

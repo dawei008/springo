@@ -160,7 +160,7 @@ async def context_stats(request: ContextStatsRequest) -> Dict[str, Any]:
 
 @router.post("/context/breakdown")
 async def context_breakdown(request: ContextStatsRequest) -> Dict[str, Any]:
-    """获取上下文 token 分解详情 (Flask 兼容格式)"""
+    """获取上下文 token 分解详情"""
     try:
         from ..services.context_manager import get_context_breakdown
 

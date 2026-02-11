@@ -30,7 +30,7 @@ def _resolve_limits(model: str = None) -> tuple:
         return limits["max_context_tokens"], limits["compact_threshold"], limits["target_after_summary"]
     return MAX_TOKENS, SUMMARY_THRESHOLD, TARGET_AFTER_SUMMARY
 
-# Tool result size limits (bytes) - aligned with Flask
+# Tool result size limits (bytes)
 MAX_TOOL_RESULT_CONTEXT_SIZE = 8 * 1024   # 8KB per tool result in history
 MAX_INLINE_OUTPUT_SIZE = 30 * 1024         # 30KB for inline storage
 
@@ -216,10 +216,10 @@ def get_context_stats(
 
 
 # ============================================================================
-# 结构化信息提取（Flask 对齐）
+# 结构化信息提取
 # ============================================================================
 
-# 正则模式（与 Flask 一致）
+# 正则模式
 _FILE_PATH_PATTERNS = [
     re.compile(r'(?:^|\s)(/[\w./-]+\.\w+)'),                    # Unix 文件路径
     re.compile(r'(?:^|\s)([A-Z]:\\[\w.\\/-]+\.\w+)'),           # Windows 文件路径
@@ -361,7 +361,7 @@ def extract_structured_info(messages: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # ============================================================================
-# 结构化摘要 prompt（Flask 对齐 - 8 维度中文摘要）
+# 结构化摘要 prompt（8 维度中文摘要）
 # ============================================================================
 
 def prepare_structured_summary_prompt(
@@ -452,7 +452,7 @@ def create_summary_messages(
 
 
 # ============================================================================
-# 智能消息分割（Flask 对齐 - tool_use/tool_result 边界保护）
+# 智能消息分割（tool_use/tool_result 边界保护）
 # ============================================================================
 
 def split_messages_for_summary(
@@ -560,7 +560,7 @@ def split_messages_for_summary(
 
 
 # ============================================================================
-# 重写 summarize_context（Flask 对齐 - 结构化摘要）
+# 重写 summarize_context（结构化摘要）
 # ============================================================================
 
 async def summarize_context(
@@ -755,7 +755,7 @@ def check_and_prepare_auto_summary(
 
 
 # ============================================================================
-# 详细上下文分解（Flask 对齐）
+# 详细上下文分解
 # ============================================================================
 
 def get_context_breakdown(
@@ -949,7 +949,7 @@ def truncate_tool_results(
 ) -> List[Dict[str, Any]]:
     """
     截断消息中的工具结果，防止上下文溢出。
-    保留前半段 + 截断提示 + 后四分之一，与 Flask 逻辑一致。
+    保留前半段 + 截断提示 + 后四分之一。
 
     Args:
         messages: 消息列表
@@ -996,7 +996,7 @@ def prepare_messages_for_api(
 ) -> List[Dict[str, Any]]:
     """
     为 API 调用准备消息：截断旧工具结果，保留最近的完整。
-    与 Flask 的 prepare_messages_for_api 逻辑一致。
+    截断旧工具结果，保留最近的完整。
 
     Args:
         messages: 消息列表
@@ -1199,7 +1199,7 @@ def save_tool_result(
 
 
 # ============================================================================
-# 工具结果文件管理（Flask 对齐）
+# 工具结果文件管理
 # ============================================================================
 
 def get_tool_results_dir(session_id: str) -> str:

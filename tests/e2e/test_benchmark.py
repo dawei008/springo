@@ -202,51 +202,6 @@ async def test_benchmark_messages_endpoint(fastapi_client: httpx.AsyncClient):
 
 @pytest.mark.asyncio
 @pytest.mark.e2e
-@pytest.mark.slow
-async def test_benchmark_compare_flask_fastapi(
-    flask_client: httpx.AsyncClient,
-    fastapi_client: httpx.AsyncClient
-):
-    """
-    Benchmark: Compare Flask vs FastAPI performance.
-    对比 Flask 和 FastAPI 的性能。
-    """
-    n = 50
-    
-    # Test FastAPI
-    fastapi_time, _, fastapi_success = await make_concurrent_requests(
-        fastapi_client, "GET", "/health", n
-    )
-    
-    # Test Flask
-    try:
-        flask_time, _, flask_success = await make_concurrent_requests(
-            flask_client, "GET", "/health", n
-        )
-    except Exception:
-        pytest.skip("Flask server not running")
-        return
-    
-    fastapi_rps = n / fastapi_time
-    flask_rps = n / flask_time
-    improvement = ((fastapi_rps - flask_rps) / flask_rps) * 100
-    
-    print(f"\n{'='*50}")
-    print(f"Flask vs FastAPI Comparison:")
-    print(f"  Requests: {n}")
-    print(f"  Flask: {flask_rps:.2f} req/s ({flask_success}/{n} success)")
-    print(f"  FastAPI: {fastapi_rps:.2f} req/s ({fastapi_success}/{n} success)")
-    print(f"  Improvement: {improvement:+.1f}%")
-    print(f"{'='*50}")
-    
-    # FastAPI should be reasonably close to Flask performance
-    # Note: When both servers run simultaneously, there's resource contention
-    # We only check that FastAPI isn't dramatically slower (50% threshold)
-    assert fastapi_rps >= flask_rps * 0.5, "FastAPI significantly slower than Flask"
-
-
-@pytest.mark.asyncio
-@pytest.mark.e2e
 async def test_latency_health_endpoint(fastapi_client: httpx.AsyncClient):
     """
     Test: Health endpoint latency.

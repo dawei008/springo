@@ -56,7 +56,7 @@ class Settings(BaseSettings):
         description="MCP servers config file path"
     )
     
-    # Timeouts (seconds) - aligned with Flask config.py TIMEOUTS
+    # Timeouts (seconds)
     bedrock_connect_timeout: int = Field(default=60, description="Bedrock connection timeout")
     bedrock_read_timeout: int = Field(default=900, description="Bedrock read timeout (15min for long conversations)")
     tool_execution_timeout: int = Field(default=300, description="Default tool/command execution timeout")

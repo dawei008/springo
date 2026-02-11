@@ -5617,7 +5617,8 @@ Be concise and helpful in your responses.`;
                 'deepseek-v3.1': 'deepseek-v3.2',
                 'minimax-m2': 'minimax-m2.1',
                 'kimi-k2-thinking': 'kimi-k2.5',
-                'qwen3-235b': 'qwen3-32b',
+                'qwen3-235b': 'qwen3-coder-480b',
+                'qwen3-32b': 'qwen3-coder-480b',
                 'qwen3-vl-235b': 'qwen3-coder-480b',
                 'qwen3-coder-30b': 'qwen3-coder-480b',
                 'glm-4.7-flash': 'glm-4.7',
@@ -5721,9 +5722,19 @@ Be concise and helpful in your responses.`;
             fillSelect(modelSelect);
             fillSelect(compactSelect);
 
-            // Set current values
+            // Set current values (fall back to default if stored model no longer exists)
             modelSelect.value = settings.model || _defaultModel;
+            if (!modelSelect.value) {
+                modelSelect.value = _defaultModel;
+                settings.model = _defaultModel;
+                saveSettings();
+            }
             compactSelect.value = settings.compactModel || _defaultCompactModel;
+            if (!compactSelect.value) {
+                compactSelect.value = _defaultCompactModel;
+                settings.compactModel = _defaultCompactModel;
+                saveSettings();
+            }
 
             // Listen for model change to update token limits
             modelSelect.addEventListener('change', () => {
@@ -5738,7 +5749,12 @@ Be concise and helpful in your responses.`;
                 CONFIG.TOKENS.WARNING_THRESHOLD = model.context.warning_threshold;
                 CONFIG.TOKENS.COMPACT_THRESHOLD = model.context.compact_threshold;
                 CONFIG.TOKENS.MAX_OUTPUT = model.context.max_output_tokens;
-                console.log(`[Models] Token limits updated for ${modelId}: ${CONFIG.TOKENS.MAX_CONTEXT.toLocaleString()} context`);
+                // Update the max tokens input constraint to match the model's max output
+                const maxTokensInput = document.getElementById('settings-max-tokens');
+                if (maxTokensInput) {
+                    maxTokensInput.max = model.context.max_output_tokens;
+                }
+                console.log(`[Models] Token limits updated for ${modelId}: ${CONFIG.TOKENS.MAX_CONTEXT.toLocaleString()} context, ${model.context.max_output_tokens.toLocaleString()} max output`);
             }
         }
 

@@ -123,7 +123,7 @@ app.add_middleware(
 )
 
 
-# MCP lazy init middleware - fallback if lifespan init fails (Flask-aligned)
+# MCP lazy init middleware - fallback if lifespan init fails
 _mcp_initialized = False
 
 

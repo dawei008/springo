@@ -307,7 +307,7 @@ async def set_memory_config(request: MemoryConfigRequest) -> Dict[str, Any]:
                 )
                 config["ltm_setup"] = strategies_result
 
-                # Persist LTM strategies to full config (Flask-aligned)
+                # Persist LTM strategies to full config
                 if strategies_result.get("strategies"):
                     try:
                         import json as json_module
@@ -422,7 +422,7 @@ async def sync_session_to_s3(session_id: str) -> Dict[str, Any]:
 
 @router.post("/config/setup-memory-s3")
 async def setup_memory_and_s3(request: CreateMemoryAndS3Request) -> Dict[str, Any]:
-    """Combined Memory + S3 creation (Flask-aligned)
+    """Combined Memory + S3 creation
 
     Creates/configures both Memory and S3 bucket in a single call,
     then auto-discovers LTM strategies.

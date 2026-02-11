@@ -111,12 +111,15 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # -----------------------------------------------------------------------
     # DeepSeek  (api_format = "converse")
     # -----------------------------------------------------------------------
+    # Bedrock context windows verified by probing the Converse API:
+    #   input_tokens + maxTokens ≤ context_window (Bedrock-enforced)
+
     "deepseek-v3.2": {
         "bedrock_id": "deepseek.v3.2",
         "provider": "deepseek",
         "display_name": "DeepSeek V3.2",
-        "context_window": 128000,
-        "max_output": 64000,
+        "context_window": 163840,   # 160K (Bedrock-probed)
+        "max_output": 65536,
         "supports_vision": False,
         "supports_thinking": False,
         "supports_tools": True,
@@ -130,8 +133,8 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "bedrock_id": "minimax.minimax-m2.1",
         "provider": "minimax",
         "display_name": "MiniMax M2.1",
-        "context_window": 200000,
-        "max_output": 200000,
+        "context_window": 196608,   # 192K (Bedrock-probed)
+        "max_output": 131072,
         "supports_vision": False,
         "supports_thinking": False,
         "supports_tools": True,
@@ -145,8 +148,8 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "bedrock_id": "moonshotai.kimi-k2.5",
         "provider": "moonshot",
         "display_name": "Kimi K2.5",
-        "context_window": 256000,
-        "max_output": 16384,
+        "context_window": 262144,   # 256K (Bedrock-probed)
+        "max_output": 131072,
         "supports_vision": True,
         "supports_thinking": False,
         "supports_tools": True,
@@ -160,8 +163,8 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "bedrock_id": "qwen.qwen3-coder-480b-a35b-v1:0",
         "provider": "qwen",
         "display_name": "Qwen3 Coder 480B",
-        "context_window": 256000,
-        "max_output": 16384,
+        "context_window": 131072,   # 128K on Bedrock (native 256K)
+        "max_output": 65536,        # Qwen team recommended
         "supports_vision": False,
         "supports_thinking": False,
         "supports_tools": True,
@@ -171,8 +174,8 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "bedrock_id": "qwen.qwen3-next-80b-a3b",
         "provider": "qwen",
         "display_name": "Qwen3 Next 80B",
-        "context_window": 256000,
-        "max_output": 16384,
+        "context_window": 262144,   # 256K (Bedrock-probed)
+        "max_output": 65536,
         "supports_vision": False,
         "supports_thinking": False,
         "supports_tools": True,
@@ -185,8 +188,8 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "bedrock_id": "zai.glm-4.7",
         "provider": "zai",
         "display_name": "GLM 4.7",
-        "context_window": 200000,
-        "max_output": 128000,
+        "context_window": 202752,   # 198K (Bedrock-probed)
+        "max_output": 131072,
         "supports_vision": False,
         "supports_thinking": False,
         "supports_tools": True,

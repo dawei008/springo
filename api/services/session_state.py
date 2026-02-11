@@ -1,7 +1,7 @@
 """
 Session State Management for FastAPI
 Tracks todos, plan mode, pending questions, working directory, and active skill.
-FastAPI-native equivalent of Flask's mcp_tools/session.py + mcp_tools/config.py
+Tracks todos, plan mode, pending questions, working directory, and active skill.
 """
 
 import os

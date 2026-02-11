@@ -185,7 +185,7 @@ async def messages_auto_api(
 
         logger.info(f"Messages Auto API: model={msg_request.model}, max_iterations={msg_request.max_tool_iterations}")
 
-        # Read session_id from header OR body (Flask compat)
+        # Read session_id from header OR body
         session_id = x_session_id or body.get("session_id")
         compact_model = msg_request.compact_model
 
@@ -295,7 +295,7 @@ async def messages_auto_api(
                             system_extra = (system_extra or "") + mcp_instructions
                             logger.info(f"Injected MCP server instructions into system prompt ({len(mcp_instructions)} chars)")
 
-                    # === 5-Step Context Protection (aligned with Flask) ===
+                    # === 5-Step Context Protection ===
                     messages_modified = False
 
                     # Step 1: Truncate old tool results to prevent context overflow
@@ -343,7 +343,7 @@ async def messages_auto_api(
                         logger.info(f"[Context] After aggressive truncation: {final_tokens:,} tokens")
                         messages_modified = True
 
-                    # Step 4: Persist changes + notify frontend (Flask-aligned)
+                    # Step 4: Persist changes + notify frontend
                     if messages_modified and session_id:
                         # Save compacted messages (with sync reset + memory re-queue)
                         try:
@@ -674,7 +674,7 @@ async def messages_auto_api(
                     messages = truncate_tool_results(messages, max_size=2048)
                     messages_modified = True
 
-                # Step 4: Persist + memory sync (non-streaming, Flask-aligned)
+                # Step 4: Persist + memory sync (non-streaming)
                 if messages_modified and session_id:
                     try:
                         store = get_session_store()
@@ -735,7 +735,7 @@ async def messages_auto_api(
                 tool_results = []
                 for tool_id, tool_name, result, is_error in results_raw:
                     result_str = json.dumps(result) if isinstance(result, dict) else str(result)
-                    # Large tool result file storage (non-streaming, Flask-aligned)
+                    # Large tool result file storage (non-streaming)
                     if session_id and len(result_str.encode('utf-8')) > MAX_INLINE_OUTPUT_SIZE:
                         saved = save_tool_result(session_id, tool_id, result_str, tool_name)
                         if not saved.get("inline"):

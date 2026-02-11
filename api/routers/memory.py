@@ -33,7 +33,7 @@ class MemoryStatusResponse(BaseModel):
 
 @router.get("/memory/status")
 async def get_memory_status() -> Dict[str, Any]:
-    """获取长期记忆状态 (Flask 兼容的平铺格式)"""
+    """获取长期记忆状态"""
     import os
     import json as json_module
 
@@ -45,7 +45,7 @@ async def get_memory_status() -> Dict[str, Any]:
         memory_enabled = config.get("memory_enabled", True)
         memory_region = config.get("memory_region", "us-west-2")
 
-        # Flask-compatible flat structure
+        # Flat structure for frontend
         status = {
             "enabled": memory_enabled and bool(memory_id),
             "memory_id": memory_id,
@@ -67,7 +67,7 @@ async def get_memory_status() -> Dict[str, Any]:
 
         status["running"] = True
 
-        # Count synced sessions from disk (same logic as Flask)
+        # Count synced sessions from disk
         sessions_dir = os.path.expanduser("~/.springo/sessions")
         if os.path.exists(sessions_dir):
             synced_sessions = 0
