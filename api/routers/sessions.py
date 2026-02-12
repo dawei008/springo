@@ -215,6 +215,36 @@ async def save_session(session_id: str, request: SaveSessionRequest):
         )
 
 
+class UpdateMetadataRequest(BaseModel):
+    """更新会话元数据请求（不修改消息内容）"""
+    metadata: Dict[str, Any] = Field(..., description="Metadata fields to update")
+
+
+@router.patch("/sessions/{session_id}")
+async def update_session_metadata(session_id: str, request: UpdateMetadataRequest):
+    """
+    只更新会话元数据（标题、workingDir 等），不修改消息内容。
+
+    Update session metadata only (title, workingDir, etc.) without touching messages.
+    Used by rename and other metadata-only operations to avoid data loss.
+    """
+    if not validate_session_id(session_id):
+        raise HTTPException(status_code=400, detail="Invalid session ID format")
+    try:
+        store = get_session_store()
+        result = store.update_metadata(session_id, request.metadata)
+
+        if "error" in result:
+            raise HTTPException(status_code=404, detail=result["error"])
+
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Update session metadata error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
     """

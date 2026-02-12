@@ -224,6 +224,21 @@
                 }
             },
 
+            // Update metadata only (no message overwrite) - safe for rename
+            async updateMetadata(sessionId, metadata) {
+                try {
+                    const response = await fetch(`${BASE_URL}/v1/sessions/${sessionId}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ metadata })
+                    });
+                    return response.ok;
+                } catch (e) {
+                    console.error('SessionAPI.updateMetadata error:', e);
+                    return false;
+                }
+            },
+
             // Delete session
             async delete(sessionId) {
                 try {
@@ -495,6 +510,7 @@
         let showSkillPicker = false;
 
         let teamModeEnabled = false;
+        let teamCollaborativeMode = false; // false = classic, true = collaborative
 
         // Initialize
         document.addEventListener('DOMContentLoaded', async () => {
@@ -2391,11 +2407,9 @@
                 conv.isCustomTitle = true;  // Mark that user manually named this session
             }
 
-            // Save renamed title to backend
-            const runtime = convRuntime[convId];
-            SessionAPI.save(convId, runtime?.messages || conv.messages || [], {
+            // Save renamed title to backend (metadata-only, no message overwrite)
+            SessionAPI.updateMetadata(convId, {
                 title: conv.title,
-                workingDir: conv.workingDir || '',
                 isCustomTitle: conv.isCustomTitle,
                 updatedAt: Date.now()
             });
@@ -3332,6 +3346,49 @@
                         case 'team_error':
                             if (currentConversationId === convId) {
                                 updateTeamSplitStatus(data.team_id, 'error', `Error: ${data.error}`);
+                            }
+                            break;
+
+                        // === Collaborative Team Events ===
+                        case 'team_agent_message':
+                            if (currentConversationId === convId) {
+                                appendTeamMessage(data.team_id, data.sender, data.recipient, data.content, data.summary);
+                            }
+                            break;
+
+                        case 'team_agent_broadcast':
+                            if (currentConversationId === convId) {
+                                appendTeamMessage(data.team_id, data.sender, 'all', data.content, data.summary, true);
+                            }
+                            break;
+
+                        case 'team_agent_idle':
+                            if (currentConversationId === convId) {
+                                updateTeamSplitAgent(data.team_id, null, null, 'idle', '', '', data.agent_name);
+                            }
+                            break;
+
+                        case 'team_agent_shutdown':
+                            if (currentConversationId === convId) {
+                                updateTeamSplitAgent(data.team_id, null, null, 'shutdown', '', '', data.agent_name);
+                            }
+                            break;
+
+                        case 'team_task_created':
+                            if (currentConversationId === convId) {
+                                addTeamTaskBoardItem(data.team_id, data.task_id, data.title, data.owner, 'pending');
+                            }
+                            break;
+
+                        case 'team_task_updated':
+                            if (currentConversationId === convId) {
+                                updateTeamTaskBoardItem(data.team_id, data.task_id, data.status, data.owner, data.title);
+                            }
+                            break;
+
+                        case 'team_task_unblocked':
+                            if (currentConversationId === convId) {
+                                updateTeamTaskBoardItem(data.team_id, data.task_id, 'unblocked', data.owner, data.title);
                             }
                             break;
 
@@ -10455,16 +10512,31 @@ ${content || 'Task completed successfully.'}
 
         // ============ Team Mode ============
 
-        function toggleTeamMode() {
-            teamModeEnabled = !teamModeEnabled;
+        window.toggleTeamMode = function() {
+            // Cycle: off -> classic -> collaborative -> off
             const btn = document.getElementById('team-toggle');
-            btn.classList.toggle('active', teamModeEnabled);
-
-            // Update placeholder
             const input = document.getElementById('message-input');
-            if (teamModeEnabled) {
-                input.placeholder = 'Team Mode: multiple agents will collaborate on your request...';
+
+            if (!teamModeEnabled) {
+                // off -> classic
+                teamModeEnabled = true;
+                teamCollaborativeMode = false;
+                btn.classList.add('active');
+                btn.classList.remove('collab');
+                btn.title = 'Team Mode: Classic (click again for Collaborative)';
+                input.placeholder = 'Team Mode (Classic): agents work in parallel on your request...';
+            } else if (!teamCollaborativeMode) {
+                // classic -> collaborative
+                teamCollaborativeMode = true;
+                btn.classList.add('collab');
+                btn.title = 'Team Mode: Collaborative (click again to disable)';
+                input.placeholder = 'Team Mode (Collaborative): agents communicate and coordinate...';
             } else {
+                // collaborative -> off
+                teamModeEnabled = false;
+                teamCollaborativeMode = false;
+                btn.classList.remove('active', 'collab');
+                btn.title = 'Team Mode - multi-agent collaboration';
                 input.placeholder = 'Message Springo... (/ for skills)';
             }
         }
@@ -10503,10 +10575,11 @@ ${content || 'Task completed successfully.'}
 
             try {
                 // Step 1: Spawn team
+                const teamMode = teamCollaborativeMode ? 'collaborative' : 'classic';
                 const spawnRes = await fetch(BASE_URL + '/v1/teams/spawn', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_request: userMessage })
+                    body: JSON.stringify({ user_request: userMessage, mode: teamMode })
                 });
 
                 if (!spawnRes.ok) {
@@ -10600,6 +10673,28 @@ ${content || 'Task completed successfully.'}
                                         break;
                                     case 'team_error':
                                         updateTeamSplitStatus(data.team_id, 'error', data.error);
+                                        break;
+                                    // Collaborative team events
+                                    case 'team_agent_message':
+                                        appendTeamMessage(data.team_id, data.sender, data.recipient, data.content, data.summary);
+                                        break;
+                                    case 'team_agent_broadcast':
+                                        appendTeamMessage(data.team_id, data.sender, 'all', data.content, data.summary, true);
+                                        break;
+                                    case 'team_agent_idle':
+                                        updateTeamSplitAgent(data.team_id, null, null, 'idle', '', '', data.agent_name);
+                                        break;
+                                    case 'team_agent_shutdown':
+                                        updateTeamSplitAgent(data.team_id, null, null, 'shutdown', '', '', data.agent_name);
+                                        break;
+                                    case 'team_task_created':
+                                        addTeamTaskBoardItem(data.team_id, data.task_id, data.title, data.owner, 'pending');
+                                        break;
+                                    case 'team_task_updated':
+                                        updateTeamTaskBoardItem(data.team_id, data.task_id, data.status, data.owner, data.title);
+                                        break;
+                                    case 'team_task_unblocked':
+                                        updateTeamTaskBoardItem(data.team_id, data.task_id, 'unblocked', data.owner, data.title);
                                         break;
                                 }
                             } catch (e) {
@@ -11272,6 +11367,9 @@ ${content || 'Task completed successfully.'}
                 requestPreview.textContent = preview;
             }
 
+            // Detect collaborative mode (agents have name field)
+            const isCollaborative = agents && agents.some(a => a.name);
+
             // Create agent cards
             agentsContainer.innerHTML = '';
             if (agents && agents.length > 0) {
@@ -11280,13 +11378,15 @@ ${content || 'Task completed successfully.'}
                     const card = document.createElement('div');
                     card.className = 'team-split-agent-card';
                     card.setAttribute('data-agent-id', a.agent_id);
+                    if (a.name) card.setAttribute('data-agent-name', a.name);
                     card.style.setProperty('--agent-color', cfg.color);
+                    const nameLabel = a.name ? `${cfg.label} (${escapeHtml(a.name)})` : cfg.label;
                     card.innerHTML = `
                         <div class="team-split-agent-header">
                             <svg fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
                             </svg>
-                            <span class="team-split-agent-role">${cfg.label}</span>
+                            <span class="team-split-agent-role">${nameLabel}</span>
                             <span class="team-split-agent-badge idle">idle</span>
                         </div>
                         <div class="team-split-agent-task"></div>
@@ -11296,6 +11396,42 @@ ${content || 'Task completed successfully.'}
                     initTeamCardResize(card);
                     agentsContainer.appendChild(card);
                 }
+            }
+
+            // For collaborative mode: add messages container, task board, and message input
+            if (isCollaborative) {
+                // Messages container (chat log between agents)
+                let messagesEl = document.getElementById('team-split-messages');
+                if (!messagesEl) {
+                    messagesEl = document.createElement('div');
+                    messagesEl.id = 'team-split-messages';
+                    messagesEl.className = 'team-split-messages';
+                    messagesEl.style.display = 'none';
+                    messagesEl.style.cssText = 'display:none;max-height:200px;overflow-y:auto;padding:8px;margin:8px 0;border:1px solid var(--border-color);border-radius:6px;font-size:12px;';
+                    content.appendChild(messagesEl);
+                }
+
+                // Task board container
+                let taskBoardEl = document.getElementById('team-split-task-board');
+                if (!taskBoardEl) {
+                    taskBoardEl = document.createElement('div');
+                    taskBoardEl.id = 'team-split-task-board';
+                    taskBoardEl.className = 'team-split-task-board';
+                    taskBoardEl.style.display = 'none';
+                    taskBoardEl.style.cssText = 'display:none;padding:8px;margin:8px 0;border:1px solid var(--border-color);border-radius:6px;font-size:12px;';
+                    content.appendChild(taskBoardEl);
+                }
+
+                // Message input
+                let inputEl = document.getElementById('team-split-input');
+                if (!inputEl) {
+                    inputEl = document.createElement('div');
+                    inputEl.id = 'team-split-input';
+                    inputEl.style.display = 'none';
+                    inputEl.style.cssText = 'display:none;padding:8px;align-items:center;gap:6px;';
+                    content.appendChild(inputEl);
+                }
+                initTeamMessageInput(teamId);
             }
 
             // Auto-switch to Team tab
@@ -11349,11 +11485,15 @@ ${content || 'Task completed successfully.'}
             }
         }
 
-        function updateTeamSplitAgent(teamId, agentId, role, status, taskTitle, content) {
+        function updateTeamSplitAgent(teamId, agentId, role, status, taskTitle, content, agentName) {
             if (teamId !== activeTeamSplitId) return;
             const agentsContainer = document.getElementById('team-split-agents');
             if (!agentsContainer) return;
-            const card = agentsContainer.querySelector(`[data-agent-id="${agentId}"]`);
+            // Find card by agentId or agentName (collaborative mode uses names)
+            let card = agentId ? agentsContainer.querySelector(`[data-agent-id="${agentId}"]`) : null;
+            if (!card && agentName) {
+                card = agentsContainer.querySelector(`[data-agent-name="${agentName}"]`);
+            }
             if (!card) return;
 
             // Update badge
@@ -11424,5 +11564,117 @@ ${content || 'Task completed successfully.'}
             if (placeholder) placeholder.style.display = '';
             if (content) content.style.display = 'none';
             if (agentsContainer) agentsContainer.innerHTML = '';
+        }
+
+        // === Collaborative Team UI Functions ===
+
+        function appendTeamMessage(teamId, sender, recipient, content, summary, isBroadcast) {
+            if (teamId !== activeTeamSplitId) return;
+            const messagesContainer = document.getElementById('team-split-messages');
+            if (!messagesContainer) return;
+
+            messagesContainer.style.display = 'block';
+            const msgEl = document.createElement('div');
+            msgEl.className = `team-split-message ${isBroadcast ? 'broadcast' : 'dm'}`;
+            const label = isBroadcast
+                ? `${escapeHtml(sender)} -> all`
+                : `${escapeHtml(sender)} -> ${escapeHtml(recipient)}`;
+            msgEl.innerHTML = `
+                <div class="team-msg-header">${label}</div>
+                <div class="team-msg-content">${escapeHtml(summary || content.substring(0, 100))}</div>
+            `;
+            messagesContainer.appendChild(msgEl);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        function addTeamTaskBoardItem(teamId, taskId, title, owner, status) {
+            if (teamId !== activeTeamSplitId) return;
+            const taskBoard = document.getElementById('team-split-task-board');
+            if (!taskBoard) return;
+
+            taskBoard.style.display = 'block';
+            const existing = taskBoard.querySelector(`[data-task-id="${taskId}"]`);
+            if (existing) {
+                updateTeamTaskBoardItem(teamId, taskId, status, owner, title);
+                return;
+            }
+
+            const taskEl = document.createElement('div');
+            taskEl.className = `team-task-item ${status}`;
+            taskEl.setAttribute('data-task-id', taskId);
+            taskEl.innerHTML = `
+                <span class="team-task-id">#${escapeHtml(taskId)}</span>
+                <span class="team-task-title">${escapeHtml(title)}</span>
+                <span class="team-task-owner">${owner ? escapeHtml(owner) : ''}</span>
+                <span class="team-task-status ${status}">${escapeHtml(status)}</span>
+            `;
+            taskBoard.appendChild(taskEl);
+        }
+
+        function updateTeamTaskBoardItem(teamId, taskId, status, owner, title) {
+            if (teamId !== activeTeamSplitId) return;
+            const taskBoard = document.getElementById('team-split-task-board');
+            if (!taskBoard) return;
+
+            const taskEl = taskBoard.querySelector(`[data-task-id="${taskId}"]`);
+            if (!taskEl) {
+                // If task doesn't exist yet, create it
+                addTeamTaskBoardItem(teamId, taskId, title || '', owner, status);
+                return;
+            }
+
+            taskEl.className = `team-task-item ${status}`;
+            const statusEl = taskEl.querySelector('.team-task-status');
+            if (statusEl) {
+                statusEl.textContent = status;
+                statusEl.className = `team-task-status ${status}`;
+            }
+            if (owner) {
+                const ownerEl = taskEl.querySelector('.team-task-owner');
+                if (ownerEl) ownerEl.textContent = owner;
+            }
+            if (title) {
+                const titleEl = taskEl.querySelector('.team-task-title');
+                if (titleEl) titleEl.textContent = title;
+            }
+        }
+
+        function sendTeamMessage(teamId, content) {
+            if (!teamId || !content) return;
+            fetch(`${CONFIG.API_URL}/v1/teams/${teamId}/message`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content: content, recipient: 'team-lead' }),
+            }).catch(err => console.error('Failed to send team message:', err));
+        }
+
+        function initTeamMessageInput(teamId) {
+            const inputContainer = document.getElementById('team-split-input');
+            if (!inputContainer) return;
+
+            inputContainer.style.display = 'flex';
+            inputContainer.innerHTML = `
+                <input type="text" id="team-msg-input" placeholder="Send message to team lead..."
+                       style="flex:1;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--input-bg);color:var(--text-color);font-size:13px;">
+                <button id="team-msg-send" style="margin-left:6px;padding:6px 12px;border:none;border-radius:6px;background:var(--accent-color);color:#fff;cursor:pointer;font-size:13px;">Send</button>
+            `;
+
+            const input = document.getElementById('team-msg-input');
+            const sendBtn = document.getElementById('team-msg-send');
+
+            function doSend() {
+                const text = input.value.trim();
+                if (!text) return;
+                sendTeamMessage(teamId, text);
+                input.value = '';
+            }
+
+            sendBtn.addEventListener('click', doSend);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    doSend();
+                }
+            });
         }
 

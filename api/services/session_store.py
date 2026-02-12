@@ -188,6 +188,54 @@ class SessionStore:
             logger.error(f"Failed to load session {session_id}: {e}")
             return {"error": str(e)}
 
+    def update_metadata(
+        self,
+        session_id: str,
+        metadata_updates: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        只更新 JSONL 第一行的 metadata，不动消息内容。
+        用于重命名等只修改元数据的场景，避免消息丢失。
+
+        Args:
+            session_id: 会话 ID
+            metadata_updates: 要合并的元数据字段
+
+        Returns:
+            更新结果
+        """
+        session_file = self.get_session_path(session_id)
+
+        if not os.path.exists(session_file):
+            return {"error": f"Session not found: {session_id}"}
+
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            if not lines:
+                return {"error": f"Session file is empty: {session_id}"}
+
+            # Parse first line as metadata
+            first_entry = json.loads(lines[0].strip())
+            if first_entry.get("type") == "metadata":
+                first_entry.update(metadata_updates)
+                lines[0] = json.dumps(first_entry, ensure_ascii=False) + "\n"
+            else:
+                # No metadata line — prepend one
+                meta = {"type": "metadata", "session_id": session_id}
+                meta.update(metadata_updates)
+                lines.insert(0, json.dumps(meta, ensure_ascii=False) + "\n")
+
+            with open(session_file, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+
+            return {"success": True, "session_id": session_id}
+
+        except Exception as e:
+            logger.error(f"Failed to update metadata for {session_id}: {e}")
+            return {"error": str(e)}
+
     def save_session(
         self,
         session_id: str,
