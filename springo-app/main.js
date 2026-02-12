@@ -4,6 +4,14 @@ const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 
+// Debug log helper
+const DEBUG_LOG = path.join(os.homedir(), '.springo', 'lifecycle.log');
+function debugLog(msg) {
+    try {
+        fs.appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${msg}\n`);
+    } catch(e) { /* ignore */ }
+}
+
 // Cache file path: ~/.springo/cache.json
 const CACHE_DIR = path.join(os.homedir(), '.springo');
 const CACHE_FILE = path.join(CACHE_DIR, 'cache.json');
@@ -148,7 +156,7 @@ const SERVER_URL = 'http://127.0.0.1:8081';
 const SERVER_EXECUTABLE = app.isPackaged
     ? path.join(process.resourcesPath, 'backend', 'springo-backend')
     : null;
-const SERVER_SCRIPT = path.join(__dirname, '..', 'full_proxy_server.py');
+const SERVER_SCRIPT = path.join(__dirname, '..', 'run.py');
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -182,6 +190,7 @@ function createWindow() {
     });
 
     mainWindow.on('closed', () => {
+        debugLog('window closed/destroyed');
         mainWindow = null;
     });
 }
@@ -292,7 +301,7 @@ function createMenu() {
 function startServer() {
     return new Promise((resolve, reject) => {
         // 检查服务器是否已经运行
-        fetch(`${SERVER_URL}/health`)
+        fetch(`${SERVER_URL}/health`, { signal: AbortSignal.timeout(3000) })
             .then(res => res.json())
             .then(data => {
                 if (data.status === 'healthy') {
@@ -362,7 +371,7 @@ function startServer() {
                 // 等待服务器启动
                 let attempts = 0;
                 const checkServer = setInterval(() => {
-                    fetch(`${SERVER_URL}/health`)
+                    fetch(`${SERVER_URL}/health`, { signal: AbortSignal.timeout(3000) })
                         .then(res => res.json())
                         .then(data => {
                             if (data.status === 'healthy') {
@@ -478,29 +487,34 @@ app.whenReady().then(async () => {
         originalShowErrorBox.call(dialog, title, content);
     };
 
-    try {
-        await startServer();
-    } catch (err) {
-        console.error('Failed to start server:', err);
-    }
-
+    debugLog('app ready');
     createMenu();
     createWindow();
+    debugLog('window created');
+
+    // Start server in background — don't block window creation
+    startServer()
+        .then(() => debugLog('server started OK'))
+        .catch(err => {
+            debugLog('server start failed: ' + err.message);
+            console.error('Failed to start server:', err);
+        });
 
     app.on('activate', () => {
-        console.log('[activate] fired. mainWindow=', !!mainWindow, 'destroyed=', mainWindow?.isDestroyed(), 'windows=', BrowserWindow.getAllWindows().length);
+        debugLog(`activate fired. mainWindow=${!!mainWindow} destroyed=${mainWindow?.isDestroyed()} allWindows=${BrowserWindow.getAllWindows().length}`);
         if (mainWindow && !mainWindow.isDestroyed()) {
             if (mainWindow.isMinimized()) mainWindow.restore();
             mainWindow.show();
             mainWindow.focus();
         } else {
-            console.log('[activate] creating new window');
+            debugLog('activate: creating new window');
             createWindow();
         }
     });
 });
 
 app.on('window-all-closed', () => {
+    debugLog(`window-all-closed platform=${process.platform}`);
     if (process.platform !== 'darwin') {
         stopServer();
         app.quit();

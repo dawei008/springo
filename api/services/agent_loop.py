@@ -25,7 +25,7 @@ from .session_state import get_working_dir
 from .mcp_manager import get_mcp_manager
 from .context_manager import (
     truncate_tool_results, prepare_messages_for_api,
-    count_messages_tokens,
+    count_messages_tokens, repair_orphan_tool_uses,
 )
 
 logger = logging.getLogger(__name__)
@@ -199,6 +199,7 @@ async def run_agent_loop(
             # Context management: summarize if messages grow too large
             if len(messages) > 30:
                 messages = _compact_messages(messages)
+                messages = repair_orphan_tool_uses(messages)
 
             current_message = None  # Go back to receiving
 
@@ -269,6 +270,9 @@ async def _run_tool_loop(
                 f"forcing aggressive truncation"
             )
             messages = truncate_tool_results(messages, max_size=2048)
+
+        # Repair orphaned tool_use/tool_result pairs after any truncation
+        messages = repair_orphan_tool_uses(messages)
 
         request_body = {
             "model": model_name,
@@ -710,17 +714,24 @@ def _build_team_context_prompt(agent_name: str, team: Team) -> str:
 
     if is_lead:
         base += (
-            f"As team lead, you can ask the user questions directly using ask_user. "
-            f"If a worker sends you a clarification request, use ask_user to relay it to the user, "
-            f"then forward the user's answer back to that worker via send_message.\n\n"
+            f"As team lead, you can ask the user questions directly using ask_user.\n\n"
+            f"IMPORTANT — Worker clarification relay flow:\n"
+            f"When a worker sends you a message requesting user input (e.g. 'Needs user input:'), "
+            f"you MUST follow these steps exactly:\n"
+            f"  1. Call ask_user with the worker's question (relay it to the user)\n"
+            f"  2. Wait for the user's reply (it arrives as your next message)\n"
+            f"  3. Forward the user's answer to that worker using send_message\n"
+            f"Do NOT answer on behalf of the user. Always relay and forward.\n\n"
             f"Coordinate with your team using these tools. When you finish processing a message, "
             f"provide your response and then wait for the next message.\n"
         )
     else:
         base += (
-            f"IMPORTANT: You cannot ask the user directly. If you need clarification from the user, "
-            f"call ask_user — it will automatically route your question to the team lead, "
-            f"who will ask the user and forward the answer to you.\n\n"
+            f"IMPORTANT: You cannot ask the user directly. If you need user input or clarification, "
+            f"call ask_user — it will route your question to the team lead, "
+            f"who will ask the user and forward the answer back to you.\n"
+            f"After calling ask_user, STOP and WAIT for the team lead's reply. "
+            f"Do NOT proceed with assumptions — wait for the actual answer.\n\n"
             f"Focus on completing your assigned tasks. When you finish processing a message, "
             f"provide your response and then wait for the next message.\n"
         )

@@ -28,14 +28,22 @@ class AgentMessage:
 
 
 class AgentMailbox:
-    """Per-agent inbox with idle state tracking."""
+    """Per-agent inbox with idle state tracking and priority queue.
+
+    User messages are delivered to a priority queue and dequeued first,
+    ensuring the agent responds to user input as soon as its current
+    work unit completes — without interrupting in-flight tool loops.
+    """
 
     def __init__(self, agent_name: str):
         self.agent_name = agent_name
         self.inbox: asyncio.Queue[AgentMessage] = asyncio.Queue()
+        self.priority_inbox: asyncio.Queue[AgentMessage] = asyncio.Queue()
         self.is_idle: bool = True
         self._message_history: List[AgentMessage] = []
         self._history_max = settings.team_message_log_max
+        # Event that fires when *any* queue gets a message (for efficient waiting)
+        self._has_message = asyncio.Event()
 
     def _trim_history(self):
         """Keep per-agent message history within bounds."""
@@ -44,18 +52,57 @@ class AgentMailbox:
             self._message_history = self._message_history[trim_count:]
 
     async def receive(self, timeout: float = 30.0) -> Optional[AgentMessage]:
-        """Wait for the next message, returning None on timeout."""
+        """Wait for the next message, returning None on timeout.
+
+        Priority queue (user messages) is always checked first.
+        """
+        # 1. Drain priority queue first (non-blocking)
         try:
-            msg = await asyncio.wait_for(self.inbox.get(), timeout=timeout)
+            msg = self.priority_inbox.get_nowait()
             self._message_history.append(msg)
             self._trim_history()
             return msg
+        except asyncio.QueueEmpty:
+            pass
+
+        # 2. Drain normal queue (non-blocking)
+        try:
+            msg = self.inbox.get_nowait()
+            self._message_history.append(msg)
+            self._trim_history()
+            return msg
+        except asyncio.QueueEmpty:
+            pass
+
+        # 3. Nothing available — wait for the event signal
+        self._has_message.clear()
+        try:
+            await asyncio.wait_for(self._has_message.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             return None
 
+        # Event fired — check priority first, then normal
+        try:
+            msg = self.priority_inbox.get_nowait()
+        except asyncio.QueueEmpty:
+            try:
+                msg = self.inbox.get_nowait()
+            except asyncio.QueueEmpty:
+                return None
+
+        self._message_history.append(msg)
+        self._trim_history()
+        return msg
+
     async def deliver(self, msg: AgentMessage):
-        """Put a message into this agent's inbox."""
+        """Put a message into this agent's normal inbox."""
         await self.inbox.put(msg)
+        self._has_message.set()
+
+    async def deliver_priority(self, msg: AgentMessage):
+        """Put a high-priority message (e.g. from user) into the priority inbox."""
+        await self.priority_inbox.put(msg)
+        self._has_message.set()
 
     @property
     def history(self) -> List[AgentMessage]:
@@ -120,6 +167,8 @@ class TeamMessageBus:
     async def send_message(self, msg: AgentMessage):
         """Deliver a message to a specific agent's inbox.
 
+        User messages are routed to the priority inbox so they are
+        dequeued before worker-to-worker messages.
         Also logs the message and emits an SSE event.
         """
         self._message_log.append(msg)
@@ -133,7 +182,11 @@ class TeamMessageBus:
             )
             return
 
-        await recipient_mailbox.deliver(msg)
+        # User messages get priority delivery
+        if msg.sender == "user":
+            await recipient_mailbox.deliver_priority(msg)
+        else:
+            await recipient_mailbox.deliver(msg)
 
         # Emit SSE event
         sse_event = SSEEventBuilder.team_agent_message(

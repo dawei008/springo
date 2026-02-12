@@ -253,6 +253,52 @@
             }
         };
 
+        // Load sessions from backend with retry (server may still be starting)
+        async function loadSessionsFromBackend() {
+            const maxAttempts = 30;
+            for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+                try {
+                    // First check if server is healthy (fetch throws on connection refused)
+                    const healthRes = await fetch(`${BASE_URL}/health`);
+                    if (!healthRes.ok) throw new Error('Server not healthy');
+
+                    console.log(`[JSONL] Loading conversations (attempt ${attempt})...`);
+                    const loadStart = performance.now();
+                    const response = await fetch(`${BASE_URL}/v1/sessions`);
+                    if (!response.ok) throw new Error(`Sessions API returned ${response.status}`);
+                    const data = await response.json();
+                    const sessions = data.sessions || [];
+                    const loadEnd = performance.now();
+                    console.log(`[JSONL] Loaded ${sessions.length} sessions in ${(loadEnd - loadStart).toFixed(2)}ms`);
+
+                    conversations = sessions.map(s => {
+                        const createdAt = s.metadata?.createdAt || s.createdAt || (s.modified ? new Date(s.modified).getTime() : Date.now());
+                        const updatedAt = s.modified ? new Date(s.modified).getTime() : createdAt;
+                        return {
+                            id: s.session_id || s.id,
+                            title: s.metadata?.title || s.title || 'Untitled',
+                            createdAt: createdAt,
+                            updatedAt: updatedAt,
+                            status: 'idle',
+                            workingDir: s.metadata?.workingDir || s.workingDir || '',
+                            isCustomTitle: s.metadata?.isCustomTitle || false,
+                            messages: []
+                        };
+                    });
+                    conversations.sort((a, b) => b.createdAt - a.createdAt);
+                    console.log(`[JSONL] Converted ${conversations.length} conversations`);
+                    renderConversations();
+                    return;
+                } catch (e) {
+                    console.warn(`[JSONL] Backend not ready (attempt ${attempt}/${maxAttempts}):`, e.message);
+                    if (attempt < maxAttempts) {
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
+                }
+            }
+            console.error('[JSONL] Failed to load sessions after all retries');
+        }
+
         // OPTIMIZATION 3: Debounced streaming UI updates
         const streamingUIDebounce = {
             timers: {},  // convId -> timer
@@ -578,38 +624,8 @@
 
             renderWorkingFolders();
 
-            // Load conversations from backend JSONL storage
-            console.log('[JSONL] Loading conversations from backend...');
-            const loadStart = performance.now();
-            try {
-                const sessions = await SessionAPI.list();
-                const loadEnd = performance.now();
-                console.log(`[JSONL] Loaded ${sessions.length} sessions in ${(loadEnd - loadStart).toFixed(2)}ms`);
-
-                // Convert backend sessions to conversation format
-                // Backend returns: session_id, file, size, modified, metadata
-                conversations = sessions.map(s => {
-                    const createdAt = s.metadata?.createdAt || s.createdAt || (s.modified ? new Date(s.modified).getTime() : Date.now());
-                    const updatedAt = s.modified ? new Date(s.modified).getTime() : createdAt;
-                    return {
-                        id: s.session_id || s.id,
-                        title: s.metadata?.title || s.title || 'Untitled',
-                        createdAt: createdAt,
-                        updatedAt: updatedAt,  // CRITICAL: Required for cleanupOldConversations()
-                        status: 'idle',
-                        workingDir: s.metadata?.workingDir || s.workingDir || '',
-                        isCustomTitle: s.metadata?.isCustomTitle || false,
-                        messages: [] // Messages loaded on demand
-                    };
-                });
-
-                // Sort by createdAt descending
-                conversations.sort((a, b) => b.createdAt - a.createdAt);
-                console.log(`[JSONL] Converted ${conversations.length} conversations`);
-            } catch (e) {
-                console.error('[JSONL] Failed to load from backend:', e);
-            }
-
+            // Load conversations from backend JSONL storage (with retry for server startup)
+            await loadSessionsFromBackend();
             renderConversations();
             // Initialize workdir selector and display
             updateWorkdirSelector();
@@ -11510,34 +11526,38 @@ ${content || 'Task completed successfully.'}
 
             // For collaborative mode: add messages container, task board, and message input
             if (isCollaborative) {
-                // Messages section header + container (chat log between agents and user)
+                // Two-part messages section
                 let messagesSection = document.getElementById('team-split-messages-section');
                 if (!messagesSection) {
                     messagesSection = document.createElement('div');
                     messagesSection.id = 'team-split-messages-section';
-                    messagesSection.style.cssText = 'margin:8px 0;';
-                    const header = document.createElement('div');
-                    header.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;padding:0 8px;';
-                    header.textContent = 'Team Messages';
-                    messagesSection.appendChild(header);
-                    const messagesEl = document.createElement('div');
-                    messagesEl.id = 'team-split-messages';
-                    messagesEl.className = 'team-split-messages';
-                    messagesEl.style.cssText = 'max-height:200px;overflow-y:auto;padding:8px;border:1px solid var(--border-color);border-radius:6px;font-size:12px;min-height:40px;color:var(--text-secondary);';
-                    messagesEl.innerHTML = '<div style="opacity:0.5;font-style:italic;">No messages yet</div>';
-                    messagesSection.appendChild(messagesEl);
-                    content.appendChild(messagesSection);
-                }
+                    messagesSection.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;padding:0 14px;gap:6px;';
 
-                // Task board container
-                let taskBoardEl = document.getElementById('team-split-task-board');
-                if (!taskBoardEl) {
-                    taskBoardEl = document.createElement('div');
-                    taskBoardEl.id = 'team-split-task-board';
-                    taskBoardEl.className = 'team-split-task-board';
-                    taskBoardEl.style.display = 'none';
-                    taskBoardEl.style.cssText = 'display:none;padding:8px;margin:8px 0;border:1px solid var(--border-color);border-radius:6px;font-size:12px;';
-                    content.appendChild(taskBoardEl);
+                    // Part 1: Team internal comms (worker↔worker, worker↔lead)
+                    const teamHeader = document.createElement('div');
+                    teamHeader.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;';
+                    teamHeader.textContent = 'Team Communication';
+                    messagesSection.appendChild(teamHeader);
+                    const teamMsgs = document.createElement('div');
+                    teamMsgs.id = 'team-split-messages-team';
+                    teamMsgs.className = 'team-split-messages';
+                    teamMsgs.style.cssText = 'flex:1;overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px;min-height:0;';
+                    teamMsgs.innerHTML = '<div class="team-msg-placeholder" style="opacity:0.4;font-style:italic;font-size:11px;">No team messages yet</div>';
+                    messagesSection.appendChild(teamMsgs);
+
+                    // Part 2: User comms (lead↔user)
+                    const userHeader = document.createElement('div');
+                    userHeader.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;';
+                    userHeader.textContent = 'User Communication';
+                    messagesSection.appendChild(userHeader);
+                    const userMsgs = document.createElement('div');
+                    userMsgs.id = 'team-split-messages-user';
+                    userMsgs.className = 'team-split-messages';
+                    userMsgs.style.cssText = 'flex:1;overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px;min-height:0;';
+                    userMsgs.innerHTML = '<div class="team-msg-placeholder" style="opacity:0.4;font-style:italic;font-size:11px;">No user messages yet</div>';
+                    messagesSection.appendChild(userMsgs);
+
+                    content.appendChild(messagesSection);
                 }
 
                 // Message input
@@ -11545,8 +11565,7 @@ ${content || 'Task completed successfully.'}
                 if (!inputEl) {
                     inputEl = document.createElement('div');
                     inputEl.id = 'team-split-input';
-                    inputEl.style.display = 'none';
-                    inputEl.style.cssText = 'display:none;padding:8px;align-items:center;gap:6px;';
+                    inputEl.style.cssText = 'display:none;padding:8px 14px;align-items:center;gap:6px;flex-shrink:0;';
                     content.appendChild(inputEl);
                 }
                 initTeamMessageInput(teamId);
@@ -11630,7 +11649,30 @@ ${content || 'Task completed successfully.'}
             if (!card && agentName) {
                 card = agentsContainer.querySelector(`[data-agent-name="${agentName}"]`);
             }
-            if (!card) return;
+            // Auto-create card for dynamically spawned workers
+            if (!card) {
+                const cfg = getTeamRoleConfig(role);
+                const displayName = agentName || role || agentId;
+                card = document.createElement('div');
+                card.className = 'team-split-agent-card';
+                if (agentId) card.setAttribute('data-agent-id', agentId);
+                if (agentName) card.setAttribute('data-agent-name', agentName);
+                card.style.setProperty('--agent-color', cfg.color);
+                card.innerHTML = `
+                    <div class="team-split-agent-header">
+                        <svg fill="none" stroke="${cfg.color}" viewBox="0 0 24 24" width="16" height="16">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="${cfg.icon}"/>
+                        </svg>
+                        <span class="team-split-agent-role">${escapeHtml(displayName)}</span>
+                        <span class="team-split-agent-badge idle">idle</span>
+                    </div>
+                    <div class="team-split-agent-task">${escapeHtml(taskTitle || '')}</div>
+                    <div class="team-split-agent-output"></div>
+                    <div class="team-split-agent-resize"></div>
+                `;
+                initTeamCardResize(card);
+                agentsContainer.appendChild(card);
+            }
 
             // Update badge
             const badge = card.querySelector('.team-split-agent-badge');
@@ -11748,11 +11790,17 @@ ${content || 'Task completed successfully.'}
 
         function appendTeamMessage(teamId, sender, recipient, content, summary, isBroadcast) {
             if (teamId !== activeTeamSplitId) return;
-            const messagesContainer = document.getElementById('team-split-messages');
+
+            // Route to correct container: user comms vs team comms
+            const isUserMsg = sender === 'user' || recipient === 'user';
+            const containerId = isUserMsg ? 'team-split-messages-user' : 'team-split-messages-team';
+            // Fallback to old single container if split doesn't exist
+            const messagesContainer = document.getElementById(containerId)
+                || document.getElementById('team-split-messages');
             if (!messagesContainer) return;
 
             // Clear placeholder on first real message
-            const placeholder = messagesContainer.querySelector('[style*="opacity"]');
+            const placeholder = messagesContainer.querySelector('.team-msg-placeholder');
             if (placeholder) placeholder.remove();
 
             const msgEl = document.createElement('div');
@@ -11761,11 +11809,10 @@ ${content || 'Task completed successfully.'}
                 ? `${escapeHtml(sender)} -> all`
                 : `${escapeHtml(sender)} -> ${escapeHtml(recipient)}`;
             msgEl.innerHTML = `
-                <div class="team-msg-header">${label}</div>
-                <div class="team-msg-content">${escapeHtml(summary || content.substring(0, 100))}</div>
+                <div class="team-msg-header"><strong>${label}</strong></div>
+                <div class="team-msg-content">${escapeHtml(content || summary)}</div>
             `;
             messagesContainer.appendChild(msgEl);
-            // Sliding window: keep only the last 200 messages
             while (messagesContainer.children.length > 200) {
                 messagesContainer.removeChild(messagesContainer.firstChild);
             }
@@ -11826,11 +11873,13 @@ ${content || 'Task completed successfully.'}
 
         function showTeamAskUser(teamId, agentName, question, options) {
             if (teamId !== activeTeamSplitId) return;
-            const messagesContainer = document.getElementById('team-split-messages');
+            // Route ask_user to user comms container
+            const messagesContainer = document.getElementById('team-split-messages-user')
+                || document.getElementById('team-split-messages');
             if (!messagesContainer) return;
 
             // Clear placeholder
-            const placeholder = messagesContainer.querySelector('[style*="opacity"]');
+            const placeholder = messagesContainer.querySelector('.team-msg-placeholder');
             if (placeholder) placeholder.remove();
 
             // Build question card

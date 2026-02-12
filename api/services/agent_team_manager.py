@@ -1264,26 +1264,33 @@ class AgentTeamManager:
                 sender="user",
                 recipient=team_lead.name or "team-lead",
                 content=(
-                    f"You are the team lead. Here is the user's request:\n\n"
+                    f"You are the team lead orchestrating a team of worker agents. "
+                    f"Here is the user's request:\n\n"
                     f"{team.user_request}\n\n"
                     f"{'Additional context: ' + team.shared_context if team.shared_context else ''}\n\n"
-                    f"IMPORTANT: First judge the complexity of this request.\n"
-                    f"- If the task is simple or you can handle it yourself with the available tools, "
-                    f"just do it directly. Do NOT create tasks or delegate to workers for simple requests.\n"
-                    f"- Only create tasks and delegate to worker agents when the work genuinely requires "
-                    f"parallel effort (e.g., multiple independent research threads, exploring different "
-                    f"parts of a codebase simultaneously, tasks requiring different expertise).\n"
-                    f"- If you are uncertain about the approach, scope, or what the user wants, "
-                    f"use the ask_user tool to ask for clarification BEFORE starting work.\n\n"
-                    f"You have full access to all tools (file read/write, web search, code execution, etc.). "
-                    f"Use them directly to fulfill the request when possible.\n"
-                    f"When done, provide the final answer to the user."
+                    f"YOUR ROLE: Decompose the request into tasks and delegate them to worker agents. "
+                    f"Use task_create to create tasks, then workers will pick them up automatically.\n\n"
+                    f"GUIDELINES:\n"
+                    f"- If the user explicitly mentions workers, roles, or team members, "
+                    f"always create separate tasks and delegate to workers.\n"
+                    f"- For complex requests with multiple independent parts, create tasks for parallel work.\n"
+                    f"- For truly simple single-step requests (e.g., 'what time is it'), "
+                    f"you may handle it directly without delegation.\n"
+                    f"- If you are uncertain about the approach or what the user wants, "
+                    f"use the ask_user tool to ask for clarification BEFORE starting work.\n"
+                    f"- Coordinate between workers by relaying information when needed.\n\n"
+                    f"You have access to all tools. Use send_message to communicate with workers. "
+                    f"When all tasks are done, synthesize the final answer for the user.\n\n"
+                    f"IMPORTANT: Do NOT use emojis in any output or messages."
                 ),
                 summary="Initial user request",
             )
 
             # Shared SSE event queue — agent loops push events here
             event_queue: asyncio.Queue = asyncio.Queue(maxsize=settings.team_event_queue_max)
+
+            # Track spawned worker names to avoid duplicates
+            spawned_workers: set = set()
 
             # Start the team lead loop
             agent_tasks: List[asyncio.Task] = []
@@ -1377,6 +1384,80 @@ class AgentTeamManager:
                     if sse_event is None:
                         break
                     yield sse_event
+
+                # Auto-spawn worker agents for new pending tasks
+                for task in list(task_mgr._tasks.values()):
+                    if task.status != "pending":
+                        continue
+                    # Determine worker name from task owner or generate one
+                    worker_name = task.owner or f"worker-{task.task_id}"
+                    if worker_name in spawned_workers or worker_name == "team-lead":
+                        continue
+
+                    # Create a worker agent
+                    worker_role = AgentRole(
+                        name="worker",
+                        system_prompt=(
+                            f"You are a worker agent. Complete the task assigned to you thoroughly.\n"
+                            f"When done, use task_update to mark your task as completed.\n"
+                            f"If you need clarification from the user, use ask_user.\n"
+                            f"Do NOT use emojis in any output or messages."
+                        ),
+                        model=team_lead.role.model,
+                        purpose=task.title,
+                    )
+                    worker_agent = TeamAgent(
+                        name=worker_name,
+                        role=worker_role,
+                    )
+                    team.agents.append(worker_agent)
+                    spawned_workers.add(worker_name)
+
+                    # Register mailbox and send initial task message
+                    worker_mailbox = bus.register_agent(worker_name)
+                    worker_initial = AgentMessage(
+                        type="message",
+                        sender="team-lead",
+                        recipient=worker_name,
+                        content=(
+                            f"You are assigned the following task:\n\n"
+                            f"**Task #{task.task_id}**: {task.title}\n"
+                            f"{task.description}\n\n"
+                            f"Please complete this task. When done, call task_update "
+                            f"with task_id='{task.task_id}' and status='completed'.\n"
+                            f"If you need to ask the user anything, use ask_user."
+                        ),
+                        summary=f"Task assignment: {task.title[:40]}",
+                    )
+
+                    # Claim the task
+                    await task_mgr.update_task(task.task_id, status="in_progress", owner=worker_name)
+
+                    # Start worker loop
+                    worker_task = asyncio.create_task(
+                        run_agent_loop(
+                            team=team,
+                            agent=worker_agent,
+                            mailbox=worker_mailbox,
+                            bedrock=self.bedrock,
+                            message_bus=bus,
+                            task_manager=task_mgr,
+                            event_queue=event_queue,
+                            initial_message=worker_initial,
+                        )
+                    )
+                    agent_tasks.append(worker_task)
+                    self._register_tasks(team_id, agent_tasks)
+
+                    # Emit SSE so frontend shows the worker card
+                    yield SSEEventBuilder.team_agent_start(
+                        team_id=team_id,
+                        agent_id=worker_agent.agent_id,
+                        role="worker",
+                        task_title=task.title,
+                    )
+
+                    logger.info(f"Auto-spawned worker '{worker_name}' for task '{task.title}'")
 
                 # Yield heartbeat every ~10 iterations (~15s) to keep SSE alive
                 heartbeat_counter += 1
