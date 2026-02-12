@@ -105,6 +105,31 @@ async def execute_team(team_id: str, http_request: Request, request: TeamExecute
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 
+@router.get("/teams/{team_id}/events")
+async def stream_team_events(team_id: str, http_request: Request):
+    """
+    Reconnect-safe SSE event stream for an already-executing team.
+    Use this instead of re-POSTing /execute when reconnecting.
+    """
+    try:
+        manager = get_team_manager()
+        team = manager.get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
+
+        async def event_stream() -> AsyncGenerator[str, None]:
+            async for event in manager.stream_team_events(team_id):
+                yield event
+
+        return create_sse_response(event_stream(), http_request)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to stream team events: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
 @router.get("/teams/{team_id}")
 async def get_team(team_id: str):
     """Get team status and details"""

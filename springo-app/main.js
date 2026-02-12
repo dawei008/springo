@@ -118,23 +118,27 @@ if (DEBUG_PORT) {
 
 let mainWindow;
 let serverProcess = null;
+let serverRestartCount = 0;
 
 // Prevent multiple instances of the Electron app
-const gotTheLock = app.requestSingleInstanceLock();
-if (!gotTheLock) {
-    console.log('Another instance is already running — quitting.');
-    app.quit();
-} else {
-    app.on('second-instance', () => {
-        // Focus or recreate window when a second instance is attempted
-        if (mainWindow) {
-            if (mainWindow.isMinimized()) mainWindow.restore();
-            mainWindow.show();
-            mainWindow.focus();
-        } else {
-            createWindow();
-        }
-    });
+// Uses requestSingleInstanceLock only in packaged builds —
+// in dev mode, force-kills leave stale lock files.
+if (app.isPackaged) {
+    const gotTheLock = app.requestSingleInstanceLock();
+    if (!gotTheLock) {
+        console.log('Another instance is already running — quitting.');
+        app.quit();
+    } else {
+        app.on('second-instance', () => {
+            if (mainWindow) {
+                if (mainWindow.isMinimized()) mainWindow.restore();
+                mainWindow.show();
+                mainWindow.focus();
+            } else {
+                createWindow();
+            }
+        });
+    }
 }
 
 // 服务器配置 - FastAPI on port 8081
@@ -323,6 +327,38 @@ function startServer() {
                     console.error(`Server Error: ${data}`);
                 });
 
+                // Auto-restart on unexpected crash
+                serverProcess.on('exit', (code, signal) => {
+                    if (code !== null && code !== 0 && !app.isQuitting) {
+                        console.error(`Server crashed with code ${code} (signal: ${signal}), attempting restart...`);
+                        serverProcess = null;
+                        serverRestartCount = (serverRestartCount || 0) + 1;
+                        if (serverRestartCount <= 3) {
+                            const delay = 2000 * serverRestartCount;
+                            console.log(`Restarting server in ${delay}ms (attempt ${serverRestartCount}/3)...`);
+                            setTimeout(() => {
+                                startServer()
+                                    .then(() => {
+                                        console.log('Server restarted successfully');
+                                        serverRestartCount = 0;
+                                        if (mainWindow) {
+                                            mainWindow.webContents.send('server-restarted');
+                                        }
+                                    })
+                                    .catch(err => console.error('Server restart failed:', err));
+                            }, delay);
+                        } else {
+                            console.error('Server restart limit reached (3 attempts)');
+                            if (mainWindow) {
+                                mainWindow.webContents.send('server-crash', {
+                                    code, signal,
+                                    message: 'Server crashed and could not be restarted after 3 attempts.'
+                                });
+                            }
+                        }
+                    }
+                });
+
                 // 等待服务器启动
                 let attempts = 0;
                 const checkServer = setInterval(() => {
@@ -349,6 +385,7 @@ function startServer() {
 }
 
 function stopServer() {
+    app.isQuitting = true;
     if (serverProcess) {
         serverProcess.kill();
         serverProcess = null;
@@ -451,11 +488,14 @@ app.whenReady().then(async () => {
     createWindow();
 
     app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) {
-            createWindow();
-        } else if (mainWindow) {
+        console.log('[activate] fired. mainWindow=', !!mainWindow, 'destroyed=', mainWindow?.isDestroyed(), 'windows=', BrowserWindow.getAllWindows().length);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
             mainWindow.show();
             mainWindow.focus();
+        } else {
+            console.log('[activate] creating new window');
+            createWindow();
         }
     });
 });

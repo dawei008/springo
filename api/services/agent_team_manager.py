@@ -194,6 +194,11 @@ class AgentTeamManager:
         for tid in to_remove:
             del self._teams[tid]
             self._running_tasks.pop(tid, None)
+            # Also clean up orphaned message bus and task manager
+            from .message_bus import remove_bus
+            from .team_task_manager import remove_task_manager
+            remove_bus(tid)
+            remove_task_manager(tid)
         if to_remove:
             logger.info(f"Cleaned up {len(to_remove)} completed teams")
         return len(to_remove)
@@ -263,6 +268,18 @@ class AgentTeamManager:
         team = self._teams.get(team_id)
         if not team:
             yield SSEEventBuilder.team_error(team_id, "Team not found")
+            yield SSEEventBuilder.done()
+            return
+
+        # Guard against double-execution (e.g., frontend reconnect re-POSTing)
+        if team.status in ("planning", "executing", "synthesizing"):
+            logger.warning(
+                f"[Team:{team_id}] execute_team called while already {team.status}, "
+                f"rejecting duplicate execution"
+            )
+            yield SSEEventBuilder.team_error(
+                team_id, f"Team is already {team.status}. Use GET /events to reconnect."
+            )
             yield SSEEventBuilder.done()
             return
 
@@ -1418,6 +1435,62 @@ class AgentTeamManager:
             remove_bus(team_id)
             remove_task_manager(team_id)
 
+    async def stream_team_events(
+        self, team_id: str
+    ) -> AsyncGenerator[str, None]:
+        """Reconnect-safe SSE stream for an already-executing team.
+
+        Drains the message bus SSE queue (collaborative) or the classic event
+        queue.  Yields heartbeats to keep the connection alive and terminates
+        when the team reaches a terminal status.
+        """
+        team = self._teams.get(team_id)
+        if not team:
+            yield SSEEventBuilder.team_error(team_id, "Team not found")
+            yield SSEEventBuilder.done()
+            return
+
+        from .message_bus import get_bus
+        bus = get_bus(team_id)
+
+        # Yield current status snapshot so the reconnecting client catches up
+        agent_info = [
+            {
+                "agent_id": a.agent_id,
+                "name": getattr(a, "name", ""),
+                "role": a.role.name,
+                "purpose": a.role.purpose,
+                "status": a.status,
+            }
+            for a in team.agents
+        ]
+        yield SSEEventBuilder.team_spawned(team.team_id, agent_info, team.user_request)
+
+        while True:
+            # Check if team has reached terminal state
+            if team.status in ("complete", "error"):
+                if team.status == "complete":
+                    yield SSEEventBuilder.team_complete(
+                        team.team_id, team.final_result or "", team.total_tokens
+                    )
+                else:
+                    yield SSEEventBuilder.team_error(
+                        team.team_id, team.final_result or "Team error"
+                    )
+                yield SSEEventBuilder.done()
+                return
+
+            # Drain message bus SSE events (collaborative mode)
+            if bus:
+                sse_event = await bus.get_sse_event(timeout=1.0)
+                if sse_event:
+                    yield sse_event
+                    continue  # Drain quickly
+
+            # Heartbeat to keep connection alive
+            yield SSEEventBuilder.heartbeat(0)
+            await asyncio.sleep(2.0)
+
     def get_message_bus(self, team_id: str):
         """Get the message bus for a collaborative team."""
         from .message_bus import get_bus
@@ -1449,13 +1522,31 @@ def get_team_manager() -> AgentTeamManager:
     global _team_manager
     if _team_manager is None:
         _team_manager = AgentTeamManager()
-        # Start periodic cleanup in the background
-        try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                _team_manager._cleanup_task = loop.create_task(
-                    _periodic_team_cleanup(_team_manager)
-                )
-        except RuntimeError:
-            pass  # No event loop yet; cleanup will start on first use
     return _team_manager
+
+
+async def init_team_manager():
+    """Initialize the team manager and start periodic cleanup.
+
+    Call this from the FastAPI lifespan to guarantee the cleanup task runs.
+    """
+    manager = get_team_manager()
+    if manager._cleanup_task is None:
+        manager._cleanup_task = asyncio.create_task(
+            _periodic_team_cleanup(manager)
+        )
+        logger.info("Team manager initialized with periodic cleanup task")
+    return manager
+
+
+async def shutdown_team_manager():
+    """Cancel the cleanup task and clean up active teams."""
+    global _team_manager
+    if _team_manager and _team_manager._cleanup_task:
+        _team_manager._cleanup_task.cancel()
+        try:
+            await _team_manager._cleanup_task
+        except asyncio.CancelledError:
+            pass
+        _team_manager._cleanup_task = None
+    logger.info("Team manager shut down")

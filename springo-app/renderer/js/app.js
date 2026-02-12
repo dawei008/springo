@@ -3696,6 +3696,10 @@
                     }
                 }
                 outputEl.textContent += delta;
+                // Cap output to prevent unbounded DOM text growth
+                if (outputEl.textContent.length > 50000) {
+                    outputEl.textContent = '...[truncated]\n' + outputEl.textContent.slice(-25000);
+                }
                 outputEl.scrollTop = outputEl.scrollHeight;
             }
 
@@ -3740,6 +3744,10 @@
                     outputEl.textContent += ` error`;
                 }
                 outputEl.textContent += '\n';
+            }
+            // Cap output to prevent unbounded DOM text growth
+            if (outputEl.textContent.length > 50000) {
+                outputEl.textContent = '...[truncated]\n' + outputEl.textContent.slice(-25000);
             }
             outputEl.scrollTop = outputEl.scrollHeight;
         }
@@ -10621,17 +10629,30 @@ ${content || 'Task completed successfully.'}
                 const teamId = spawnData.team_id;
 
                 // Step 2: Execute team with SSE streaming (with reconnection)
-                // Unlimited retries with exponential backoff (cap 30s) for multi-day runs
+                // First call POSTs /execute. Reconnects use GET /events (safe, no double-execution).
                 let reconnectCount = 0;
                 let streamDone = false;
                 let synthesisText = '';
+                let hasExecuted = false;
+                teamAbortController = new AbortController();
 
                 while (!streamDone) {
-                const execRes = await fetch(BASE_URL + '/v1/teams/' + teamId + '/execute', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ stream: true })
-                });
+                let execRes;
+                if (!hasExecuted) {
+                    // First call: POST /execute to start the team
+                    execRes = await fetch(BASE_URL + '/v1/teams/' + teamId + '/execute', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ stream: true }),
+                        signal: teamAbortController.signal
+                    });
+                    hasExecuted = true;
+                } else {
+                    // Reconnect: GET /events (doesn't re-execute the team)
+                    execRes = await fetch(BASE_URL + '/v1/teams/' + teamId + '/events', {
+                        signal: teamAbortController.signal
+                    });
+                }
 
                 if (!execRes.ok) {
                     reconnectCount++;
@@ -10796,22 +10817,29 @@ ${content || 'Task completed successfully.'}
                 updateStatus('completed');
 
             } catch (e) {
-                console.error('Team execution error:', e);
-                // Save error as assistant message so user sees it
-                const errorMsg = `**Team Error:** ${e.message || 'Unknown error'}`;
-                runtime.messages.push({
-                    role: 'assistant',
-                    content: errorMsg,
-                    timestamp: Date.now(),
-                    _teamMode: true
-                });
-                if (currentConversationId === thisConvId) {
-                    renderMessages();
+                // Abort errors are expected when user clicks Stop — don't treat as error
+                if (e.name === 'AbortError') {
+                    console.log('Team execution aborted by user');
+                    // stopTeamExecution already handled UI cleanup
+                } else {
+                    console.error('Team execution error:', e);
+                    // Save error as assistant message so user sees it
+                    const errorMsg = `**Team Error:** ${e.message || 'Unknown error'}`;
+                    runtime.messages.push({
+                        role: 'assistant',
+                        content: errorMsg,
+                        timestamp: Date.now(),
+                        _teamMode: true
+                    });
+                    if (currentConversationId === thisConvId) {
+                        renderMessages();
+                    }
+                    updateConversationStatus(thisConvId, 'error');
+                    updateStatus('error', e.message);
                 }
-                updateConversationStatus(thisConvId, 'error');
-                updateStatus('error', e.message);
             } finally {
                 runtime.isStreaming = false;
+                teamAbortController = null;
                 updateSendButtonState();
                 saveConversation(thisConvId);
             }
@@ -11417,6 +11445,7 @@ ${content || 'Task completed successfully.'}
         }
 
         let activeTeamSplitId = null;
+        let teamAbortController = null;
 
         function initTeamSplitPanel(teamId, agents, userRequest) {
             activeTeamSplitId = teamId;
@@ -11530,8 +11559,15 @@ ${content || 'Task completed successfully.'}
             badge.textContent = text || status;
             badge.className = `team-split-status-badge ${status}`;
 
-            // Disable message input when team is complete or errored
-            if (status === 'complete' || status === 'error') {
+            // Show stop button while team is active, hide when finished
+            const stopBtn = document.getElementById('team-stop-btn');
+            if (stopBtn) {
+                const activeStatuses = ['planning', 'executing', 'synthesizing'];
+                stopBtn.style.display = activeStatuses.includes(status) ? '' : 'none';
+            }
+
+            // Disable message input when team is complete, errored, or stopped
+            if (status === 'complete' || status === 'error' || status === 'stopped') {
                 const msgInput = document.getElementById('team-msg-input');
                 const msgSend = document.getElementById('team-msg-send');
                 if (msgInput) {
@@ -11649,13 +11685,16 @@ ${content || 'Task completed successfully.'}
 
         function resetTeamSplitPanel() {
             activeTeamSplitId = null;
+            teamAbortController = null;
             const placeholder = document.getElementById('team-split-placeholder');
             const content = document.getElementById('team-split-content');
             const agentsContainer = document.getElementById('team-split-agents');
+            const stopBtn = document.getElementById('team-stop-btn');
 
             if (placeholder) placeholder.style.display = '';
             if (content) content.style.display = 'none';
             if (agentsContainer) agentsContainer.innerHTML = '';
+            if (stopBtn) stopBtn.style.display = 'none';
 
             // Clean up collaborative mode elements
             const messagesSection = document.getElementById('team-split-messages-section');
@@ -11665,6 +11704,37 @@ ${content || 'Task completed successfully.'}
             const inputEl = document.getElementById('team-split-input');
             if (inputEl) inputEl.remove();
         }
+
+        window.stopTeamExecution = async function() {
+            const teamId = activeTeamSplitId;
+            if (!teamId) return;
+
+            // 1. Abort the SSE stream
+            if (teamAbortController) {
+                teamAbortController.abort();
+                teamAbortController = null;
+            }
+
+            // 2. Tell backend to shut down the team (best-effort)
+            try {
+                await fetch(BASE_URL + '/v1/teams/' + teamId + '/shutdown', { method: 'POST' });
+            } catch (e) {
+                // ignore — stream is already aborted
+            }
+
+            // 3. Update UI
+            updateTeamSplitStatus(teamId, 'stopped', 'Stopped');
+
+            // 4. Reset streaming state so user can continue chatting
+            const runtime = getConvRuntime(currentConversationId);
+            if (runtime) {
+                runtime.isStreaming = false;
+            }
+            updateConversationStatus(currentConversationId, 'completed');
+            updateStatus('completed');
+            updateSendButtonState();
+            saveConversation(currentConversationId);
+        };
 
         // === Collaborative Team UI Functions ===
 

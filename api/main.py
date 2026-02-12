@@ -6,16 +6,33 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
+import os
+from logging.handlers import RotatingFileHandler
 
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import settings
 
-# Configure logging
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# Configure logging with rotation to prevent unbounded log growth
+_log_level = logging.DEBUG if settings.debug else logging.INFO
+_log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# Console handler: INFO even in debug mode (keeps terminal readable)
+logging.basicConfig(level=logging.INFO, format=_log_format)
+
+# File handler: full debug logs with rotation
+_log_dir = os.path.expanduser("~/.springo/logs")
+os.makedirs(_log_dir, exist_ok=True)
+_file_handler = RotatingFileHandler(
+    os.path.join(_log_dir, "server.log"),
+    maxBytes=50 * 1024 * 1024,  # 50 MB
+    backupCount=3,
+    encoding="utf-8",
 )
+_file_handler.setLevel(_log_level)
+_file_handler.setFormatter(logging.Formatter(_log_format))
+logging.getLogger().addHandler(_file_handler)
+
 logger = logging.getLogger(__name__)
 
 
@@ -69,6 +86,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"S3 sync not started: {e}")
 
+    # Initialize Team Manager with periodic cleanup
+    try:
+        from .services.agent_team_manager import init_team_manager
+        await init_team_manager()
+    except Exception as e:
+        logger.warning(f"Failed to initialize Team Manager: {e}")
+
     yield
 
     # Shutdown
@@ -93,6 +117,11 @@ async def lifespan(app: FastAPI):
         shutdown_s3_sync()
     except Exception as e:
         logger.warning(f"Error closing S3 sync: {e}")
+    try:
+        from .services.agent_team_manager import shutdown_team_manager
+        await shutdown_team_manager()
+    except Exception as e:
+        logger.warning(f"Error closing Team Manager: {e}")
 
 
 # Create FastAPI application
