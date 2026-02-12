@@ -11639,7 +11639,7 @@ ${content || 'Task completed successfully.'}
             }
         }
 
-        function sendTeamMessage(teamId, content) {
+        function sendTeamPanelMessage(teamId, content) {
             if (!teamId || !content) return;
             fetch(`${CONFIG.API_URL}/v1/teams/${teamId}/message`, {
                 method: 'POST',
@@ -11665,7 +11665,7 @@ ${content || 'Task completed successfully.'}
             function doSend() {
                 const text = input.value.trim();
                 if (!text) return;
-                sendTeamMessage(teamId, text);
+                sendTeamPanelMessage(teamId, text);
                 input.value = '';
             }
 

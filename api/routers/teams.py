@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from ..models.teams import TeamSpawnRequest, TeamExecuteRequest
 from ..services.agent_team_manager import get_team_manager
@@ -30,9 +31,11 @@ async def spawn_team(request: TeamSpawnRequest):
         return JSONResponse(content={
             "team_id": team.team_id,
             "status": team.status,
+            "execution_mode": team.execution_mode,
             "agents": [
                 {
                     "agent_id": a.agent_id,
+                    "name": a.name,
                     "role": a.role.name,
                     "purpose": a.role.purpose,
                     "model": a.role.model,
@@ -163,4 +166,131 @@ async def get_task_board(team_id: str):
             }
             for t in team.task_board
         ],
+    })
+
+
+# === Collaborative Mode Endpoints ===
+
+
+class TeamMessageRequest(BaseModel):
+    """Send a message to an agent in a collaborative team."""
+    content: str = Field(..., description="Message content")
+    recipient: str = Field(default="team-lead", description="Agent name to send to")
+
+
+@router.post("/teams/{team_id}/message")
+async def send_team_message(team_id: str, request: TeamMessageRequest):
+    """
+    Send a message from the user to an agent in a collaborative team.
+    Typically used to communicate with the team lead.
+    """
+    try:
+        manager = get_team_manager()
+        team = manager.get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
+
+        if team.execution_mode != "collaborative":
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Message endpoint only available for collaborative teams"},
+            )
+
+        bus = manager.get_message_bus(team_id)
+        if not bus:
+            raise HTTPException(status_code=400, detail={"error": "Team message bus not active"})
+
+        from ..services.message_bus import AgentMessage
+        msg = AgentMessage(
+            type="message",
+            sender="user",
+            recipient=request.recipient,
+            content=request.content,
+            summary=request.content[:50],
+        )
+        await bus.send_message(msg)
+
+        return JSONResponse(content={
+            "status": "sent",
+            "message_id": msg.message_id,
+            "recipient": request.recipient,
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to send team message: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/teams/{team_id}/shutdown")
+async def shutdown_team(team_id: str):
+    """
+    Gracefully shut down a collaborative team.
+    Sends shutdown requests to all active agents.
+    """
+    try:
+        manager = get_team_manager()
+        team = manager.get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
+
+        if team.execution_mode != "collaborative":
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Shutdown endpoint only available for collaborative teams"},
+            )
+
+        bus = manager.get_message_bus(team_id)
+        if not bus:
+            return JSONResponse(content={"status": "already_stopped", "team_id": team_id})
+
+        from ..services.message_bus import AgentMessage
+        for agent in team.agents:
+            agent_name = agent.name or agent.agent_id
+            msg = AgentMessage(
+                type="shutdown_request",
+                sender="user",
+                recipient=agent_name,
+                content="User requested team shutdown",
+                summary="Shutdown request",
+            )
+            await bus.send_message(msg)
+
+        return JSONResponse(content={
+            "status": "shutdown_requested",
+            "team_id": team_id,
+            "agents_notified": [a.name or a.agent_id for a in team.agents],
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to shut down team: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.get("/teams/{team_id}/messages")
+async def get_team_messages(team_id: str):
+    """
+    Get the full message history for a collaborative team.
+    """
+    manager = get_team_manager()
+    team = manager.get_team(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
+
+    if team.execution_mode != "collaborative":
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Messages endpoint only available for collaborative teams"},
+        )
+
+    bus = manager.get_message_bus(team_id)
+    if not bus:
+        return JSONResponse(content={"team_id": team_id, "messages": []})
+
+    return JSONResponse(content={
+        "team_id": team_id,
+        "messages": bus.get_message_history(),
     })

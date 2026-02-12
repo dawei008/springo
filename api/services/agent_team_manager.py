@@ -91,18 +91,32 @@ class AgentTeamManager:
 
     def spawn_team(self, request: TeamSpawnRequest) -> Team:
         """Create a new team based on the user request"""
+        mode = getattr(request, "mode", "classic")
         team = Team(
             user_request=request.user_request,
             shared_context=request.context or "",
+            execution_mode=mode,
         )
 
-        # Always add an orchestrator
+        # Always add an orchestrator / team lead
         orchestrator_role = ROLE_CONFIGS["orchestrator"].model_copy()
         orchestrator_role.model = request.model
-        team.agents.append(TeamAgent(role=orchestrator_role))
+        team.agents.append(TeamAgent(
+            role=orchestrator_role,
+            name="team-lead" if mode == "collaborative" else "",
+        ))
 
         self._teams[team.team_id] = team
-        logger.info(f"Team spawned: {team.team_id} for request: {request.user_request[:80]}")
+
+        # For collaborative mode, set up message bus and task manager
+        if mode == "collaborative":
+            from .message_bus import get_or_create_bus
+            from .team_task_manager import get_or_create_task_manager
+            bus = get_or_create_bus(team.team_id)
+            bus.register_agent("team-lead")
+            get_or_create_task_manager(team.team_id, bus)
+
+        logger.info(f"Team spawned: {team.team_id} mode={mode} for request: {request.user_request[:80]}")
         return team
 
     async def execute_team(
@@ -110,15 +124,26 @@ class AgentTeamManager:
         team_id: str,
     ) -> AsyncGenerator[str, None]:
         """
-        Execute the team workflow via SSE streaming with real-time deltas:
-        1. Orchestrator dynamically decomposes the task (1-6 agents)
-        2. Launch ALL worker agents simultaneously (no artificial cap)
-        3. Orchestrator synthesizes results with streaming
+        Execute the team workflow via SSE streaming with real-time deltas.
+
+        For classic mode:
+          1. Orchestrator dynamically decomposes the task (1-6 agents)
+          2. Launch ALL worker agents simultaneously (no artificial cap)
+          3. Orchestrator synthesizes results with streaming
+
+        For collaborative mode:
+          Long-lived agents with message passing and shared task board.
         """
         team = self._teams.get(team_id)
         if not team:
             yield SSEEventBuilder.team_error(team_id, "Team not found")
             yield SSEEventBuilder.done()
+            return
+
+        # Branch on execution mode
+        if team.execution_mode == "collaborative":
+            async for event in self.execute_team_collaborative(team_id):
+                yield event
             return
 
         try:
@@ -969,6 +994,187 @@ class AgentTeamManager:
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
             return f"[Synthesis failed: {e}]\n\nRaw findings:\n{findings_text}"
+
+    # ================================================================
+    # Collaborative Mode - Long-lived agents with message passing
+    # ================================================================
+
+    async def execute_team_collaborative(
+        self,
+        team_id: str,
+    ) -> AsyncGenerator[str, None]:
+        """Execute a collaborative team with long-lived agent loops.
+
+        The team lead agent runs as a persistent loop, receiving messages,
+        calling tools (including team communication tools), and coordinating
+        worker agents. Worker agents can communicate with each other and
+        the team lead via the message bus.
+
+        SSE events are streamed in real-time from the message bus and
+        individual agent loops.
+        """
+        from .message_bus import get_bus
+        from .team_task_manager import get_task_manager as get_tm
+        from .agent_loop import run_agent_loop
+
+        team = self._teams.get(team_id)
+        if not team:
+            yield SSEEventBuilder.team_error(team_id, "Team not found")
+            yield SSEEventBuilder.done()
+            return
+
+        bus = get_bus(team_id)
+        task_mgr = get_tm(team_id)
+        if not bus or not task_mgr:
+            yield SSEEventBuilder.team_error(team_id, "Message bus or task manager not initialized")
+            yield SSEEventBuilder.done()
+            return
+
+        try:
+            # Emit team spawned
+            agent_info = [
+                {
+                    "agent_id": a.agent_id,
+                    "name": a.name,
+                    "role": a.role.name,
+                    "purpose": a.role.purpose,
+                }
+                for a in team.agents
+            ]
+            yield SSEEventBuilder.team_spawned(team.team_id, agent_info, team.user_request)
+
+            team.status = "executing"
+            team_lead = team.agents[0]
+            lead_mailbox = bus.get_mailbox(team_lead.name or "team-lead")
+
+            if not lead_mailbox:
+                lead_mailbox = bus.register_agent(team_lead.name or "team-lead")
+
+            # Create initial message for the team lead
+            from .message_bus import AgentMessage
+            initial_msg = AgentMessage(
+                type="message",
+                sender="user",
+                recipient=team_lead.name or "team-lead",
+                content=(
+                    f"You are the team lead. Here is the user's request:\n\n"
+                    f"{team.user_request}\n\n"
+                    f"{'Additional context: ' + team.shared_context if team.shared_context else ''}\n\n"
+                    f"Plan the work, create tasks on the task board, and coordinate "
+                    f"with your team. You can spawn worker agents by calling send_message "
+                    f"to 'system' with type 'spawn_agent' if needed, or work on tasks yourself.\n"
+                    f"When all tasks are complete, summarize the results."
+                ),
+                summary="Initial user request",
+            )
+
+            # Shared SSE event queue — agent loops push events here
+            event_queue: asyncio.Queue = asyncio.Queue()
+
+            # Start the team lead loop
+            agent_tasks: List[asyncio.Task] = []
+            lead_task = asyncio.create_task(
+                run_agent_loop(
+                    team=team,
+                    agent=team_lead,
+                    mailbox=lead_mailbox,
+                    bedrock=self.bedrock,
+                    message_bus=bus,
+                    task_manager=task_mgr,
+                    event_queue=event_queue,
+                    initial_message=initial_msg,
+                )
+            )
+            agent_tasks.append(lead_task)
+
+            # Drain events from both the message bus SSE queue and the agent event queue
+            shutdown_requested = False
+            max_drain_iterations = 2000  # Safety limit
+
+            for _ in range(max_drain_iterations):
+                if shutdown_requested:
+                    break
+
+                # Check if all agent tasks are done
+                all_done = all(t.done() for t in agent_tasks)
+                if all_done:
+                    # Drain remaining events
+                    while not event_queue.empty():
+                        event = event_queue.get_nowait()
+                        if isinstance(event, str):
+                            yield event
+                    while True:
+                        sse_event = await bus.get_sse_event(timeout=0.5)
+                        if sse_event is None:
+                            break
+                        yield sse_event
+                    break
+
+                # Drain agent event queue
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                    if isinstance(event, str):
+                        yield event
+                    elif isinstance(event, dict):
+                        # Internal sentinel events
+                        if event.get("__shutdown__"):
+                            shutdown_requested = True
+                except asyncio.TimeoutError:
+                    pass
+
+                # Drain message bus SSE queue
+                sse_event = await bus.get_sse_event(timeout=0.5)
+                if sse_event:
+                    yield sse_event
+
+                # Yield heartbeat periodically
+                yield SSEEventBuilder.heartbeat(0.0)
+
+            # Cleanup
+            for t in agent_tasks:
+                if not t.done():
+                    t.cancel()
+                    try:
+                        await asyncio.wait_for(t, timeout=5.0)
+                    except (asyncio.TimeoutError, asyncio.CancelledError):
+                        pass
+
+            # Final result from team lead
+            team.status = "complete"
+            team.final_result = team_lead.findings or ""
+            team.completed_at = datetime.now().isoformat()
+
+            # Calculate total tokens
+            for agent in team.agents:
+                team.total_tokens["input_tokens"] += agent.token_usage.get("input_tokens", 0)
+                team.total_tokens["output_tokens"] += agent.token_usage.get("output_tokens", 0)
+
+            yield SSEEventBuilder.team_complete(
+                team.team_id, team.final_result, team.total_tokens
+            )
+            yield SSEEventBuilder.done()
+
+        except Exception as e:
+            logger.error(f"Collaborative team execution error: {e}", exc_info=True)
+            team.status = "error"
+            yield SSEEventBuilder.team_error(team.team_id, str(e))
+            yield SSEEventBuilder.done()
+        finally:
+            # Clean up message bus and task manager
+            from .message_bus import remove_bus
+            from .team_task_manager import remove_task_manager
+            remove_bus(team_id)
+            remove_task_manager(team_id)
+
+    def get_message_bus(self, team_id: str):
+        """Get the message bus for a collaborative team."""
+        from .message_bus import get_bus
+        return get_bus(team_id)
+
+    def get_task_manager_for_team(self, team_id: str):
+        """Get the task manager for a collaborative team."""
+        from .team_task_manager import get_task_manager as get_tm
+        return get_tm(team_id)
 
 
 # Singleton

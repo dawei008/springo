@@ -462,6 +462,108 @@ class SSEEventBuilder:
             'timestamp': datetime.now().isoformat(),
         })
 
+    # === Collaborative Team SSE Events ===
+
+    @staticmethod
+    def team_agent_message(
+        team_id: str, sender: str, recipient: str,
+        content: str, summary: str = "", message_id: str = "",
+    ) -> str:
+        """Direct message sent between agents"""
+        return format_sse_event('team_agent_message', {
+            'type': 'team_agent_message',
+            'team_id': team_id,
+            'sender': sender,
+            'recipient': recipient,
+            'content': content,
+            'summary': summary,
+            'message_id': message_id,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_broadcast(
+        team_id: str, sender: str,
+        content: str, summary: str = "", message_id: str = "",
+    ) -> str:
+        """Broadcast message sent to all agents"""
+        return format_sse_event('team_agent_broadcast', {
+            'type': 'team_agent_broadcast',
+            'team_id': team_id,
+            'sender': sender,
+            'content': content,
+            'summary': summary,
+            'message_id': message_id,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_idle(team_id: str, agent_name: str) -> str:
+        """Agent went idle (waiting for input)"""
+        return format_sse_event('team_agent_idle', {
+            'type': 'team_agent_idle',
+            'team_id': team_id,
+            'agent_name': agent_name,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_agent_shutdown(team_id: str, agent_name: str) -> str:
+        """Agent shut down"""
+        return format_sse_event('team_agent_shutdown', {
+            'type': 'team_agent_shutdown',
+            'team_id': team_id,
+            'agent_name': agent_name,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_task_created(
+        team_id: str, task_id: str, title: str,
+        description: str = "", owner: Optional[str] = None,
+    ) -> str:
+        """New task created on the shared task board"""
+        return format_sse_event('team_task_created', {
+            'type': 'team_task_created',
+            'team_id': team_id,
+            'task_id': task_id,
+            'title': title,
+            'description': description,
+            'owner': owner,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_task_updated(
+        team_id: str, task_id: str, status: str,
+        owner: Optional[str] = None, title: str = "",
+    ) -> str:
+        """Task updated on the shared task board"""
+        return format_sse_event('team_task_updated', {
+            'type': 'team_task_updated',
+            'team_id': team_id,
+            'task_id': task_id,
+            'status': status,
+            'owner': owner,
+            'title': title,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def team_task_unblocked(
+        team_id: str, task_id: str, title: str,
+        owner: Optional[str] = None,
+    ) -> str:
+        """Task became unblocked (all dependencies resolved)"""
+        return format_sse_event('team_task_unblocked', {
+            'type': 'team_task_unblocked',
+            'team_id': team_id,
+            'task_id': task_id,
+            'title': title,
+            'owner': owner,
+            'timestamp': datetime.now().isoformat(),
+        })
+
     @staticmethod
     def done() -> str:
         """构建完成标记"""

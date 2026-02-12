@@ -4,7 +4,7 @@ Springo Agent Teams Models
 """
 import uuid
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any, Literal
+from typing import Optional, List, Dict, Literal
 from datetime import datetime
 
 # Module-level constants for team model defaults.
@@ -25,6 +25,7 @@ class AgentRole(BaseModel):
 class TeamAgent(BaseModel):
     """团队中的单个 Agent"""
     agent_id: str = Field(default_factory=lambda: f"agent_{uuid.uuid4().hex[:8]}")
+    name: str = Field(default="", description="Human-readable agent name (e.g., 'researcher-1')")
     role: AgentRole
     custom_instructions: str = Field(default="", description="Custom instructions from orchestrator for this agent")
     status: Literal["idle", "thinking", "executing", "complete", "error"] = "idle"
@@ -46,9 +47,25 @@ class TaskBoardItem(BaseModel):
     dependencies: List[str] = Field(default_factory=list, description="Task IDs this depends on")
 
 
+class EnhancedTaskBoardItem(BaseModel):
+    """Enhanced task board item for collaborative mode with dependency tracking"""
+    task_id: str = Field(default_factory=lambda: f"task_{uuid.uuid4().hex[:8]}")
+    title: str = ""
+    description: str = ""
+    owner: Optional[str] = Field(default=None, description="Agent name who owns this task")
+    status: Literal["pending", "in_progress", "completed", "error"] = "pending"
+    active_form: str = Field(default="", description="Present continuous form shown in spinner (e.g., 'Running tests')")
+    blocks: List[str] = Field(default_factory=list, description="Task IDs that this task blocks")
+    blocked_by: List[str] = Field(default_factory=list, description="Task IDs that must complete before this one")
+    findings: str = ""
+
+
 class Team(BaseModel):
     """Agent 团队"""
     team_id: str = Field(default_factory=lambda: f"team_{uuid.uuid4().hex[:12]}")
+    execution_mode: Literal["classic", "collaborative"] = Field(
+        default="classic", description="Team execution mode"
+    )
     agents: List[TeamAgent] = Field(default_factory=list)
     task_board: List[TaskBoardItem] = Field(default_factory=list)
     status: Literal["created", "planning", "executing", "synthesizing", "complete", "error"] = "created"
@@ -65,6 +82,9 @@ class TeamSpawnRequest(BaseModel):
     user_request: str = Field(..., description="The user's request to decompose into agent tasks")
     model: str = Field(default=DEFAULT_TEAM_SMART_MODEL, description="Orchestrator model")
     context: Optional[str] = Field(default=None, description="Additional context for the team")
+    mode: Literal["classic", "collaborative"] = Field(
+        default="classic", description="Team execution mode: classic (one-shot parallel) or collaborative (long-lived agents)"
+    )
 
 
 class TeamExecuteRequest(BaseModel):

@@ -247,3 +247,246 @@ async def test_teams_spawn_validation(fastapi_client: httpx.AsyncClient):
     )
     assert response.status_code == 422, \
         f"Expected 422 for missing user_request, got {response.status_code}"
+
+
+# === Collaborative Mode E2E Tests ===
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_spawn_collaborative(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: POST /v1/teams/spawn with mode='collaborative'.
+    Verify collaborative team is created with named agents.
+    """
+    response = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={
+            "user_request": "Research the latest Python 3.13 features",
+            "mode": "collaborative",
+        },
+        timeout=30,
+    )
+
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "team_id" in data
+    assert data["status"] == "created"
+    assert data["execution_mode"] == "collaborative"
+    assert "agents" in data
+    assert len(data["agents"]) >= 1
+
+    # Team lead should have a name
+    lead = data["agents"][0]
+    assert lead["name"] == "team-lead"
+    assert lead["role"] == "orchestrator"
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_collaborative_execute(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: POST /v1/teams/{id}/execute for a collaborative team.
+    Verify the SSE stream includes collaborative events.
+
+    Note: This test requires Bedrock access and may be slow.
+    """
+    # Spawn collaborative team
+    spawn_resp = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={
+            "user_request": "What is 1+1?",
+            "mode": "collaborative",
+        },
+        timeout=30,
+    )
+    assert spawn_resp.status_code == 200
+    team_id = spawn_resp.json()["team_id"]
+
+    try:
+        async with fastapi_client.stream(
+            "POST",
+            f"/v1/teams/{team_id}/execute",
+            json={"stream": True},
+            timeout=120,
+        ) as response:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.headers.get("content-type", "")
+
+            event_types = set()
+            async for line in response.aiter_lines():
+                line = line.strip()
+                if line.startswith("event:"):
+                    event_type = line[6:].strip()
+                    event_types.add(event_type)
+
+            # Should have team_spawned at minimum
+            assert "team_spawned" in event_types, \
+                f"Missing team_spawned event. Got: {event_types}"
+
+    except httpx.ReadTimeout:
+        pytest.skip("Collaborative team execution timed out (may need Bedrock access)")
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_message_endpoint(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: POST /v1/teams/{id}/message sends a message to a collaborative team.
+    """
+    # Spawn collaborative team
+    spawn_resp = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={
+            "user_request": "Help me with testing",
+            "mode": "collaborative",
+        },
+        timeout=30,
+    )
+    assert spawn_resp.status_code == 200
+    team_id = spawn_resp.json()["team_id"]
+
+    # Send message
+    response = await fastapi_client.post(
+        f"/v1/teams/{team_id}/message",
+        json={"content": "Hello team lead", "recipient": "team-lead"},
+        timeout=30,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "sent"
+    assert "message_id" in data
+    assert data["recipient"] == "team-lead"
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_message_classic_rejected(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: POST /v1/teams/{id}/message for classic team returns 400.
+    """
+    # Spawn classic team
+    spawn_resp = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={"user_request": "Classic mode test"},
+        timeout=30,
+    )
+    assert spawn_resp.status_code == 200
+    team_id = spawn_resp.json()["team_id"]
+
+    # Try to send message — should fail
+    response = await fastapi_client.post(
+        f"/v1/teams/{team_id}/message",
+        json={"content": "Hello"},
+        timeout=10,
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_shutdown(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: POST /v1/teams/{id}/shutdown for collaborative team.
+    """
+    # Spawn collaborative team
+    spawn_resp = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={
+            "user_request": "Shutdown test",
+            "mode": "collaborative",
+        },
+        timeout=30,
+    )
+    assert spawn_resp.status_code == 200
+    team_id = spawn_resp.json()["team_id"]
+
+    # Shutdown
+    response = await fastapi_client.post(
+        f"/v1/teams/{team_id}/shutdown",
+        timeout=10,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "shutdown_requested"
+    assert "agents_notified" in data
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_shutdown_classic_rejected(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: POST /v1/teams/{id}/shutdown for classic team returns 400.
+    """
+    spawn_resp = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={"user_request": "Classic shutdown test"},
+        timeout=30,
+    )
+    assert spawn_resp.status_code == 200
+    team_id = spawn_resp.json()["team_id"]
+
+    response = await fastapi_client.post(
+        f"/v1/teams/{team_id}/shutdown",
+        timeout=10,
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_messages_endpoint(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Test: GET /v1/teams/{id}/messages returns message history.
+    """
+    # Spawn collaborative team
+    spawn_resp = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={
+            "user_request": "Messages test",
+            "mode": "collaborative",
+        },
+        timeout=30,
+    )
+    assert spawn_resp.status_code == 200
+    team_id = spawn_resp.json()["team_id"]
+
+    # Get messages (should be empty initially)
+    response = await fastapi_client.get(
+        f"/v1/teams/{team_id}/messages",
+        timeout=10,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "messages" in data
+    assert isinstance(data["messages"], list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.e2e
+async def test_teams_classic_regression(fastapi_client: httpx.AsyncClient):
+    """
+    E2E Regression Test: Classic mode team still works after collaborative mode changes.
+    Verify spawn with default mode creates a classic team.
+    """
+    response = await fastapi_client.post(
+        "/v1/teams/spawn",
+        json={
+            "user_request": "Classic regression test",
+        },
+        timeout=30,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "created"
+    assert data["execution_mode"] == "classic"
+
+    # Verify orchestrator has no name (classic mode)
+    lead = data["agents"][0]
+    assert lead["name"] == ""
+    assert lead["role"] == "orchestrator"

@@ -29,6 +29,9 @@ from .handlers import (
     task, delegate_task,
     # Scheduler tools
     scheduler,
+    # Team communication tools
+    team_send_message, team_task_create, team_task_update,
+    team_task_list, team_task_get,
 )
 
 # Skill loader import
@@ -94,6 +97,12 @@ TOOL_HANDLERS = {
     "tool_search": tool_search,
     # Scheduler
     "scheduler": scheduler,
+    # Team communication tools (only functional in team context)
+    "send_message": team_send_message,
+    "task_create": team_task_create,
+    "task_update": team_task_update,
+    "task_list": team_task_list,
+    "task_get": team_task_get,
 }
 
 
@@ -287,6 +296,20 @@ Call with skill_name and optionally user_request. The skill will provide detaile
 
     except Exception as e:
         logger.warning(f"Failed to load tool registry: {e}")
+
+    return tools
+
+
+def get_tool_definitions_with_team() -> List[Dict[str, Any]]:
+    """Get tool definitions including team communication tools.
+
+    Called by the collaborative agent loop to provide team tools alongside
+    the standard tool set.
+    """
+    tools = get_tool_definitions()
+
+    from .schemas_team import TEAM_TOOL_DEFINITIONS
+    tools.extend(copy.deepcopy(TEAM_TOOL_DEFINITIONS))
 
     return tools
 
