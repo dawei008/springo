@@ -1023,13 +1023,16 @@ def prepare_messages_for_api(
 
 def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    修复孤立的 tool_use 块，添加 dummy tool_result。
+    修复孤立的 tool_use 和 tool_result 块。
 
-    处理两种情况：
-    1. 用户中断导致 tool_use 没有对应的 tool_result
-    2. Context compaction 产生重复的 tool ID
+    处理三种情况：
+    1. 孤立 tool_use: tool_use 没有对应的 tool_result → 补 dummy tool_result
+    2. 孤立 tool_result: tool_result 没有对应的 tool_use（被裁剪掉了）→ 移除该 tool_result
+    3. Context compaction 产生重复的 tool ID
 
-    Bedrock API 要求每个 tool_use 必须在紧接着的 user 消息中有对应的 tool_result。
+    Bedrock API 要求：
+    - 每个 tool_use 必须在紧接着的 user 消息中有对应的 tool_result
+    - 每个 tool_result 必须在前一条 assistant 消息中有对应的 tool_use
 
     Args:
         messages: 需要修复的消息列表
@@ -1040,8 +1043,11 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
     if not messages:
         return messages
 
-    # 第一遍：识别需要修复的 tool_use
+    # ── Pass 1: Collect all tool_use IDs and find orphans in both directions ──
+
+    # Track tool_use IDs from the immediately preceding assistant message
     tool_uses_needing_result = []  # (msg_index, tool_id, tool_name)
+    all_tool_use_ids = set()       # Every tool_use ID in the entire conversation
     seen_tool_ids = set()
 
     for i, msg in enumerate(messages):
@@ -1058,6 +1064,7 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                             if tool_id in seen_tool_ids:
                                 logger.warning(f"Duplicate tool_use ID: {tool_id[:30]}... in msg[{i}]")
                             seen_tool_ids.add(tool_id)
+                            all_tool_use_ids.add(tool_id)
                             tool_uses_needing_result.append((i, tool_id, tool_name))
 
             elif role == "user":
@@ -1074,45 +1081,77 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                         remaining.append((msg_idx, tool_id, tool_name))
                 tool_uses_needing_result = remaining
 
-    if not tool_uses_needing_result:
-        return messages
+    # ── Pass 2: Build repaired message list ──
+    # Fix orphan tool_uses (add dummy results) AND orphan tool_results (remove them)
 
-    logger.warning(f"Found {len(tool_uses_needing_result)} orphan tool_use blocks, repairing...")
-
-    # 按消息索引分组
+    needs_tool_use_repair = bool(tool_uses_needing_result)
     orphans_by_msg = {}
-    for (msg_idx, tool_id, tool_name) in tool_uses_needing_result:
-        if msg_idx not in orphans_by_msg:
-            orphans_by_msg[msg_idx] = []
-        orphans_by_msg[msg_idx].append((tool_id, tool_name))
+    if needs_tool_use_repair:
+        logger.warning(f"Found {len(tool_uses_needing_result)} orphan tool_use blocks, repairing...")
+        for (msg_idx, tool_id, tool_name) in tool_uses_needing_result:
+            if msg_idx not in orphans_by_msg:
+                orphans_by_msg[msg_idx] = []
+            orphans_by_msg[msg_idx].append((tool_id, tool_name))
 
-    # 构建修复后的消息列表
     repaired = []
     pending_orphans = []
 
     for i, msg in enumerate(messages):
         role = msg.get("role", "")
+        content = msg.get("content", [])
 
-        if role == "user" and pending_orphans:
+        # ── Handle user messages ──
+        if role == "user" and isinstance(content, list):
+            new_content = []
+
+            # Inject dummy tool_results for orphan tool_uses from previous assistant
+            if pending_orphans:
+                for tool_id, tool_name in pending_orphans:
+                    new_content.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": f"[Tool execution interrupted - user sent new message before {tool_name} completed]",
+                        "is_error": True,
+                    })
+                logger.info(f"Merged {len(pending_orphans)} dummy tool_results into user msg[{i}]")
+                pending_orphans = []
+
+            # Filter out orphan tool_results (no matching tool_use in conversation)
+            orphan_result_count = 0
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    ref_id = block.get("tool_use_id")
+                    if ref_id and ref_id not in all_tool_use_ids:
+                        orphan_result_count += 1
+                        continue  # Drop this orphan tool_result
+                new_content.append(block)
+
+            if orphan_result_count:
+                logger.warning(
+                    f"Removed {orphan_result_count} orphan tool_result(s) from user msg[{i}] "
+                    f"(no matching tool_use in conversation)"
+                )
+
+            # If all content was removed, add a placeholder
+            if not new_content:
+                new_content = [{"type": "text", "text": "[Previous tool results removed due to context compaction]"}]
+
+            repaired.append({"role": "user", "content": new_content})
+
+        elif role == "user" and pending_orphans:
+            # User message with string content but orphan tool_uses pending
             dummy_results = []
             for tool_id, tool_name in pending_orphans:
                 dummy_results.append({
                     "type": "tool_result",
                     "tool_use_id": tool_id,
                     "content": f"[Tool execution interrupted - user sent new message before {tool_name} completed]",
-                    "is_error": True
+                    "is_error": True,
                 })
-
-            existing_content = msg.get("content", "")
-            if isinstance(existing_content, str):
-                merged_content = dummy_results + [{"type": "text", "text": existing_content}]
-            elif isinstance(existing_content, list):
-                merged_content = dummy_results + list(existing_content)
-            else:
-                merged_content = dummy_results
-
-            repaired.append({"role": "user", "content": merged_content})
-            logger.info(f"Merged {len(dummy_results)} dummy tool_results into user msg[{i}]")
+            existing = msg.get("content", "")
+            merged = dummy_results + ([{"type": "text", "text": existing}] if existing else [])
+            repaired.append({"role": "user", "content": merged})
+            logger.info(f"Merged {len(dummy_results)} dummy tool_results into string user msg[{i}]")
             pending_orphans = []
         else:
             repaired.append(msg)
@@ -1120,7 +1159,7 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
         if role == "assistant" and i in orphans_by_msg:
             pending_orphans = orphans_by_msg[i]
 
-    # 处理末尾的孤立 tool_use（没有后续 user 消息）
+    # ── Handle trailing orphan tool_uses (no subsequent user message) ──
     if pending_orphans:
         dummy_results = []
         for tool_id, tool_name in pending_orphans:
@@ -1128,7 +1167,7 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                 "type": "tool_result",
                 "tool_use_id": tool_id,
                 "content": f"[Tool execution interrupted - no response received for {tool_name}]",
-                "is_error": True
+                "is_error": True,
             })
         repaired.append({"role": "user", "content": dummy_results})
         logger.info(f"Added {len(dummy_results)} dummy tool_results at end of messages")
