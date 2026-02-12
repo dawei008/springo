@@ -1959,14 +1959,17 @@
             const stopBtn = document.getElementById('stop-btn');
             const input = document.getElementById('message-input');
             const streaming = isCurrentStreaming();
+            // When a team is active and streaming, keep the send button usable
+            // so the user can send follow-up messages to the team lead.
+            const teamActive = teamModeEnabled && activeTeamSplitId && streaming;
 
             if (btn) {
                 // Disable if streaming OR if input is empty and no attachments OR if server is not connected
                 const hasContent = input && input.value.trim().length > 0;
                 const hasAttachments = attachments && attachments.length > 0;
                 const serverDisconnected = !lastConnectionHealthy;
-                btn.disabled = streaming || serverDisconnected || (!hasContent && !hasAttachments);
-                btn.style.display = streaming ? 'none' : 'flex';
+                btn.disabled = (streaming && !teamActive) || serverDisconnected || (!hasContent && !hasAttachments);
+                btn.style.display = (streaming && !teamActive) ? 'none' : 'flex';
                 // Show title hint when disabled due to disconnection
                 if (serverDisconnected) {
                     btn.title = 'Server is starting up, please wait...';
@@ -1975,7 +1978,7 @@
                 }
             }
             if (stopBtn) {
-                stopBtn.classList.toggle('visible', streaming);
+                stopBtn.classList.toggle('visible', streaming && !teamActive);
             }
         }
 
@@ -4345,13 +4348,13 @@
             const input = document.getElementById('message-input');
             let content = input.value.trim();
 
-            // Check if CURRENT conversation is streaming (allow other conversations to stream)
-            if ((!content && attachments.length === 0) || isCurrentStreaming()) return;
-
-            // Team mode check - route through teams API
-            if (teamModeEnabled) {
+            // Team mode: allow sending messages to active team even while streaming
+            if (teamModeEnabled && content) {
                 return sendTeamMessage(content);
             }
+
+            // Check if CURRENT conversation is streaming (allow other conversations to stream)
+            if ((!content && attachments.length === 0) || isCurrentStreaming()) return;
 
             // Handle built-in slash commands (local commands, not sent to server)
             if (content.startsWith('/')) {
@@ -10557,6 +10560,15 @@ ${content || 'Task completed successfully.'}
         async function sendTeamMessage(userMessage) {
             const input = document.getElementById('message-input');
 
+            // If a team is already active and streaming, route the message
+            // to the existing team lead instead of spawning a new team.
+            if (activeTeamSplitId && isCurrentStreaming()) {
+                input.value = '';
+                input.style.height = 'auto';
+                sendTeamPanelMessage(activeTeamSplitId, userMessage);
+                return;
+            }
+
             // Get or create conversation
             const thisConvId = currentConversationId || Date.now().toString();
             if (!currentConversationId) {
@@ -11500,6 +11512,17 @@ ${content || 'Task completed successfully.'}
             if (!badge) return;
             badge.textContent = text || status;
             badge.className = `team-split-status-badge ${status}`;
+
+            // Disable message input when team is complete or errored
+            if (status === 'complete' || status === 'error') {
+                const msgInput = document.getElementById('team-msg-input');
+                const msgSend = document.getElementById('team-msg-send');
+                if (msgInput) {
+                    msgInput.disabled = true;
+                    msgInput.placeholder = 'Team session ended';
+                }
+                if (msgSend) msgSend.disabled = true;
+            }
         }
 
         function addTeamSplitAgents(teamId, tasks) {
@@ -11693,11 +11716,22 @@ ${content || 'Task completed successfully.'}
 
         function sendTeamPanelMessage(teamId, content) {
             if (!teamId || !content) return;
+            // Optimistic UI: show the sent message immediately
+            appendTeamMessage(teamId, 'user', 'team-lead', content, content.substring(0, 100));
             fetch(`${BASE_URL}/v1/teams/${teamId}/message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: content, recipient: 'team-lead' }),
-            }).catch(err => console.error('Failed to send team message:', err));
+            }).then(res => {
+                if (!res.ok) {
+                    return res.json().then(data => {
+                        showToast(data.detail?.error || 'Failed to send message', 'error');
+                    });
+                }
+            }).catch(err => {
+                console.error('Failed to send team message:', err);
+                showToast('Failed to send message to team', 'error');
+            });
         }
 
         function initTeamMessageInput(teamId) {

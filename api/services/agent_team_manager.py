@@ -1256,6 +1256,10 @@ class AgentTeamManager:
             collab_start = asyncio.get_event_loop().time()
             collab_max_runtime = settings.team_collab_max_runtime  # default 24h
             heartbeat_counter = 0
+            # Grace period: require consecutive idle checks before auto-finishing
+            # so the user has time to send follow-up messages.
+            all_done_idle_checks = 0
+            ALL_DONE_GRACE = 5  # ~5 loop iterations (~7-8 seconds)
 
             while True:
                 if shutdown_requested:
@@ -1286,18 +1290,21 @@ class AgentTeamManager:
                     break
 
                 # Auto-complete: if all tasks on the board are completed and
-                # the team lead is idle, there is no more work to do.  Cancel
-                # agent loops so the stream can finish and the frontend gets
-                # the team_complete / [DONE] signals promptly.
+                # the team lead is idle, count grace iterations before finishing.
+                # This gives the user time to send follow-up messages.
                 tasks = task_mgr._tasks
                 if tasks and all(
                     t.status in ("completed", "error") for t in tasks.values()
                 ) and team_lead.status == "idle":
-                    logger.info(
-                        f"Collaborative team {team_id}: all tasks completed "
-                        f"and team lead idle — auto-finishing"
-                    )
-                    break
+                    all_done_idle_checks += 1
+                    if all_done_idle_checks >= ALL_DONE_GRACE:
+                        logger.info(
+                            f"Collaborative team {team_id}: all tasks completed "
+                            f"and team lead idle for {all_done_idle_checks} checks — auto-finishing"
+                        )
+                        break
+                else:
+                    all_done_idle_checks = 0
 
                 # Drain agent event queue
                 try:
