@@ -8,9 +8,11 @@ from typing import Optional, List, Dict, Literal
 from datetime import datetime
 
 # Module-level constants for team model defaults.
-# These can be changed in one place; for full env-var override use config.py settings.
-DEFAULT_TEAM_SMART_MODEL = "claude-sonnet-4-5-20250929"
-DEFAULT_TEAM_FAST_MODEL = "claude-haiku-4-5-20251001"
+# Empty string means "inherit from user's request.model" (which defaults to
+# the main agent's active model).  Only set a concrete value here if you want
+# a hard-coded fallback when the request doesn't specify a model.
+DEFAULT_TEAM_SMART_MODEL = ""
+DEFAULT_TEAM_FAST_MODEL = ""
 
 
 class AgentRole(BaseModel):
@@ -80,7 +82,7 @@ class Team(BaseModel):
 class TeamSpawnRequest(BaseModel):
     """创建团队请求"""
     user_request: str = Field(..., description="The user's request to decompose into agent tasks")
-    model: str = Field(default=DEFAULT_TEAM_SMART_MODEL, description="Orchestrator model")
+    model: str = Field(default="", description="Model for all team agents (empty = use main agent's active model)")
     context: Optional[str] = Field(default=None, description="Additional context for the team")
     mode: Literal["classic", "collaborative"] = Field(
         default="classic", description="Team execution mode: classic (one-shot parallel) or collaborative (long-lived agents)"

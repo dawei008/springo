@@ -14,9 +14,13 @@ from ..models.teams import (
     TeamSpawnRequest, ROLE_CONFIGS,
 )
 from .bedrock import get_bedrock_service, BedrockService
-from .model_registry import get_model_info
+from .model_registry import get_model_info, get_model_limits
 from .session_state import get_working_dir
 from .mcp_manager import get_mcp_manager
+from .context_manager import (
+    truncate_tool_results, prepare_messages_for_api,
+    count_messages_tokens, MAX_INLINE_OUTPUT_SIZE,
+)
 from ..utils.streaming import SSEEventBuilder
 from ..config import settings
 
@@ -89,9 +93,26 @@ class AgentTeamManager:
     def get_team(self, team_id: str) -> Optional[Team]:
         return self._teams.get(team_id)
 
+    @staticmethod
+    def _resolve_model(request_model: str) -> str:
+        """Resolve team model: use request model, or fall back to main agent's configured model."""
+        if request_model:
+            return request_model
+        # Fall back to the main agent's default model (from settings / bedrock_model_id)
+        from .model_registry import MODEL_REGISTRY
+        # settings.bedrock_model_id is a full bedrock ID like "us.anthropic.claude-opus-4-6-v1"
+        # Find the short name that maps to it
+        for short_name, info in MODEL_REGISTRY.items():
+            if info.get("bedrock_id") == settings.bedrock_model_id:
+                return short_name
+        # If no match, try stripping common prefixes to get a usable name
+        return settings.bedrock_model_id
+
     def spawn_team(self, request: TeamSpawnRequest) -> Team:
         """Create a new team based on the user request"""
         mode = getattr(request, "mode", "classic")
+        resolved_model = self._resolve_model(request.model)
+
         team = Team(
             user_request=request.user_request,
             shared_context=request.context or "",
@@ -100,7 +121,7 @@ class AgentTeamManager:
 
         # Always add an orchestrator / team lead
         orchestrator_role = ROLE_CONFIGS["orchestrator"].model_copy()
-        orchestrator_role.model = request.model
+        orchestrator_role.model = resolved_model
         team.agents.append(TeamAgent(
             role=orchestrator_role,
             name="team-lead" if mode == "collaborative" else "",
@@ -208,6 +229,9 @@ class AgentTeamManager:
                 team.task_board.append(task_item)
 
             # Spawn worker agents for each subtask (supports custom roles)
+            # All workers use the same model as the orchestrator (= user's active model)
+            # unless the orchestrator explicitly overrides per-agent.
+            team_model = team.agents[0].role.model  # orchestrator's resolved model
             for i, st in enumerate(subtasks):
                 role_name = st.get("role", "explorer")
                 custom_instructions = st.get("custom_instructions", "")
@@ -226,9 +250,8 @@ class AgentTeamManager:
                         tools_available=base.tools_available,
                     )
 
-                # Override model if orchestrator specified one
-                if agent_model:
-                    role_config.model = agent_model
+                # Use team model (= user's active model) unless orchestrator explicitly overrides
+                role_config.model = agent_model if agent_model else team_model
 
                 agent = TeamAgent(
                     role=role_config,
@@ -373,8 +396,10 @@ class AgentTeamManager:
             yield SSEEventBuilder.team_error(team.team_id, str(e))
             yield SSEEventBuilder.done()
 
-    # Max orchestrator tool iterations during decomposition
-    _ORCH_MAX_TOOL_ITERATIONS = 8
+    # Max orchestrator tool iterations during decomposition.
+    # The orchestrator should PLAN, not EXPLORE — tools are only for memory
+    # retrieval.  3 iterations: 1 potential memory call + 2 to produce JSON.
+    _ORCH_MAX_TOOL_ITERATIONS = 3
 
     @staticmethod
     def _parse_subtasks_json(text: str) -> List[Dict[str, Any]]:
@@ -414,15 +439,17 @@ class AgentTeamManager:
         The orchestrator has full tool access (like Claude Code's team lead)
         so it can retrieve user preferences, read files, etc. before planning.
         """
+        working_dir = get_working_dir() or ""
         decompose_prompt = (
             "Decompose the following user request into subtasks for a team of AI agents.\n\n"
-            "STEP 1 — GATHER CONTEXT (use tools if helpful):\n"
-            "- If the request involves user preferences/interests/personalization, "
-            "retrieve memory first (execute_command with memory.py).\n"
-            "- If the request involves code or files, read relevant files first.\n"
-            "- Skip this step for simple/generic requests.\n\n"
-            "STEP 2 — DECOMPOSE INTO SUBTASKS:\n"
-            "GUIDELINES:\n"
+            "IMPORTANT: Your job is to PLAN, not to EXPLORE. "
+            "Worker agents will do the actual exploration and execution.\n"
+            "Only use tools if the request specifically involves user preferences/personalization "
+            "(retrieve memory first via execute_command with memory.py). "
+            "For all other requests, go directly to decomposition.\n\n"
+            + (f"Project working directory: {working_dir}\n"
+               "Worker agents will operate in this directory.\n\n" if working_dir else "")
+            + "GUIDELINES:\n"
             "- Use 1-10 agents depending on complexity. Simple questions may need only 1 agent.\n"
             "- IMPORTANT: If the user's request implies parallel dimensions (e.g., 'each continent', "
             "'each module', 'compare A vs B vs C'), create ONE agent PER dimension. "
@@ -455,7 +482,10 @@ class AgentTeamManager:
         model_id = self.bedrock.get_bedrock_model_id(orchestrator.role.model)
         orch_api_format = _get_api_format(orchestrator.role.model)
 
-        # Load tools so orchestrator can gather context before decomposing
+        # Load a limited tool set for orchestrator decomposition.
+        # Only lightweight tools for memory retrieval and basic project awareness.
+        # Heavy exploration (read_file, grep, glob, etc.) is left to worker agents.
+        _ORCH_ALLOWED_TOOLS = {"execute_command", "list_directory"}
         tools = []
         try:
             mcp_mgr = await get_mcp_manager()
@@ -465,6 +495,7 @@ class AgentTeamManager:
                     t.model_dump() if hasattr(t, "model_dump") else t
                     for t in tool_defs
                 ]
+                tools = [t for t in tools if t.get("name") in _ORCH_ALLOWED_TOOLS]
         except Exception as e:
             logger.warning(f"Orchestrator: failed to load tools: {e}")
 
@@ -560,8 +591,18 @@ class AgentTeamManager:
 
                 messages.append({"role": "user", "content": tool_results})
 
-            # Exhausted iterations — try to parse whatever text we have
-            logger.warning("Orchestrator exhausted tool iterations")
+            # Exhausted iterations — try to parse whatever text accumulated so far
+            logger.warning("Orchestrator exhausted tool iterations, attempting to parse accumulated text")
+            for msg in reversed(messages):
+                if msg.get("role") == "assistant":
+                    msg_content = msg.get("content", [])
+                    if isinstance(msg_content, list):
+                        for block in msg_content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                subtasks = self._parse_subtasks_json(block.get("text", ""))
+                                if subtasks:
+                                    logger.info(f"Recovered {len(subtasks)} subtasks from accumulated text")
+                                    return subtasks
             return []
 
         except Exception as e:
@@ -643,9 +684,24 @@ class AgentTeamManager:
         tokens = {"input_tokens": 0, "output_tokens": 0}
 
         working_dir = get_working_dir() or None
+        model_limits = get_model_limits(agent.role.model)
 
         try:
             for iteration in range(1, self.AGENT_MAX_TOOL_ITERATIONS + 1):
+                # Layer 2: Truncate old tool results before each API call
+                if iteration > 1:
+                    messages = prepare_messages_for_api(messages, keep_recent=3)
+
+                # Layer 3: Emergency truncation if approaching context limit
+                current_tokens = count_messages_tokens(messages)
+                max_ctx = model_limits.get("max_context_tokens", 200000)
+                if current_tokens > max_ctx * 0.85:
+                    logger.warning(
+                        f"Agent {agent.role.name}: context at {current_tokens:,}/{max_ctx:,} tokens, "
+                        f"forcing aggressive truncation"
+                    )
+                    messages = truncate_tool_results(messages, max_size=2048)
+
                 # Build bedrock request using the standard converter (handles
                 # tool formatting, time injection, and model-specific quirks)
                 request_body = {
@@ -784,6 +840,18 @@ class AgentTeamManager:
                             result_str[:200],
                         )
                     )
+
+                    # Layer 1: Truncate large tool results inline (matches main agent)
+                    result_bytes = len(result_str.encode("utf-8"))
+                    if result_bytes > MAX_INLINE_OUTPUT_SIZE:
+                        preview = result_str[:500]
+                        result_str = json.dumps({
+                            "result_truncated": True,
+                            "size": result_bytes,
+                            "preview": preview,
+                            "message": f"Result truncated ({result_bytes:,} bytes). Preview shown.",
+                        })
+
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool["id"],

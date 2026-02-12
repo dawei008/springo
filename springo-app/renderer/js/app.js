@@ -5660,10 +5660,23 @@ Be concise and helpful in your responses.`;
         }
 
         // Settings
+        function switchSettingsTab(tabName) {
+            document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
+            const tab = document.querySelector(`.settings-tab[data-tab="${tabName}"]`);
+            const panel = document.getElementById(`tab-${tabName}`);
+            if (tab) tab.classList.add('active');
+            if (panel) panel.classList.add('active');
+            localStorage.setItem('settingsTab', tabName);
+        }
+
         function openSettings() {
             const modal = document.getElementById('settings-modal');
             modal.style.removeProperty('display');  // Clear any inline display override
             modal.classList.add('active');
+            // Restore last selected tab
+            const lastTab = localStorage.getItem('settingsTab') || 'general';
+            switchSettingsTab(lastTab);
             // Load default working directory
             document.getElementById('settings-default-workdir').value = defaultWorkingFolder || '~/Downloads';
             populateModelDropdowns();
@@ -10576,10 +10589,11 @@ ${content || 'Task completed successfully.'}
             try {
                 // Step 1: Spawn team
                 const teamMode = teamCollaborativeMode ? 'collaborative' : 'classic';
+                const teamModel = settings.model || getDefaultModel();
                 const spawnRes = await fetch(BASE_URL + '/v1/teams/spawn', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ user_request: userMessage, mode: teamMode })
+                    body: JSON.stringify({ user_request: userMessage, mode: teamMode, model: teamModel })
                 });
 
                 if (!spawnRes.ok) {
@@ -10673,6 +10687,10 @@ ${content || 'Task completed successfully.'}
                                         break;
                                     case 'team_error':
                                         updateTeamSplitStatus(data.team_id, 'error', data.error);
+                                        // Save the error as synthesis text so the user sees it
+                                        if (!synthesisText) {
+                                            synthesisText = `**Team Error:** ${data.error || 'Unknown error'}`;
+                                        }
                                         break;
                                     // Collaborative team events
                                     case 'team_agent_message':
@@ -10735,6 +10753,17 @@ ${content || 'Task completed successfully.'}
 
             } catch (e) {
                 console.error('Team execution error:', e);
+                // Save error as assistant message so user sees it
+                const errorMsg = `**Team Error:** ${e.message || 'Unknown error'}`;
+                runtime.messages.push({
+                    role: 'assistant',
+                    content: errorMsg,
+                    timestamp: Date.now(),
+                    _teamMode: true
+                });
+                if (currentConversationId === thisConvId) {
+                    renderMessages();
+                }
                 updateConversationStatus(thisConvId, 'error');
                 updateStatus('error', e.message);
             } finally {
