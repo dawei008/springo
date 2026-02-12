@@ -438,161 +438,192 @@
                 </button>
             </div>
             <div class="modal-body">
-                <!-- Default Working Directory Section -->
-                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Default Working Directory</h3>
-                <div class="setting-group">
-                    <label>Path</label>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="text" id="settings-default-workdir" placeholder="~/Downloads" style="flex: 1;">
-                        <button onclick="browseDefaultWorkdir()" class="browse-btn">
-                            <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                                <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                            </svg>
-                        </button>
+                <!-- Left Tab Bar -->
+                <div class="settings-tabs">
+                    <button class="settings-tab active" data-tab="general" onclick="switchSettingsTab('general')">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/>
+                        </svg>
+                        General
+                    </button>
+                    <button class="settings-tab" data-tab="models" onclick="switchSettingsTab('models')">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/>
+                        </svg>
+                        Models
+                    </button>
+                    <button class="settings-tab" data-tab="tools" onclick="switchSettingsTab('tools')">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/>
+                        </svg>
+                        Tools
+                    </button>
+                    <button class="settings-tab" data-tab="memory" onclick="switchSettingsTab('memory')">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path d="M12 2a7 7 0 017 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 01-2 2h-4a2 2 0 01-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 017-7z"/><path d="M9 21h6M10 17v4M14 17v4"/>
+                        </svg>
+                        Memory
+                    </button>
+                </div>
+
+                <!-- Right Content Area -->
+                <div class="settings-content">
+                    <!-- General Tab -->
+                    <div class="settings-tab-panel active" id="tab-general">
+                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Default Working Directory</h3>
+                        <div class="setting-group">
+                            <label>Path</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <input type="text" id="settings-default-workdir" placeholder="~/Downloads" style="flex: 1;">
+                                <button onclick="browseDefaultWorkdir()" class="browse-btn">
+                                    <svg width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                                        <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+                                    </svg>
+                                </button>
+                            </div>
+                            <div class="hint">Default folder for new chats. Use absolute path (e.g., ~/Downloads)</div>
+                        </div>
+
                     </div>
-                    <div class="hint">Default folder for new chats. Use absolute path (e.g., ~/Downloads)</div>
-                </div>
 
-                <div class="setting-divider"></div>
+                    <!-- Models Tab -->
+                    <div class="settings-tab-panel" id="tab-models">
+                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AWS Credentials</h3>
+                        <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
+                            Auto-detects from environment variables or <code>~/.aws/credentials</code>.<br>
+                            Only enter below if not using those methods.
+                        </div>
+                        <div class="setting-group">
+                            <label>Access Key ID</label>
+                            <input type="text" id="settings-aws-access-key" placeholder="Enter your access key">
+                        </div>
+                        <div class="setting-group">
+                            <label>Secret Access Key</label>
+                            <input type="password" id="settings-aws-secret-key" placeholder="Enter your secret key">
+                        </div>
+                        <div class="hint">Manual credentials will be saved to <code>~/.springo/.env</code></div>
+                        <div class="setting-group" style="margin-top: 12px;">
+                            <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
+                            <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                        </div>
 
-                <!-- AWS Credentials Section -->
-                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AWS Credentials</h3>
-                <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
-                    Auto-detects from environment variables or <code>~/.aws/credentials</code>.<br>
-                    Only enter below if not using those methods.
-                </div>
-                <div class="setting-group">
-                    <label>Access Key ID</label>
-                    <input type="text" id="settings-aws-access-key" placeholder="Enter your access key">
-                </div>
-                <div class="setting-group">
-                    <label>Secret Access Key</label>
-                    <input type="password" id="settings-aws-secret-key" placeholder="Enter your secret key">
-                </div>
-                <div class="hint">Manual credentials will be saved to <code>~/.springo/.env</code></div>
-                <div class="setting-group" style="margin-top: 12px;">
-                    <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
-                    <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
-                </div>
+                        <div class="setting-divider"></div>
 
-                <div class="setting-divider"></div>
+                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Region</h3>
+                        <div class="setting-group">
+                            <select id="settings-memory-region">
+                                <option value="us-west-2">us-west-2 (Oregon)</option>
+                                <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                                <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                                <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                            </select>
+                            <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
+                        </div>
 
-                <!-- Region Section (applies to all AWS services) -->
-                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Region</h3>
-                <div class="setting-group">
-                    <select id="settings-memory-region">
-                        <option value="us-west-2">us-west-2 (Oregon)</option>
-                        <option value="us-east-1">us-east-1 (N. Virginia)</option>
-                        <option value="eu-west-1">eu-west-1 (Ireland)</option>
-                        <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
-                    </select>
-                    <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
-                </div>
+                        <div class="setting-divider"></div>
 
-                <div class="setting-divider"></div>
-                <h3 style="margin: 16px 0 12px; font-size: 14px; color: var(--text-secondary);">Model Settings</h3>
-
-                <div class="setting-group">
-                    <label>Default Model</label>
-                    <select id="settings-model">
-                        <!-- Populated dynamically from /v1/models -->
-                    </select>
-                </div>
-                <div class="setting-group">
-                    <label>Max Tokens</label>
-                    <input type="number" id="settings-max-tokens" value="16384" min="100" max="131072">
-                    <div class="hint">Maximum number of tokens in the response</div>
-                </div>
-                <div class="setting-group">
-                    <label>Temperature</label>
-                    <input type="range" id="settings-temperature" min="0" max="1" step="0.1" value="0.7">
-                    <div class="hint">Controls randomness: <span id="temp-value">0.7</span></div>
-                </div>
-                <div class="setting-group">
-                    <label>Context Compact Model</label>
-                    <select id="settings-compact-model">
-                        <!-- Populated dynamically from /v1/models -->
-                    </select>
-                    <div class="hint">Model for context summarization (Haiku is faster & cheaper)</div>
-                </div>
-
-                <div class="setting-divider"></div>
-
-                <!-- Skills Section -->
-                <div class="settings-section-header">
-                    <h3>Skills</h3>
-                    <div style="display: flex; gap: 6px;">
-                        <button onclick="openSkillsFolder()">Open Folder</button>
-                        <button onclick="reloadSkills()">Reload</button>
+                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Model Settings</h3>
+                        <div class="setting-group">
+                            <label>Default Model</label>
+                            <select id="settings-model">
+                                <!-- Populated dynamically from /v1/models -->
+                            </select>
+                        </div>
+                        <div class="setting-group">
+                            <label>Max Tokens</label>
+                            <input type="number" id="settings-max-tokens" value="16384" min="100" max="131072">
+                            <div class="hint">Maximum number of tokens in the response</div>
+                        </div>
+                        <div class="setting-group">
+                            <label>Temperature</label>
+                            <input type="range" id="settings-temperature" min="0" max="1" step="0.1" value="0.7">
+                            <div class="hint">Controls randomness: <span id="temp-value">0.7</span></div>
+                        </div>
+                        <div class="setting-group">
+                            <label>Context Compact Model</label>
+                            <select id="settings-compact-model">
+                                <!-- Populated dynamically from /v1/models -->
+                            </select>
+                            <div class="hint">Model for context summarization (Haiku is faster & cheaper)</div>
+                        </div>
                     </div>
-                </div>
-                <div class="settings-list" id="skills-list">
-                    <div class="settings-list-empty">Loading skills...</div>
-                </div>
-                <div class="hint">Skills are loaded from the <code>skills/</code> directory. Each skill folder should contain a <code>SKILL.md</code> file.</div>
 
-                <div class="setting-divider"></div>
+                    <!-- Tools Tab -->
+                    <div class="settings-tab-panel" id="tab-tools">
+                        <div class="settings-section-header">
+                            <h3>Skills</h3>
+                            <div style="display: flex; gap: 6px;">
+                                <button onclick="openSkillsFolder()">Open Folder</button>
+                                <button onclick="reloadSkills()">Reload</button>
+                            </div>
+                        </div>
+                        <div class="settings-list" id="skills-list">
+                            <div class="settings-list-empty">Loading skills...</div>
+                        </div>
+                        <div class="hint">Skills are loaded from the <code>skills/</code> directory. Each skill folder should contain a <code>SKILL.md</code> file.</div>
 
-                <!-- MCP Servers Section -->
-                <div class="settings-section-header">
-                    <h3>MCP Servers</h3>
-                    <button onclick="toggleMcpAddForm()">+ Add</button>
-                </div>
-                <div class="settings-list" id="mcp-servers-list">
-                    <div class="settings-list-empty">Loading MCP servers...</div>
-                </div>
-                <div id="mcp-add-form" class="settings-add-form" style="display: none;">
-                    <div class="form-row">
-                        <input type="text" id="mcp-server-name" placeholder="Server name (e.g., filesystem)">
-                    </div>
-                    <div class="form-row">
-                        <input type="text" id="mcp-server-command" placeholder="Command (e.g., npx)">
-                    </div>
-                    <div class="form-row">
-                        <input type="text" id="mcp-server-args" placeholder="Arguments (comma separated)">
-                    </div>
-                    <div class="form-row">
-                        <input type="text" id="mcp-server-env" placeholder="Environment (KEY=value, comma separated)">
-                    </div>
-                    <div class="form-actions">
-                        <button class="btn-cancel" onclick="toggleMcpAddForm()">Cancel</button>
-                        <button class="btn-add" onclick="addMcpServer()">Add Server</button>
-                    </div>
-                </div>
-                <div class="hint">MCP servers provide additional tools. Config file: <code>~/.springo/mcp_servers.json</code></div>
+                        <div class="setting-divider"></div>
 
-                <div class="setting-divider"></div>
+                        <div class="settings-section-header">
+                            <h3>MCP Servers</h3>
+                            <button onclick="toggleMcpAddForm()">+ Add</button>
+                        </div>
+                        <div class="settings-list" id="mcp-servers-list">
+                            <div class="settings-list-empty">Loading MCP servers...</div>
+                        </div>
+                        <div id="mcp-add-form" class="settings-add-form" style="display: none;">
+                            <div class="form-row">
+                                <input type="text" id="mcp-server-name" placeholder="Server name (e.g., filesystem)">
+                            </div>
+                            <div class="form-row">
+                                <input type="text" id="mcp-server-command" placeholder="Command (e.g., npx)">
+                            </div>
+                            <div class="form-row">
+                                <input type="text" id="mcp-server-args" placeholder="Arguments (comma separated)">
+                            </div>
+                            <div class="form-row">
+                                <input type="text" id="mcp-server-env" placeholder="Environment (KEY=value, comma separated)">
+                            </div>
+                            <div class="form-actions">
+                                <button class="btn-cancel" onclick="toggleMcpAddForm()">Cancel</button>
+                                <button class="btn-add" onclick="addMcpServer()">Add Server</button>
+                            </div>
+                        </div>
+                        <div class="hint">MCP servers provide additional tools. Config file: <code>~/.springo/mcp_servers.json</code></div>
+                    </div>
 
-                <!-- AgentCore Memory Section -->
-                <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
-                <div class="setting-group">
-                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
-                        <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
-                        Enable Memory Sync
-                    </label>
-                </div>
-                <div class="setting-group">
-                    <label>Memory ID</label>
-                    <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
-                    <div class="hint" style="margin-top: 4px;">Create via <code>agentcore memory create --name springo_memory</code></div>
-                </div>
-                <div class="setting-group">
-                    <label>S3 Bucket</label>
-                    <input type="text" id="settings-s3-bucket" placeholder="e.g., my-springo-bucket">
-                    <div class="hint" style="margin-top: 4px;">Pre-created S3 bucket for storing images and tool results</div>
-                </div>
-                <!-- LTM Strategies Section -->
-                <div class="setting-group" style="margin-top: 12px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <label style="margin: 0;">LTM Strategies</label>
-                        <button onclick="refreshLtmStrategies()" id="refresh-strategies-btn" class="secondary-btn" style="font-size: 11px; padding: 4px 10px;">
-                            <span id="refresh-strategies-icon">↻</span> Refresh
-                        </button>
+                    <!-- Memory Tab -->
+                    <div class="settings-tab-panel" id="tab-memory">
+                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
+                        <div class="setting-group">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
+                                Enable Memory Sync
+                            </label>
+                        </div>
+                        <div class="setting-group">
+                            <label>Memory ID</label>
+                            <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
+                            <div class="hint" style="margin-top: 4px;">Create via <code>agentcore memory create --name springo_memory</code></div>
+                        </div>
+                        <div class="setting-group">
+                            <label>S3 Bucket</label>
+                            <input type="text" id="settings-s3-bucket" placeholder="e.g., my-springo-bucket">
+                            <div class="hint" style="margin-top: 4px;">Pre-created S3 bucket for storing images and tool results</div>
+                        </div>
+                        <div class="setting-group" style="margin-top: 12px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <label style="margin: 0;">LTM Strategies</label>
+                                <button onclick="refreshLtmStrategies()" id="refresh-strategies-btn" class="secondary-btn" style="font-size: 11px; padding: 4px 10px;">
+                                    <span id="refresh-strategies-icon">↻</span> Refresh
+                                </button>
+                            </div>
+                            <div id="ltm-strategies-display" class="ltm-strategies-display" style="display: none;">
+                                <!-- Dynamically populated after Refresh -->
+                            </div>
+                            <div class="hint" style="margin-top: 4px;">Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
+                        </div>
                     </div>
-                    <div id="ltm-strategies-display" class="ltm-strategies-display" style="display: none;">
-                        <!-- Dynamically populated after Refresh -->
-                    </div>
-                    <div class="hint" style="margin-top: 4px;">Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
                 </div>
             </div>
         </div>

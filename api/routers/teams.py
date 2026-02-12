@@ -5,7 +5,7 @@ Agent 团队 API 路由 - /v1/teams/*
 import logging
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -53,7 +53,7 @@ async def spawn_team(request: TeamSpawnRequest):
 
 
 @router.post("/teams/{team_id}/execute")
-async def execute_team(team_id: str, request: TeamExecuteRequest = None):
+async def execute_team(team_id: str, http_request: Request, request: TeamExecuteRequest = None):
     """
     Execute the agent team workflow with SSE streaming.
     Phases: planning -> parallel execution -> synthesis
@@ -66,10 +66,15 @@ async def execute_team(team_id: str, request: TeamExecuteRequest = None):
 
         if request and request.stream:
             async def team_stream() -> AsyncGenerator[str, None]:
-                async for event in manager.execute_team(team_id):
-                    yield event
+                try:
+                    async for event in manager.execute_team(team_id):
+                        yield event
+                except GeneratorExit:
+                    # Client disconnected — cancel running agent tasks
+                    logger.warning(f"Team {team_id} SSE client disconnected, cleaning up")
+                    manager.cancel_team(team_id)
 
-            return create_sse_response(team_stream())
+            return create_sse_response(team_stream(), http_request)
         else:
             # Non-streaming: collect all events and return final result
             events = []

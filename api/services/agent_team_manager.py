@@ -26,6 +26,47 @@ from ..config import settings
 
 logger = logging.getLogger(__name__)
 
+# Transient Bedrock error patterns worth retrying
+_RETRIABLE_ERRORS = (
+    "ThrottlingException",
+    "ServiceUnavailableException",
+    "InternalServerException",
+    "ModelTimeoutException",
+    "Too Many Requests",
+    "Connection reset",
+    "Read timed out",
+)
+
+
+async def _retry_bedrock_call(coro_factory, *, label: str = "bedrock"):
+    """Retry a Bedrock API call with exponential backoff for transient errors.
+
+    *coro_factory* is a zero-arg callable that returns a new awaitable each
+    time (because awaitables are consumed on first await).
+
+    Returns the result on success, raises on permanent failure.
+    """
+    max_retries = settings.team_bedrock_max_retries
+    base_delay = settings.team_bedrock_retry_base_delay
+
+    last_exc: Optional[Exception] = None
+    for attempt in range(max_retries + 1):
+        try:
+            return await coro_factory()
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc)
+            if attempt < max_retries and any(pat in msg for pat in _RETRIABLE_ERRORS):
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    f"[{label}] Transient error (attempt {attempt + 1}/{max_retries + 1}): "
+                    f"{msg[:120]} — retrying in {delay:.1f}s"
+                )
+                await asyncio.sleep(delay)
+            else:
+                raise
+    raise last_exc  # type: ignore[misc]
+
 
 # Compact LTM snippet injected into every team-agent system prompt so that
 # worker agents can retrieve user preferences / interests when relevant.
@@ -89,9 +130,51 @@ class AgentTeamManager:
     def __init__(self, bedrock: BedrockService = None):
         self.bedrock = bedrock or get_bedrock_service()
         self._teams: Dict[str, Team] = {}
+        self._running_tasks: Dict[str, List[asyncio.Task]] = {}  # team_id -> agent tasks
+        self._cleanup_task: Optional[asyncio.Task] = None
 
     def get_team(self, team_id: str) -> Optional[Team]:
         return self._teams.get(team_id)
+
+    def cancel_team(self, team_id: str) -> None:
+        """Cancel all running agent tasks for a team (e.g., on client disconnect)."""
+        tasks = self._running_tasks.pop(team_id, [])
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        team = self._teams.get(team_id)
+        if team and team.status not in ("complete", "error"):
+            team.status = "error"
+            team.completed_at = datetime.now().isoformat()
+        logger.info(f"Team {team_id} cancelled ({len(tasks)} tasks)")
+
+    def _register_tasks(self, team_id: str, tasks: List[asyncio.Task]) -> None:
+        """Register running agent tasks for cleanup on disconnect."""
+        self._running_tasks[team_id] = tasks
+
+    def _unregister_tasks(self, team_id: str) -> None:
+        """Remove task tracking after normal completion."""
+        self._running_tasks.pop(team_id, None)
+
+    def cleanup_completed_teams(self) -> int:
+        """Remove completed teams older than team_completed_cleanup_secs. Returns count removed."""
+        cutoff = settings.team_completed_cleanup_secs
+        now = datetime.now()
+        to_remove = []
+        for tid, team in self._teams.items():
+            if team.status in ("complete", "error") and team.completed_at:
+                try:
+                    completed = datetime.fromisoformat(team.completed_at)
+                    if (now - completed).total_seconds() > cutoff:
+                        to_remove.append(tid)
+                except (ValueError, TypeError):
+                    pass
+        for tid in to_remove:
+            del self._teams[tid]
+            self._running_tasks.pop(tid, None)
+        if to_remove:
+            logger.info(f"Cleaned up {len(to_remove)} completed teams")
+        return len(to_remove)
 
     @staticmethod
     def _resolve_model(request_model: str) -> str:
@@ -283,7 +366,7 @@ class AgentTeamManager:
             worker_agents = [a for a in team.agents if a.role.name != "orchestrator"]
 
             # Queue-based streaming execution
-            event_queue: asyncio.Queue = asyncio.Queue()
+            event_queue: asyncio.Queue = asyncio.Queue(maxsize=settings.team_event_queue_max)
             completed_count = 0
             total_agents = len(worker_agents)
 
@@ -342,6 +425,7 @@ class AgentTeamManager:
             for agent in worker_agents:
                 task = asyncio.create_task(run_agent_streaming(agent))
                 running_tasks.append(task)
+            self._register_tasks(team.team_id, running_tasks)
 
             # Drain queue and yield events until all agents complete
             while completed_count < total_agents:
@@ -385,6 +469,7 @@ class AgentTeamManager:
                 team.total_tokens["input_tokens"] += agent.token_usage.get("input_tokens", 0)
                 team.total_tokens["output_tokens"] += agent.token_usage.get("output_tokens", 0)
 
+            self._unregister_tasks(team.team_id)
             yield SSEEventBuilder.team_complete(
                 team.team_id, final_result, team.total_tokens
             )
@@ -392,6 +477,7 @@ class AgentTeamManager:
 
         except Exception as e:
             logger.error(f"Team execution error: {e}", exc_info=True)
+            self._unregister_tasks(team.team_id)
             team.status = "error"
             yield SSEEventBuilder.team_error(team.team_id, str(e))
             yield SSEEventBuilder.done()
@@ -507,8 +593,9 @@ class AgentTeamManager:
                 if tools and orch_api_format == "anthropic":
                     body["tools"] = tools
 
-                response = await self.bedrock.invoke_model(
-                    model_id, body, api_format=orch_api_format
+                response = await _retry_bedrock_call(
+                    lambda b=body: self.bedrock.invoke_model(model_id, b, api_format=orch_api_format),
+                    label="orchestrator",
                 )
                 content = response.get("content", [])
                 usage = response.get("usage", {})
@@ -932,7 +1019,10 @@ class AgentTeamManager:
 
         try:
             agent.status = "executing"
-            response = await self.bedrock.invoke_model(model_id, body, api_format=ea_api_format)
+            response = await _retry_bedrock_call(
+                lambda: self.bedrock.invoke_model(model_id, body, api_format=ea_api_format),
+                label=f"agent-{agent.role.name}",
+            )
             content = response.get("content", [])
             text = ""
             for block in content:
@@ -1046,7 +1136,10 @@ class AgentTeamManager:
         synth_ns_api_format = _get_api_format(orchestrator.role.model)
 
         try:
-            response = await self.bedrock.invoke_model(model_id, body, api_format=synth_ns_api_format)
+            response = await _retry_bedrock_call(
+                lambda: self.bedrock.invoke_model(model_id, body, api_format=synth_ns_api_format),
+                label="synthesis",
+            )
             content = response.get("content", [])
             text = ""
             for block in content:
@@ -1137,7 +1230,7 @@ class AgentTeamManager:
             )
 
             # Shared SSE event queue — agent loops push events here
-            event_queue: asyncio.Queue = asyncio.Queue()
+            event_queue: asyncio.Queue = asyncio.Queue(maxsize=settings.team_event_queue_max)
 
             # Start the team lead loop
             agent_tasks: List[asyncio.Task] = []
@@ -1154,13 +1247,27 @@ class AgentTeamManager:
                 )
             )
             agent_tasks.append(lead_task)
+            self._register_tasks(team_id, agent_tasks)
 
-            # Drain events from both the message bus SSE queue and the agent event queue
+            # Drain events from both the message bus SSE queue and the agent event queue.
+            # Uses a wall-clock timeout instead of an iteration count so that
+            # long-running collaborative sessions aren't killed prematurely.
             shutdown_requested = False
-            max_drain_iterations = 2000  # Safety limit
+            collab_start = asyncio.get_event_loop().time()
+            collab_max_runtime = settings.team_collab_max_runtime  # default 24h
+            heartbeat_counter = 0
 
-            for _ in range(max_drain_iterations):
+            while True:
                 if shutdown_requested:
+                    break
+
+                # Wall-clock safety limit
+                elapsed = asyncio.get_event_loop().time() - collab_start
+                if elapsed > collab_max_runtime:
+                    logger.warning(
+                        f"Collaborative team {team_id} reached max runtime "
+                        f"({collab_max_runtime}s), shutting down"
+                    )
                     break
 
                 # Check if all agent tasks are done
@@ -1195,8 +1302,10 @@ class AgentTeamManager:
                 if sse_event:
                     yield sse_event
 
-                # Yield heartbeat periodically
-                yield SSEEventBuilder.heartbeat(0.0)
+                # Yield heartbeat every ~10 iterations (~15s) to keep SSE alive
+                heartbeat_counter += 1
+                if heartbeat_counter % 10 == 0:
+                    yield SSEEventBuilder.heartbeat(elapsed)
 
             # Cleanup
             for t in agent_tasks:
@@ -1228,7 +1337,8 @@ class AgentTeamManager:
             yield SSEEventBuilder.team_error(team.team_id, str(e))
             yield SSEEventBuilder.done()
         finally:
-            # Clean up message bus and task manager
+            # Clean up message bus, task manager, and task registry
+            self._unregister_tasks(team_id)
             from .message_bus import remove_bus
             from .team_task_manager import remove_task_manager
             remove_bus(team_id)
@@ -1249,8 +1359,29 @@ class AgentTeamManager:
 _team_manager: Optional[AgentTeamManager] = None
 
 
+async def _periodic_team_cleanup(manager: AgentTeamManager):
+    """Background task that periodically cleans up completed teams."""
+    while True:
+        try:
+            await asyncio.sleep(300)  # Every 5 minutes
+            manager.cleanup_completed_teams()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Team cleanup error: {e}")
+
+
 def get_team_manager() -> AgentTeamManager:
     global _team_manager
     if _team_manager is None:
         _team_manager = AgentTeamManager()
+        # Start periodic cleanup in the background
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                _team_manager._cleanup_task = loop.create_task(
+                    _periodic_team_cleanup(_team_manager)
+                )
+        except RuntimeError:
+            pass  # No event loop yet; cleanup will start on first use
     return _team_manager

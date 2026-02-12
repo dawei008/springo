@@ -29,11 +29,6 @@ logger = logging.getLogger(__name__)
 # Team tool names that require special handling
 TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "task_get"}
 
-# Limits
-MAX_MESSAGES_PER_AGENT = 20
-MAX_TOOL_ITERATIONS = 15
-AGENT_WALL_CLOCK_TIMEOUT = 600  # 10 minutes
-
 
 def _get_api_format(model_name: str) -> str:
     info = get_model_info(model_name)
@@ -106,22 +101,31 @@ async def run_agent_loop(
     # Conversation history
     messages: List[Dict[str, Any]] = []
     message_count = 0
+    consecutive_idle_secs = 0.0
     start_time = asyncio.get_event_loop().time()
+
+    # Limits from config
+    max_messages = settings.team_agent_max_messages
+    wall_clock_timeout = settings.team_agent_wall_clock_timeout
+    idle_timeout = settings.team_idle_timeout
 
     agent.status = "idle"
     agent.started_at = datetime.now().isoformat()
 
-    logger.info(f"[AgentLoop:{agent_name}] Started for team {team.team_id}")
+    logger.info(
+        f"[AgentLoop:{agent_name}] Started for team {team.team_id} "
+        f"(max_msgs={max_messages}, wall_clock={wall_clock_timeout}s, idle={idle_timeout}s)"
+    )
 
     # Process initial message if provided
     current_message = initial_message
 
     try:
-        while message_count < MAX_MESSAGES_PER_AGENT:
+        while message_count < max_messages:
             # Check wall-clock timeout
             elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed > AGENT_WALL_CLOCK_TIMEOUT:
-                logger.info(f"[AgentLoop:{agent_name}] Wall-clock timeout ({AGENT_WALL_CLOCK_TIMEOUT}s)")
+            if elapsed > wall_clock_timeout:
+                logger.info(f"[AgentLoop:{agent_name}] Wall-clock timeout ({wall_clock_timeout}s)")
                 break
 
             # Receive next message (or use initial_message on first iteration)
@@ -133,8 +137,16 @@ async def run_agent_loop(
                 current_message = await mailbox.receive(timeout=30.0)
                 if current_message is None:
                     # Timeout — send heartbeat and continue waiting
+                    consecutive_idle_secs += 30.0
+                    if consecutive_idle_secs >= idle_timeout:
+                        logger.info(
+                            f"[AgentLoop:{agent_name}] Idle timeout ({idle_timeout}s) — self-terminating"
+                        )
+                        break
                     await event_queue.put(SSEEventBuilder.heartbeat(elapsed))
                     continue
+
+            consecutive_idle_secs = 0.0  # Reset on message received
 
             mailbox.is_idle = False
             agent.status = "thinking"
@@ -236,7 +248,7 @@ async def _run_tool_loop(
 
     agent.status = "executing"
 
-    for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
+    for iteration in range(1, settings.team_agent_max_tool_iterations + 1):
         request_body = {
             "model": model_name,
             "max_tokens": 4096,

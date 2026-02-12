@@ -74,6 +74,30 @@ class Settings(BaseSettings):
     max_tool_output: int = Field(default=1000000, description="Max bytes for tool output file (1MB)")
     max_context_tokens: int = Field(default=200000, description="Max context window tokens (200K)")
     compact_threshold: int = Field(default=120000, description="Token threshold to trigger context compaction")
+
+    # Agent Teams — Collaborative mode limits
+    team_agent_wall_clock_timeout: int = Field(
+        default=86400, description="Max wall-clock seconds per agent (default 24h)")
+    team_agent_max_messages: int = Field(
+        default=200, description="Max messages an agent can process before stopping")
+    team_agent_max_tool_iterations: int = Field(
+        default=30, description="Max tool iterations per message turn for team agents")
+    team_collab_max_runtime: int = Field(
+        default=86400, description="Max wall-clock seconds for collaborative team execution (default 24h)")
+    team_idle_timeout: int = Field(
+        default=600, description="Seconds of idle before agent self-terminates (10 min)")
+    team_max_concurrent_teams: int = Field(
+        default=5, description="Max simultaneously active teams")
+    team_completed_cleanup_secs: int = Field(
+        default=3600, description="Seconds after completion before team memory is freed (1h)")
+    team_message_log_max: int = Field(
+        default=500, description="Max messages kept in message bus log (rolling window)")
+    team_event_queue_max: int = Field(
+        default=5000, description="Max SSE events buffered in event queue")
+    team_bedrock_max_retries: int = Field(
+        default=3, description="Max retries for transient Bedrock API errors")
+    team_bedrock_retry_base_delay: float = Field(
+        default=1.0, description="Base delay in seconds for Bedrock retry backoff")
     
     model_config = {
         "env_prefix": "SPRINGO_",

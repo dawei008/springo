@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Optional, Dict, List, Literal
 
 from ..utils.streaming import SSEEventBuilder
+from ..config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +67,11 @@ class TeamMessageBus:
     def __init__(self, team_id: str):
         self.team_id = team_id
         self._mailboxes: Dict[str, AgentMailbox] = {}
-        self._sse_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._sse_queue: asyncio.Queue[str] = asyncio.Queue(
+            maxsize=settings.team_event_queue_max
+        )
         self._message_log: List[AgentMessage] = []
+        self._message_log_max = settings.team_message_log_max
 
     def register_agent(self, name: str) -> AgentMailbox:
         """Create a mailbox for an agent and return it."""
@@ -89,12 +93,29 @@ class TeamMessageBus:
     def agent_names(self) -> List[str]:
         return list(self._mailboxes.keys())
 
+    def _trim_log(self):
+        """Keep message log within bounds (rolling window)."""
+        if len(self._message_log) > self._message_log_max:
+            # Remove oldest 20% to avoid trimming on every append
+            trim_count = self._message_log_max // 5
+            self._message_log = self._message_log[trim_count:]
+
+    async def _put_sse(self, event: str):
+        """Put an SSE event on the queue, dropping oldest if full."""
+        if self._sse_queue.full():
+            try:
+                self._sse_queue.get_nowait()  # Drop oldest
+            except asyncio.QueueEmpty:
+                pass
+        await self._sse_queue.put(event)
+
     async def send_message(self, msg: AgentMessage):
         """Deliver a message to a specific agent's inbox.
 
         Also logs the message and emits an SSE event.
         """
         self._message_log.append(msg)
+        self._trim_log()
 
         recipient_mailbox = self._mailboxes.get(msg.recipient)
         if not recipient_mailbox:
@@ -115,7 +136,7 @@ class TeamMessageBus:
             summary=msg.summary,
             message_id=msg.message_id,
         )
-        await self._sse_queue.put(sse_event)
+        await self._put_sse(sse_event)
 
         logger.debug(
             f"[MessageBus:{self.team_id}] {msg.sender} -> {msg.recipient}: "
@@ -125,6 +146,7 @@ class TeamMessageBus:
     async def broadcast(self, msg: AgentMessage):
         """Deliver a message to all agents except the sender."""
         self._message_log.append(msg)
+        self._trim_log()
 
         for name, mailbox in self._mailboxes.items():
             if name != msg.sender:
@@ -146,7 +168,7 @@ class TeamMessageBus:
             summary=msg.summary,
             message_id=msg.message_id,
         )
-        await self._sse_queue.put(sse_event)
+        await self._put_sse(sse_event)
 
         logger.debug(
             f"[MessageBus:{self.team_id}] {msg.sender} broadcast: "
@@ -163,7 +185,7 @@ class TeamMessageBus:
             team_id=self.team_id,
             agent_name=agent_name,
         )
-        await self._sse_queue.put(sse_event)
+        await self._put_sse(sse_event)
 
     async def notify_shutdown(self, agent_name: str):
         """Emit an SSE event when an agent shuts down."""
@@ -171,7 +193,7 @@ class TeamMessageBus:
             team_id=self.team_id,
             agent_name=agent_name,
         )
-        await self._sse_queue.put(sse_event)
+        await self._put_sse(sse_event)
         self.unregister_agent(agent_name)
 
     async def get_sse_event(self, timeout: float = 15.0) -> Optional[str]:
@@ -183,7 +205,7 @@ class TeamMessageBus:
 
     async def emit_sse(self, event: str):
         """Directly push an SSE event string to the stream."""
-        await self._sse_queue.put(event)
+        await self._put_sse(event)
 
     def get_message_history(self) -> List[Dict]:
         """Return all messages as dicts for the history API."""

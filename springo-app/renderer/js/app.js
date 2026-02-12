@@ -10603,7 +10603,13 @@ ${content || 'Task completed successfully.'}
                 const spawnData = await spawnRes.json();
                 const teamId = spawnData.team_id;
 
-                // Step 2: Execute team with SSE streaming
+                // Step 2: Execute team with SSE streaming (with reconnection)
+                const maxReconnects = 3;
+                let reconnectCount = 0;
+                let streamDone = false;
+                let synthesisText = '';
+
+                while (!streamDone && reconnectCount <= maxReconnects) {
                 const execRes = await fetch(BASE_URL + '/v1/teams/' + teamId + '/execute', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -10611,6 +10617,12 @@ ${content || 'Task completed successfully.'}
                 });
 
                 if (!execRes.ok) {
+                    if (reconnectCount < maxReconnects) {
+                        reconnectCount++;
+                        console.warn(`Team SSE failed (${reconnectCount}/${maxReconnects}), retrying...`);
+                        await new Promise(r => setTimeout(r, 1000 * reconnectCount));
+                        continue;
+                    }
                     throw new Error('Failed to execute team: ' + execRes.statusText);
                 }
 
@@ -10618,7 +10630,6 @@ ${content || 'Task completed successfully.'}
                 const decoder = new TextDecoder();
                 let buffer = '';
                 let eventType = null;
-                let synthesisText = '';
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -10633,7 +10644,7 @@ ${content || 'Task completed successfully.'}
                             eventType = line.slice(7).trim();
                         } else if (line.startsWith('data: ')) {
                             const dataStr = line.slice(6);
-                            if (dataStr === '[DONE]') continue;
+                            if (dataStr === '[DONE]') { streamDone = true; continue; }
 
                             try {
                                 const data = JSON.parse(dataStr);
@@ -10722,6 +10733,18 @@ ${content || 'Task completed successfully.'}
                         }
                     }
                 }
+
+                // Stream ended — if we didn't see [DONE], try reconnecting
+                if (!streamDone) {
+                    reconnectCount++;
+                    if (reconnectCount <= maxReconnects) {
+                        console.warn(`Team SSE stream dropped (${reconnectCount}/${maxReconnects}), reconnecting...`);
+                        await new Promise(r => setTimeout(r, 1000 * reconnectCount));
+                        continue;
+                    }
+                    console.error('Team SSE stream dropped, max reconnects exceeded');
+                }
+                } // end reconnection while loop
 
                 // Finalize the streamed assistant message
                 if (synthesisText) {
