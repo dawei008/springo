@@ -11693,7 +11693,7 @@ ${content || 'Task completed successfully.'}
 
         function sendTeamPanelMessage(teamId, content) {
             if (!teamId || !content) return;
-            fetch(`${CONFIG.API_URL}/v1/teams/${teamId}/message`, {
+            fetch(`${BASE_URL}/v1/teams/${teamId}/message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ content: content, recipient: 'team-lead' }),

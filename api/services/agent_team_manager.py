@@ -1285,6 +1285,20 @@ class AgentTeamManager:
                         yield sse_event
                     break
 
+                # Auto-complete: if all tasks on the board are completed and
+                # the team lead is idle, there is no more work to do.  Cancel
+                # agent loops so the stream can finish and the frontend gets
+                # the team_complete / [DONE] signals promptly.
+                tasks = task_mgr._tasks
+                if tasks and all(
+                    t.status in ("completed", "error") for t in tasks.values()
+                ) and team_lead.status == "idle":
+                    logger.info(
+                        f"Collaborative team {team_id}: all tasks completed "
+                        f"and team lead idle — auto-finishing"
+                    )
+                    break
+
                 # Drain agent event queue
                 try:
                     event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
