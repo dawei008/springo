@@ -35,6 +35,18 @@ _RETRIABLE_ERRORS = (
     "Too Many Requests",
     "Connection reset",
     "Read timed out",
+    "ExpiredTokenException",
+    "ExpiredToken",
+    "InvalidIdentityToken",
+    "UnrecognizedClientException",
+)
+
+# Subset that indicates credential expiry — triggers session refresh
+_CREDENTIAL_ERRORS = (
+    "ExpiredTokenException",
+    "ExpiredToken",
+    "InvalidIdentityToken",
+    "UnrecognizedClientException",
 )
 
 
@@ -43,6 +55,8 @@ async def _retry_bedrock_call(coro_factory, *, label: str = "bedrock"):
 
     *coro_factory* is a zero-arg callable that returns a new awaitable each
     time (because awaitables are consumed on first await).
+
+    On credential expiry errors, refreshes the bedrock session before retrying.
 
     Returns the result on success, raises on permanent failure.
     """
@@ -57,6 +71,14 @@ async def _retry_bedrock_call(coro_factory, *, label: str = "bedrock"):
             last_exc = exc
             msg = str(exc)
             if attempt < max_retries and any(pat in msg for pat in _RETRIABLE_ERRORS):
+                # Refresh session on credential errors
+                if any(pat in msg for pat in _CREDENTIAL_ERRORS):
+                    try:
+                        svc = get_bedrock_service()
+                        svc.refresh_session()
+                        logger.warning(f"[{label}] Credential expired, refreshed session")
+                    except Exception as refresh_err:
+                        logger.error(f"[{label}] Failed to refresh session: {refresh_err}")
                 delay = base_delay * (2 ** attempt)
                 logger.warning(
                     f"[{label}] Transient error (attempt {attempt + 1}/{max_retries + 1}): "
@@ -1221,10 +1243,17 @@ class AgentTeamManager:
                     f"You are the team lead. Here is the user's request:\n\n"
                     f"{team.user_request}\n\n"
                     f"{'Additional context: ' + team.shared_context if team.shared_context else ''}\n\n"
-                    f"Plan the work, create tasks on the task board, and coordinate "
-                    f"with your team. You can spawn worker agents by calling send_message "
-                    f"to 'system' with type 'spawn_agent' if needed, or work on tasks yourself.\n"
-                    f"When all tasks are complete, summarize the results."
+                    f"IMPORTANT: First judge the complexity of this request.\n"
+                    f"- If the task is simple or you can handle it yourself with the available tools, "
+                    f"just do it directly. Do NOT create tasks or delegate to workers for simple requests.\n"
+                    f"- Only create tasks and delegate to worker agents when the work genuinely requires "
+                    f"parallel effort (e.g., multiple independent research threads, exploring different "
+                    f"parts of a codebase simultaneously, tasks requiring different expertise).\n"
+                    f"- If you are uncertain about the approach, scope, or what the user wants, "
+                    f"use the ask_user tool to ask for clarification BEFORE starting work.\n\n"
+                    f"You have full access to all tools (file read/write, web search, code execution, etc.). "
+                    f"Use them directly to fulfill the request when possible.\n"
+                    f"When done, provide the final answer to the user."
                 ),
                 summary="Initial user request",
             )
@@ -1318,9 +1347,11 @@ class AgentTeamManager:
                 except asyncio.TimeoutError:
                     pass
 
-                # Drain message bus SSE queue
-                sse_event = await bus.get_sse_event(timeout=0.5)
-                if sse_event:
+                # Drain message bus SSE queue (drain all available, not just one)
+                while True:
+                    sse_event = await bus.get_sse_event(timeout=0.5)
+                    if sse_event is None:
+                        break
                     yield sse_event
 
                 # Yield heartbeat every ~10 iterations (~15s) to keep SSE alive
@@ -1328,7 +1359,18 @@ class AgentTeamManager:
                 if heartbeat_counter % 10 == 0:
                     yield SSEEventBuilder.heartbeat(elapsed)
 
-            # Cleanup
+            # Drain remaining events from both queues before cleanup
+            while not event_queue.empty():
+                event = event_queue.get_nowait()
+                if isinstance(event, str):
+                    yield event
+            while True:
+                sse_event = await bus.get_sse_event(timeout=0.5)
+                if sse_event is None:
+                    break
+                yield sse_event
+
+            # Cleanup agent tasks
             for t in agent_tasks:
                 if not t.done():
                     t.cancel()
@@ -1336,6 +1378,17 @@ class AgentTeamManager:
                         await asyncio.wait_for(t, timeout=5.0)
                     except (asyncio.TimeoutError, asyncio.CancelledError):
                         pass
+
+            # Emit team_agent_complete for each agent so frontend updates cards
+            for agent in team.agents:
+                yield SSEEventBuilder.team_agent_complete(
+                    team_id=team.team_id,
+                    agent_id=agent.agent_id,
+                    role=agent.role.name if hasattr(agent.role, 'name') else str(agent.role),
+                    task_title="",
+                    findings=agent.findings or "",
+                    tokens=agent.token_usage,
+                )
 
             # Final result from team lead
             team.status = "complete"

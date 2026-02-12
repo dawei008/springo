@@ -35,12 +35,20 @@ class AgentMailbox:
         self.inbox: asyncio.Queue[AgentMessage] = asyncio.Queue()
         self.is_idle: bool = True
         self._message_history: List[AgentMessage] = []
+        self._history_max = settings.team_message_log_max
+
+    def _trim_history(self):
+        """Keep per-agent message history within bounds."""
+        if len(self._message_history) > self._history_max:
+            trim_count = self._history_max // 5
+            self._message_history = self._message_history[trim_count:]
 
     async def receive(self, timeout: float = 30.0) -> Optional[AgentMessage]:
         """Wait for the next message, returning None on timeout."""
         try:
             msg = await asyncio.wait_for(self.inbox.get(), timeout=timeout)
             self._message_history.append(msg)
+            self._trim_history()
             return msg
         except asyncio.TimeoutError:
             return None

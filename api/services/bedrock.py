@@ -436,7 +436,15 @@ class BedrockService:
             connect_timeout=settings.bedrock_connect_timeout,
             read_timeout=settings.bedrock_read_timeout
         )
-    
+
+    def refresh_session(self):
+        """Recreate the aioboto3 session to pick up refreshed credentials.
+
+        Called by the retry layer when an ExpiredTokenException is detected.
+        """
+        logger.info("BedrockService: refreshing aioboto3 session for credential renewal")
+        self.session = aioboto3.Session(**self._session_kwargs)
+
     def get_bedrock_model_id(self, model: str) -> str:
         """获取 Bedrock 模型 ID"""
         return get_bedrock_id(model)

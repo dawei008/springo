@@ -1854,6 +1854,7 @@
                 renderConversations();
                 hideContextIndicator(); // Reset context indicator for new conversation
                 removeInlineChatToolPanel(); // Remove inline tool panel for new conversation
+                resetTeamSplitPanel(); // Reset team panel for new conversation
 
                 // Update status bar path display for new conversation
                 updateWorkingDirDisplay(workingDir);
@@ -1947,6 +1948,7 @@
                 renderToolExecutionSidebar(); // Update right sidebar for this conversation
                 refreshContextStats(); // Update context indicator for this conversation
                 removeInlineChatToolPanel(); // Remove inline tool panel when switching conversations
+                resetTeamSplitPanel(); // Reset team panel when switching conversations
 
                 // Restore inline tasks for this conversation
                 updateInlineTasks(runtime.todos);
@@ -10569,6 +10571,9 @@ ${content || 'Task completed successfully.'}
                 return;
             }
 
+            // Reset team panel from any previous team execution
+            resetTeamSplitPanel();
+
             // Get or create conversation
             const thisConvId = currentConversationId || Date.now().toString();
             if (!currentConversationId) {
@@ -10616,12 +10621,12 @@ ${content || 'Task completed successfully.'}
                 const teamId = spawnData.team_id;
 
                 // Step 2: Execute team with SSE streaming (with reconnection)
-                const maxReconnects = 3;
+                // Unlimited retries with exponential backoff (cap 30s) for multi-day runs
                 let reconnectCount = 0;
                 let streamDone = false;
                 let synthesisText = '';
 
-                while (!streamDone && reconnectCount <= maxReconnects) {
+                while (!streamDone) {
                 const execRes = await fetch(BASE_URL + '/v1/teams/' + teamId + '/execute', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -10629,19 +10634,18 @@ ${content || 'Task completed successfully.'}
                 });
 
                 if (!execRes.ok) {
-                    if (reconnectCount < maxReconnects) {
-                        reconnectCount++;
-                        console.warn(`Team SSE failed (${reconnectCount}/${maxReconnects}), retrying...`);
-                        await new Promise(r => setTimeout(r, 1000 * reconnectCount));
-                        continue;
-                    }
-                    throw new Error('Failed to execute team: ' + execRes.statusText);
+                    reconnectCount++;
+                    const delay = Math.min(1000 * Math.pow(2, reconnectCount - 1), 30000);
+                    console.warn(`Team SSE request failed (attempt ${reconnectCount}), retrying in ${delay}ms...`);
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
                 }
 
                 const reader = execRes.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
                 let eventType = null;
+                reconnectCount = 0; // Reset on successful connection
 
                 while (true) {
                     const { done, value } = await reader.read();
@@ -10706,6 +10710,10 @@ ${content || 'Task completed successfully.'}
                                         // Use streamed synthesis text, fall back to complete result
                                         if (!synthesisText && data.result) {
                                             synthesisText = data.result;
+                                            // Render immediately as assistant message
+                                            if (currentConversationId === thisConvId) {
+                                                debouncedUpdateAssistantMessage(thisConvId, synthesisText, [], false);
+                                            }
                                         }
                                         break;
                                     case 'team_error':
@@ -10721,6 +10729,9 @@ ${content || 'Task completed successfully.'}
                                         break;
                                     case 'team_agent_broadcast':
                                         appendTeamMessage(data.team_id, data.sender, 'all', data.content, data.summary, true);
+                                        break;
+                                    case 'team_ask_user':
+                                        showTeamAskUser(data.team_id, data.agent_name, data.question, data.options || []);
                                         break;
                                     case 'team_agent_idle':
                                         updateTeamSplitAgent(data.team_id, null, null, 'idle', '', '', data.agent_name);
@@ -10749,12 +10760,10 @@ ${content || 'Task completed successfully.'}
                 // Stream ended — if we didn't see [DONE], try reconnecting
                 if (!streamDone) {
                     reconnectCount++;
-                    if (reconnectCount <= maxReconnects) {
-                        console.warn(`Team SSE stream dropped (${reconnectCount}/${maxReconnects}), reconnecting...`);
-                        await new Promise(r => setTimeout(r, 1000 * reconnectCount));
-                        continue;
-                    }
-                    console.error('Team SSE stream dropped, max reconnects exceeded');
+                    const delay = Math.min(1000 * Math.pow(2, reconnectCount - 1), 30000);
+                    console.warn(`Team SSE stream dropped (attempt ${reconnectCount}), reconnecting in ${delay}ms...`);
+                    await new Promise(r => setTimeout(r, delay));
+                    continue;
                 }
                 } // end reconnection while loop
 
@@ -11464,15 +11473,23 @@ ${content || 'Task completed successfully.'}
 
             // For collaborative mode: add messages container, task board, and message input
             if (isCollaborative) {
-                // Messages container (chat log between agents)
-                let messagesEl = document.getElementById('team-split-messages');
-                if (!messagesEl) {
-                    messagesEl = document.createElement('div');
+                // Messages section header + container (chat log between agents and user)
+                let messagesSection = document.getElementById('team-split-messages-section');
+                if (!messagesSection) {
+                    messagesSection = document.createElement('div');
+                    messagesSection.id = 'team-split-messages-section';
+                    messagesSection.style.cssText = 'margin:8px 0;';
+                    const header = document.createElement('div');
+                    header.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;padding:0 8px;';
+                    header.textContent = 'Team Messages';
+                    messagesSection.appendChild(header);
+                    const messagesEl = document.createElement('div');
                     messagesEl.id = 'team-split-messages';
                     messagesEl.className = 'team-split-messages';
-                    messagesEl.style.display = 'none';
-                    messagesEl.style.cssText = 'display:none;max-height:200px;overflow-y:auto;padding:8px;margin:8px 0;border:1px solid var(--border-color);border-radius:6px;font-size:12px;';
-                    content.appendChild(messagesEl);
+                    messagesEl.style.cssText = 'max-height:200px;overflow-y:auto;padding:8px;border:1px solid var(--border-color);border-radius:6px;font-size:12px;min-height:40px;color:var(--text-secondary);';
+                    messagesEl.innerHTML = '<div style="opacity:0.5;font-style:italic;">No messages yet</div>';
+                    messagesSection.appendChild(messagesEl);
+                    content.appendChild(messagesSection);
                 }
 
                 // Task board container
@@ -11639,6 +11656,14 @@ ${content || 'Task completed successfully.'}
             if (placeholder) placeholder.style.display = '';
             if (content) content.style.display = 'none';
             if (agentsContainer) agentsContainer.innerHTML = '';
+
+            // Clean up collaborative mode elements
+            const messagesSection = document.getElementById('team-split-messages-section');
+            if (messagesSection) messagesSection.remove();
+            const taskBoard = document.getElementById('team-split-task-board');
+            if (taskBoard) taskBoard.remove();
+            const inputEl = document.getElementById('team-split-input');
+            if (inputEl) inputEl.remove();
         }
 
         // === Collaborative Team UI Functions ===
@@ -11648,7 +11673,10 @@ ${content || 'Task completed successfully.'}
             const messagesContainer = document.getElementById('team-split-messages');
             if (!messagesContainer) return;
 
-            messagesContainer.style.display = 'block';
+            // Clear placeholder on first real message
+            const placeholder = messagesContainer.querySelector('[style*="opacity"]');
+            if (placeholder) placeholder.remove();
+
             const msgEl = document.createElement('div');
             msgEl.className = `team-split-message ${isBroadcast ? 'broadcast' : 'dm'}`;
             const label = isBroadcast
@@ -11659,6 +11687,10 @@ ${content || 'Task completed successfully.'}
                 <div class="team-msg-content">${escapeHtml(summary || content.substring(0, 100))}</div>
             `;
             messagesContainer.appendChild(msgEl);
+            // Sliding window: keep only the last 200 messages
+            while (messagesContainer.children.length > 200) {
+                messagesContainer.removeChild(messagesContainer.firstChild);
+            }
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
 
@@ -11714,10 +11746,67 @@ ${content || 'Task completed successfully.'}
             }
         }
 
+        function showTeamAskUser(teamId, agentName, question, options) {
+            if (teamId !== activeTeamSplitId) return;
+            const messagesContainer = document.getElementById('team-split-messages');
+            if (!messagesContainer) return;
+
+            // Clear placeholder
+            const placeholder = messagesContainer.querySelector('[style*="opacity"]');
+            if (placeholder) placeholder.remove();
+
+            // Build question card
+            const card = document.createElement('div');
+            card.className = 'team-split-message dm team-ask-user';
+            card.style.cssText = 'border:1px solid var(--accent-color);border-radius:6px;padding:8px;margin:4px 0;background:var(--bg-secondary);';
+
+            let optionsHtml = '';
+            if (options && options.length > 0) {
+                optionsHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">' +
+                    options.map(o =>
+                        `<button class="team-ask-option" data-team-id="${escapeHtml(teamId)}" data-label="${escapeHtml(o.label || '')}"
+                            style="padding:4px 10px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-primary);color:var(--text-color);cursor:pointer;font-size:12px;"
+                            title="${escapeHtml(o.description || '')}">${escapeHtml(o.label || '')}</button>`
+                    ).join('') +
+                    '</div>';
+            }
+
+            card.innerHTML = `
+                <div class="team-msg-header" style="color:var(--accent-color);font-weight:600;">${escapeHtml(agentName)} asks:</div>
+                <div class="team-msg-content" style="margin:4px 0;white-space:pre-wrap;">${escapeHtml(question)}</div>
+                ${optionsHtml}
+            `;
+
+            // Attach click handlers to option buttons
+            card.querySelectorAll('.team-ask-option').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const label = btn.getAttribute('data-label');
+                    const tid = btn.getAttribute('data-team-id');
+                    sendTeamPanelMessage(tid, label);
+                    // Highlight selected
+                    card.querySelectorAll('.team-ask-option').forEach(b => b.disabled = true);
+                    btn.style.background = 'var(--accent-color)';
+                    btn.style.color = '#fff';
+                });
+            });
+
+            messagesContainer.appendChild(card);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+            // Focus the message input for custom response
+            const msgInput = document.getElementById('team-msg-input');
+            if (msgInput) {
+                msgInput.placeholder = 'Type your answer...';
+                msgInput.focus();
+            }
+
+            // Show a toast so user notices the question
+            showToast(`Team lead is asking: ${question.substring(0, 60)}`, 'info');
+        }
+
         function sendTeamPanelMessage(teamId, content) {
             if (!teamId || !content) return;
-            // Optimistic UI: show the sent message immediately
-            appendTeamMessage(teamId, 'user', 'team-lead', content, content.substring(0, 100));
+            // Message will appear via SSE team_agent_message event from the bus
             fetch(`${BASE_URL}/v1/teams/${teamId}/message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

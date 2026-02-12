@@ -20,14 +20,18 @@ from ..config import settings
 from .message_bus import AgentMailbox, AgentMessage, TeamMessageBus
 from .team_task_manager import TeamTaskManager
 from .bedrock import BedrockService
-from .model_registry import get_model_info
+from .model_registry import get_model_info, get_model_limits
 from .session_state import get_working_dir
 from .mcp_manager import get_mcp_manager
+from .context_manager import (
+    truncate_tool_results, prepare_messages_for_api,
+    count_messages_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
 # Team tool names that require special handling
-TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "task_get"}
+TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "task_get", "ask_user"}
 
 
 def _get_api_format(model_name: str) -> str:
@@ -243,12 +247,29 @@ async def _run_tool_loop(
     Returns (full_text, tokens_dict).
     """
     full_text = ""
+    _FULL_TEXT_MAX = 100_000  # Cap findings accumulation at ~100K chars
     tokens = {"input_tokens": 0, "output_tokens": 0}
     working_dir = get_working_dir() or None
 
     agent.status = "executing"
 
+    model_limits = get_model_limits(model_name)
+
     for iteration in range(1, settings.team_agent_max_tool_iterations + 1):
+        # Truncate old tool results to keep context manageable
+        if iteration > 1:
+            messages = prepare_messages_for_api(messages, keep_recent=3)
+
+        # Emergency truncation if approaching model context limit
+        current_tokens = count_messages_tokens(messages)
+        max_ctx = model_limits.get("max_context_tokens", 200000)
+        if current_tokens > max_ctx * 0.85:
+            logger.warning(
+                f"[AgentLoop:{agent_name}] Context at {current_tokens:,}/{max_ctx:,} tokens, "
+                f"forcing aggressive truncation"
+            )
+            messages = truncate_tool_results(messages, max_size=2048)
+
         request_body = {
             "model": model_name,
             "max_tokens": 4096,
@@ -309,7 +330,8 @@ async def _run_tool_loop(
                     text = delta.get("text", "")
                     if text:
                         iter_text += text
-                        full_text += text
+                        if len(full_text) < _FULL_TEXT_MAX:
+                            full_text += text
                         if content_blocks and content_blocks[-1].get("type") == "text":
                             content_blocks[-1]["text"] += text
                         await event_queue.put(
@@ -554,6 +576,96 @@ async def _execute_team_tool(
             "blocked_by": task.blocked_by,
         }
 
+    elif tool_name == "ask_user":
+        question = tool_input.get("question", "")
+        options = tool_input.get("options", [])
+        if not question:
+            return {"error": "question is required"}
+
+        is_team_lead = agent_name == "team-lead"
+
+        if is_team_lead:
+            # Team lead asks the user directly via SSE
+            options_text = ""
+            if options:
+                options_text = "\n".join(
+                    f"  {i+1}. {o.get('label', '')} — {o.get('description', '')}"
+                    for i, o in enumerate(options)
+                )
+
+            display_content = question
+            if options_text:
+                display_content += "\n\nOptions:\n" + options_text
+
+            # Emit SSE event for the frontend question UI
+            sse_event = SSEEventBuilder.team_ask_user(
+                team_id=team_id,
+                agent_name=agent_name,
+                question=question,
+                options=options,
+            )
+            await message_bus.emit_sse(sse_event)
+
+            # Also emit as a message event so it appears in team messages panel
+            msg = AgentMessage(
+                type="message",
+                sender=agent_name,
+                recipient="user",
+                content=display_content,
+                summary=f"Question: {question[:40]}",
+            )
+            sse_msg_event = SSEEventBuilder.team_agent_message(
+                team_id=team_id,
+                sender=agent_name,
+                recipient="user",
+                content=display_content,
+                summary=f"Question: {question[:40]}",
+                message_id=msg.message_id,
+            )
+            await message_bus.emit_sse(sse_msg_event)
+
+            return {
+                "status": "question_sent",
+                "message": (
+                    "Question sent to the user. They will respond via the team message input. "
+                    "Wait for their reply — it will arrive as your next message."
+                ),
+            }
+        else:
+            # Worker cannot ask user directly — route through team lead
+            relay_content = (
+                f"[Clarification needed from user]\n"
+                f"Worker '{agent_name}' needs to ask the user:\n\n"
+                f"{question}"
+            )
+            if options:
+                relay_content += "\n\nSuggested options:\n" + "\n".join(
+                    f"  - {o.get('label', '')}: {o.get('description', '')}"
+                    for o in options
+                )
+            relay_content += (
+                "\n\nPlease use ask_user to ask the user this question, "
+                "then forward their answer back to me."
+            )
+
+            msg = AgentMessage(
+                type="message",
+                sender=agent_name,
+                recipient="team-lead",
+                content=relay_content,
+                summary=f"Needs user input: {question[:30]}",
+            )
+            await message_bus.send_message(msg)
+
+            return {
+                "status": "forwarded_to_team_lead",
+                "message": (
+                    "You cannot ask the user directly. Your question has been sent to the team lead. "
+                    "The team lead will ask the user and forward their response to you. "
+                    "Wait for the team lead's reply — it will arrive as your next message."
+                ),
+            }
+
     return {"error": f"Unknown team tool: {tool_name}"}
 
 
@@ -580,8 +692,9 @@ def _build_team_context_prompt(agent_name: str, team: Team) -> str:
     """Build additional system prompt with team context information."""
     other_agents = [a for a in team.agents if a.name != agent_name]
     agent_list = ", ".join(a.name or a.agent_id for a in other_agents) if other_agents else "none yet"
+    is_lead = agent_name == "team-lead"
 
-    return (
+    base = (
         f"\n\n## Team Context\n"
         f"You are agent '{agent_name}' in team '{team.team_id}'.\n"
         f"Team request: {team.user_request}\n"
@@ -591,10 +704,28 @@ def _build_team_context_prompt(agent_name: str, team: Team) -> str:
         f"- task_create: Create tasks on the shared task board\n"
         f"- task_update: Update task status, assign owners, set dependencies\n"
         f"- task_list: List all tasks\n"
-        f"- task_get: Get full task details\n\n"
-        f"Coordinate with your team using these tools. When you finish processing a message, "
-        f"provide your response and then wait for the next message.\n"
+        f"- task_get: Get full task details\n"
+        f"- ask_user: Ask the user a question for clarification\n\n"
     )
+
+    if is_lead:
+        base += (
+            f"As team lead, you can ask the user questions directly using ask_user. "
+            f"If a worker sends you a clarification request, use ask_user to relay it to the user, "
+            f"then forward the user's answer back to that worker via send_message.\n\n"
+            f"Coordinate with your team using these tools. When you finish processing a message, "
+            f"provide your response and then wait for the next message.\n"
+        )
+    else:
+        base += (
+            f"IMPORTANT: You cannot ask the user directly. If you need clarification from the user, "
+            f"call ask_user — it will automatically route your question to the team lead, "
+            f"who will ask the user and forward the answer to you.\n\n"
+            f"Focus on completing your assigned tasks. When you finish processing a message, "
+            f"provide your response and then wait for the next message.\n"
+        )
+
+    return base
 
 
 def _compact_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

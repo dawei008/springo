@@ -565,6 +565,21 @@ class SSEEventBuilder:
         })
 
     @staticmethod
+    def team_ask_user(
+        team_id: str, agent_name: str,
+        question: str, options: list,
+    ) -> str:
+        """Agent is asking the user a question"""
+        return format_sse_event('team_ask_user', {
+            'type': 'team_ask_user',
+            'team_id': team_id,
+            'agent_name': agent_name,
+            'question': question,
+            'options': options,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
     def done() -> str:
         """构建完成标记"""
         return "data: [DONE]\n\n"
