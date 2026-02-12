@@ -514,6 +514,13 @@ class AgentTeamManager:
             )
             yield SSEEventBuilder.done()
 
+        except asyncio.CancelledError:
+            logger.warning(f"Team {team.team_id} execution cancelled")
+            self._unregister_tasks(team.team_id)
+            team.status = "error"
+            team.completed_at = datetime.now().isoformat()
+            yield SSEEventBuilder.team_error(team.team_id, "Team execution cancelled")
+            yield SSEEventBuilder.done()
         except Exception as e:
             logger.error(f"Team execution error: {e}", exc_info=True)
             self._unregister_tasks(team.team_id)
@@ -1422,6 +1429,12 @@ class AgentTeamManager:
             )
             yield SSEEventBuilder.done()
 
+        except asyncio.CancelledError:
+            logger.warning(f"Collaborative team {team.team_id} execution cancelled")
+            team.status = "error"
+            team.completed_at = datetime.now().isoformat()
+            yield SSEEventBuilder.team_error(team.team_id, "Team execution cancelled")
+            yield SSEEventBuilder.done()
         except Exception as e:
             logger.error(f"Collaborative team execution error: {e}", exc_info=True)
             team.status = "error"

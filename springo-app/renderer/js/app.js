@@ -10656,8 +10656,12 @@ ${content || 'Task completed successfully.'}
 
                 if (!execRes.ok) {
                     reconnectCount++;
+                    if (reconnectCount > 50) {
+                        console.error('Team SSE: max reconnect attempts (50) reached, giving up');
+                        break;
+                    }
                     const delay = Math.min(1000 * Math.pow(2, reconnectCount - 1), 30000);
-                    console.warn(`Team SSE request failed (attempt ${reconnectCount}), retrying in ${delay}ms...`);
+                    console.warn(`Team SSE request failed (attempt ${reconnectCount}/50), retrying in ${delay}ms...`);
                     await new Promise(r => setTimeout(r, delay));
                     continue;
                 }
@@ -10781,8 +10785,12 @@ ${content || 'Task completed successfully.'}
                 // Stream ended — if we didn't see [DONE], try reconnecting
                 if (!streamDone) {
                     reconnectCount++;
+                    if (reconnectCount > 50) {
+                        console.error('Team SSE: max reconnect attempts (50) reached, giving up');
+                        break;
+                    }
                     const delay = Math.min(1000 * Math.pow(2, reconnectCount - 1), 30000);
-                    console.warn(`Team SSE stream dropped (attempt ${reconnectCount}), reconnecting in ${delay}ms...`);
+                    console.warn(`Team SSE stream dropped (attempt ${reconnectCount}/50), reconnecting in ${delay}ms...`);
                     await new Promise(r => setTimeout(r, delay));
                     continue;
                 }

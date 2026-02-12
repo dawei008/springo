@@ -59,7 +59,7 @@ def count_tokens(text: str) -> int:
     if not text:
         return 0
 
-    cache_key = hashlib.md5(text[:1000].encode()).hexdigest()
+    cache_key = hashlib.md5((text[:1000] + text[-1000:] + str(len(text))).encode()).hexdigest()
     if cache_key in _token_cache:
         return _token_cache[cache_key]
 

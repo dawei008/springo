@@ -172,7 +172,7 @@ async def run_agent_loop(
             messages.append({"role": "user", "content": msg_content})
 
             # Run tool loop — model responds, potentially calls tools, repeats
-            full_text, tokens = await _run_tool_loop(
+            full_text, tokens, messages = await _run_tool_loop(
                 agent=agent,
                 agent_name=agent_name,
                 team=team,
@@ -244,7 +244,7 @@ async def _run_tool_loop(
     Streams model response, executes tool calls, and iterates until
     the model stops calling tools or hits the iteration limit.
 
-    Returns (full_text, tokens_dict).
+    Returns (full_text, tokens_dict, messages).
     """
     full_text = ""
     _FULL_TEXT_MAX = 100_000  # Cap findings accumulation at ~100K chars
@@ -444,7 +444,7 @@ async def _run_tool_loop(
         messages.append({"role": "assistant", "content": assistant_content})
         messages.append({"role": "user", "content": tool_results})
 
-    return full_text, tokens
+    return full_text, tokens, messages
 
 
 async def _execute_team_tool(
@@ -741,9 +741,9 @@ def _compact_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     first = messages[:1]
     last = messages[-10:]
 
-    # Summarize the middle
+    # Summarize the middle as a user+assistant pair to maintain alternation
     middle_count = len(messages) - 11
-    summary = {
+    summary_user = {
         "role": "user",
         "content": (
             f"[Context compacted: {middle_count} earlier messages were summarized. "
@@ -751,5 +751,9 @@ def _compact_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             f"You have been working with your team and processing messages.]"
         ),
     }
+    summary_ack = {
+        "role": "assistant",
+        "content": "Understood. I have the context from earlier messages. Continuing.",
+    }
 
-    return first + [summary] + last
+    return first + [summary_user, summary_ack] + last
