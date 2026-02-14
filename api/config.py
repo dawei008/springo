@@ -98,6 +98,10 @@ class Settings(BaseSettings):
         default=500, description="Max messages kept in message bus log (rolling window)")
     team_event_queue_max: int = Field(
         default=5000, description="Max SSE events buffered in event queue")
+    team_storage_dir: str = Field(
+        default="~/.springo/teams",
+        description="Directory for team state file persistence"
+    )
     team_bedrock_max_retries: int = Field(
         default=3, description="Max retries for transient Bedrock API errors")
     team_bedrock_retry_base_delay: float = Field(
@@ -120,6 +124,11 @@ class Settings(BaseSettings):
         """Get expanded session storage path"""
         return Path(os.path.expanduser(self.session_storage_dir))
     
+    @property
+    def team_storage_path(self) -> Path:
+        """Get expanded team storage directory path"""
+        return Path(os.path.expanduser(self.team_storage_dir))
+
     @property
     def mcp_config_file_path(self) -> Path:
         """Get expanded MCP config file path"""

@@ -65,6 +65,7 @@ class EnhancedTaskBoardItem(BaseModel):
 class Team(BaseModel):
     """Agent 团队"""
     team_id: str = Field(default_factory=lambda: f"team_{uuid.uuid4().hex[:12]}")
+    team_number: Optional[int] = Field(default=None, description="User-friendly team number (e.g., #1, #2)")
     execution_mode: Literal["classic", "collaborative"] = Field(
         default="classic", description="Team execution mode"
     )

@@ -260,6 +260,24 @@ class TeamMessageBus:
                     msg.summary or (msg.content[:50] if msg.content else "")
                 )
 
+    async def broadcast_to_priority(self, msg: AgentMessage, exclude: str = ""):
+        """Deliver a message to all agents' priority inboxes (except excluded).
+
+        Used to push user messages directly to workers so they see them
+        immediately, even during active tool loops.  No SSE emission or
+        logging — the original send_message call already handles those.
+        """
+        for name, mailbox in self._mailboxes.items():
+            if name != exclude:
+                copy = AgentMessage(
+                    type=msg.type,
+                    sender=msg.sender,
+                    recipient=name,
+                    content=msg.content,
+                    summary=msg.summary,
+                )
+                await mailbox.deliver_priority(copy)
+
     async def broadcast(self, msg: AgentMessage):
         """Deliver a message to all agents except the sender."""
         self._message_log.append(msg)

@@ -24,7 +24,7 @@ from .context_manager import (
 )
 from ..utils.streaming import SSEEventBuilder
 from ..config import settings
-from .team_store import TeamStore, list_persisted_teams
+from .team_store import TeamStore, list_persisted_teams, next_team_number
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +249,31 @@ class AgentTeamManager:
     def get_team(self, team_id: str) -> Optional[Team]:
         return self._teams.get(team_id)
 
+    def get_team_by_number(self, number: int) -> Optional[Team]:
+        """Look up a team by its user-friendly number."""
+        for team in self._teams.values():
+            if team.team_number == number:
+                return team
+        return None
+
+    def list_all_teams(self) -> List[Dict[str, Any]]:
+        """Return summary info for all known teams (in-memory + persisted)."""
+        results = []
+        for team in self._teams.values():
+            results.append({
+                "team_id": team.team_id,
+                "team_number": team.team_number,
+                "status": team.status,
+                "execution_mode": team.execution_mode,
+                "user_request": team.user_request[:100],
+                "agents": len(team.agents),
+                "created_at": team.created_at,
+                "total_tokens": team.total_tokens,
+            })
+        # Sort by team_number (None last)
+        results.sort(key=lambda t: (t["team_number"] is None, t["team_number"] or 0))
+        return results
+
     def cancel_team(self, team_id: str) -> None:
         """Cancel all running agent tasks for a team (e.g., on client disconnect)."""
         tasks = self._running_tasks.pop(team_id, [])
@@ -315,6 +340,7 @@ class AgentTeamManager:
         try:
             store.save_team_meta({
                 "team_id": team.team_id,
+                "team_number": team.team_number,
                 "execution_mode": team.execution_mode,
                 "status": team.status,
                 "user_request": team.user_request,
@@ -349,6 +375,7 @@ class AgentTeamManager:
             user_request=request.user_request,
             shared_context=request.context or "",
             execution_mode=mode,
+            team_number=next_team_number(),
         )
 
         # Always add an orchestrator / team lead
@@ -1433,6 +1460,16 @@ class AgentTeamManager:
                 "- After calling ask_user, STOP and wait — do not continue working until the user responds\n"
                 "- If a worker message arrives while you're waiting for a user reply, handle it briefly "
                 "(acknowledge completion, note results) but remember you are still awaiting the user's answer\n\n"
+                "## Progress Reporting\n"
+                "Keep the user informed of key milestones by sending messages with "
+                "send_message(recipient='user'). Report:\n"
+                "- When you receive a user message: briefly confirm what you understood and what action you are taking\n"
+                "- After spawning workers: which workers were created and what they are doing\n"
+                "- When a worker completes a task: summarize the result in one sentence\n"
+                "- When all tasks are done: provide a concise synthesis of the team's output\n"
+                "- When something goes wrong: explain the issue and your recovery plan\n"
+                "Keep these updates concise (1-2 sentences each). Do not flood the user with every detail — "
+                "only report significant state changes.\n\n"
                 "## Idle Behavior\n"
                 "After spawning workers, stop and wait. Workers will send you a message "
                 "when they complete their tasks. You do not need to poll task_list — "
@@ -1795,6 +1832,7 @@ class AgentTeamManager:
 
             team = Team(
                 team_id=team_id,
+                team_number=meta.get("team_number"),
                 execution_mode=meta.get("execution_mode", "collaborative"),
                 agents=agents,
                 status="created",  # Paused — needs /resume

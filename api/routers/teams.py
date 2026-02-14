@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from ..models.teams import TeamSpawnRequest, TeamExecuteRequest
 from ..services.agent_team_manager import get_team_manager
-from ..utils.streaming import create_sse_response, SSEEventBuilder
+from ..utils.streaming import create_sse_response
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ async def spawn_team(request: TeamSpawnRequest):
 
         return JSONResponse(content={
             "team_id": team.team_id,
+            "team_number": team.team_number,
             "status": team.status,
             "execution_mode": team.execution_mode,
             "agents": [
@@ -103,6 +104,38 @@ async def execute_team(team_id: str, http_request: Request, request: TeamExecute
     except Exception as e:
         logger.error(f"Failed to execute team: {e}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.get("/teams")
+async def list_teams():
+    """List all known teams with user-friendly numbers."""
+    manager = get_team_manager()
+    return JSONResponse(content={"teams": manager.list_all_teams()})
+
+
+@router.get("/teams/by-number/{number}")
+async def get_team_by_number(number: int):
+    """Look up a team by its user-friendly number (e.g., #1, #2)."""
+    manager = get_team_manager()
+    team = manager.get_team_by_number(number)
+    if not team:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"No team found with number #{number}"},
+        )
+    return JSONResponse(content={
+        "team_id": team.team_id,
+        "team_number": team.team_number,
+        "status": team.status,
+        "execution_mode": team.execution_mode,
+        "user_request": team.user_request[:200],
+        "agents": [
+            {"name": a.name or a.agent_id, "role": a.role.name, "status": a.status}
+            for a in team.agents
+        ],
+        "created_at": team.created_at,
+        "total_tokens": team.total_tokens,
+    })
 
 
 @router.get("/teams/{team_id}/events")
@@ -240,16 +273,12 @@ async def send_team_message(team_id: str, request: TeamMessageRequest):
         )
         await bus.send_message(msg)
 
-        # Emit a brief acknowledgment so the user sees immediate feedback
-        ack_event = SSEEventBuilder.team_agent_message(
-            team_id=team_id,
-            sender=request.recipient,
-            recipient="user",
-            content=f"收到，正在处理...",
-            summary="处理中",
-            message_id=f"ack_{msg.message_id}",
-        )
-        await bus.emit_sse(ack_event)
+        # Broadcast to all other agents' priority inboxes so workers
+        # see user messages immediately, even mid-tool-loop
+        await bus.broadcast_to_priority(msg, exclude=request.recipient)
+
+        # No static ack here — the team lead will report progress to the
+        # user via send_message(recipient="user") as guided by its system prompt.
 
         return JSONResponse(content={
             "status": "sent",
@@ -261,6 +290,47 @@ async def send_team_message(team_id: str, request: TeamMessageRequest):
         raise
     except Exception as e:
         logger.error(f"Failed to send team message: {e}")
+        raise HTTPException(status_code=500, detail={"error": str(e)})
+
+
+@router.post("/teams/{team_id}/resume")
+async def resume_team(team_id: str, http_request: Request):
+    """
+    Resume a previously persisted team after server restart.
+    Restarts agent loops with restored conversation checkpoints.
+    """
+    try:
+        manager = get_team_manager()
+        team = manager.get_team(team_id)
+        if not team:
+            raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
+
+        if team.execution_mode != "collaborative":
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Resume only available for collaborative teams"},
+            )
+
+        if team.status in ("executing", "planning", "synthesizing"):
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f"Team is already {team.status}"},
+            )
+
+        async def resume_stream() -> AsyncGenerator[str, None]:
+            try:
+                async for event in manager.resume_team(team_id):
+                    yield event
+            except GeneratorExit:
+                logger.warning(f"Team {team_id} resume SSE client disconnected")
+                manager.cancel_team(team_id)
+
+        return create_sse_response(resume_stream(), http_request)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resume team: {e}")
         raise HTTPException(status_code=500, detail={"error": str(e)})
 
 

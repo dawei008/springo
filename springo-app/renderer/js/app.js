@@ -4416,6 +4416,16 @@
             const input = document.getElementById('message-input');
             let content = input.value.trim();
 
+            // Active collaborative team: route input to team directly
+            // This works regardless of teamModeEnabled toggle state —
+            // if a team is running, user input always goes to the team.
+            if (activeTeamSplitId && isCurrentStreaming() && content) {
+                input.value = '';
+                input.style.height = 'auto';
+                sendTeamPanelMessage(activeTeamSplitId, content);
+                return;
+            }
+
             // Team mode: allow sending messages to active team even while streaming
             if (teamModeEnabled && content) {
                 return sendTeamMessage(content);
@@ -11294,6 +11304,10 @@ ${content || 'Task completed successfully.'}
         function initTeamSplitPanel(teamId, agents, userRequest) {
             activeTeamSplitId = teamId;
 
+            // Update main input placeholder — user communicates with team via main input
+            const mainInput = document.getElementById('message-input');
+            if (mainInput) mainInput.placeholder = 'Message team... (Enter to send)';
+
             const placeholder = document.getElementById('team-split-placeholder');
             const content = document.getElementById('team-split-content');
             const agentsContainer = document.getElementById('team-split-agents');
@@ -11396,15 +11410,8 @@ ${content || 'Task completed successfully.'}
                     content.appendChild(messagesSection);
                 }
 
-                // Message input
-                let inputEl = document.getElementById('team-split-input');
-                if (!inputEl) {
-                    inputEl = document.createElement('div');
-                    inputEl.id = 'team-split-input';
-                    inputEl.style.cssText = 'display:none;padding:8px 12px;flex-shrink:0;';
-                    content.appendChild(inputEl);
-                }
-                initTeamMessageInput(teamId);
+                // User communicates with the team via the main input box —
+                // no separate team input needed.
             }
 
             // Auto-switch to Team tab
@@ -11572,6 +11579,10 @@ ${content || 'Task completed successfully.'}
         function resetTeamSplitPanel() {
             activeTeamSplitId = null;
             teamAbortController = null;
+
+            // Restore main input placeholder
+            const mainInput = document.getElementById('message-input');
+            if (mainInput) mainInput.placeholder = 'Message Springo... (/ for skills)';
             const placeholder = document.getElementById('team-split-placeholder');
             const content = document.getElementById('team-split-content');
             const agentsContainer = document.getElementById('team-split-agents');
@@ -11695,13 +11706,7 @@ ${content || 'Task completed successfully.'}
                 const restored = cachedMsgsSection.cloneNode(true);
                 content.appendChild(restored);
             }
-            const cachedInput = cached.contentClone.querySelector('#team-split-input');
-            if (cachedInput) {
-                const restoredInput = cachedInput.cloneNode(true);
-                content.appendChild(restoredInput);
-                // Re-bind message input events
-                initTeamMessageInput(cached.teamId);
-            }
+            // Team input removed — user communicates via main input box
 
             // Show content, hide placeholder
             if (placeholder) placeholder.style.display = 'none';
@@ -11905,45 +11910,6 @@ ${content || 'Task completed successfully.'}
             });
         }
 
-        function initTeamMessageInput(teamId) {
-            const inputContainer = document.getElementById('team-split-input');
-            if (!inputContainer) return;
-
-            inputContainer.style.display = 'block';
-            inputContainer.innerHTML = `
-                <div class="team-input-box">
-                    <textarea id="team-msg-input" placeholder="Message team lead..." rows="1"></textarea>
-                    <button id="team-msg-send" class="team-send-btn" title="Send">
-                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M4 10l4-4 4 4"/>
-                        </svg>
-                    </button>
-                </div>
-            `;
-
-            const input = document.getElementById('team-msg-input');
-            const sendBtn = document.getElementById('team-msg-send');
-
-            // Auto-resize textarea
-            input.addEventListener('input', () => {
-                input.style.height = 'auto';
-                input.style.height = Math.min(input.scrollHeight, 80) + 'px';
-            });
-
-            function doSend() {
-                const text = input.value.trim();
-                if (!text) return;
-                sendTeamPanelMessage(teamId, text);
-                input.value = '';
-                input.style.height = 'auto';
-            }
-
-            sendBtn.addEventListener('click', doSend);
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    doSend();
-                }
-            });
-        }
+        // initTeamMessageInput removed — user communicates via main input box.
+        // When activeTeamSplitId is set, sendMessage() routes to sendTeamPanelMessage().
 

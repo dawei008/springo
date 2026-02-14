@@ -5352,56 +5352,7 @@
 }
 
 /* Team message input — matches main chat .input-box style */
-.team-input-box {
-    display: flex;
-    gap: 8px;
-    align-items: flex-end;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 6px 10px;
-}
-
-.team-input-box:focus-within {
-    border-color: var(--accent);
-}
-
-.team-input-box textarea {
-    flex: 1;
-    border: none;
-    background: none;
-    color: var(--text-primary);
-    font-size: 13px;
-    outline: none;
-    resize: none;
-    min-height: 20px;
-    max-height: 80px;
-    line-height: 1.5;
-    font-family: inherit;
-}
-
-.team-input-box textarea::placeholder {
-    color: var(--text-tertiary);
-}
-
-.team-send-btn {
-    width: 28px;
-    height: 28px;
-    border: none;
-    border-radius: 8px;
-    background: var(--accent);
-    color: #fff;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-    transition: opacity 0.15s;
-}
-
-.team-send-btn:hover {
-    opacity: 0.85;
-}
+/* Team input box removed — user communicates via main input */
 
 .team-task-item {
     display: flex;

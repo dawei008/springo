@@ -231,6 +231,7 @@ async def run_agent_loop(
                 messages=messages,
                 tools=tools,
                 spawn_context=spawn_context,
+                mailbox=mailbox,
             )
 
             if did_ask_user:
@@ -309,6 +310,7 @@ async def _run_tool_loop(
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
     spawn_context: Optional[Dict[str, Any]] = None,
+    mailbox: Optional[AgentMailbox] = None,
 ) -> tuple:
     """Run the model tool loop for a single message turn.
 
@@ -576,6 +578,34 @@ async def _run_tool_loop(
                 })
         messages.append({"role": "assistant", "content": assistant_content})
         messages.append({"role": "user", "content": tool_results})
+
+        # Inject priority messages (e.g. user input) into the tool_results
+        # content block.  This keeps them inside the existing user-role
+        # message so message alternation is never violated.
+        if mailbox:
+            injected = 0
+            while True:
+                try:
+                    pmsg = mailbox.priority_inbox.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                tag = (
+                    "[New instruction from user]"
+                    if pmsg.sender == "user"
+                    else f"[Priority from {pmsg.sender}]"
+                )
+                inject_text = f"\n\n{tag}\n{pmsg.content}"
+                last_content = messages[-1]["content"]
+                if isinstance(last_content, list):
+                    last_content.append({"type": "text", "text": inject_text})
+                else:
+                    messages[-1]["content"] = str(last_content) + inject_text
+                injected += 1
+            if injected:
+                logger.info(
+                    f"[AgentLoop:{agent_name}] Injected {injected} priority "
+                    f"message(s) into tool loop iteration {iteration}"
+                )
 
     return full_text, tokens, messages, False
 

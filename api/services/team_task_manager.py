@@ -10,6 +10,7 @@ from ..utils.streaming import SSEEventBuilder
 
 if TYPE_CHECKING:
     from .message_bus import TeamMessageBus, AgentMessage
+    from .team_store import TeamStore
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,11 @@ class TeamTaskManager:
     and their owners are notified via the message bus.
     """
 
-    def __init__(self, team_id: str, message_bus: "TeamMessageBus"):
+    def __init__(self, team_id: str, message_bus: "TeamMessageBus",
+                 store: Optional["TeamStore"] = None):
         self.team_id = team_id
         self._bus = message_bus
+        self._store = store
         self._tasks: Dict[str, EnhancedTaskBoardItem] = {}
         self._counter = 0
 
@@ -48,6 +51,7 @@ class TeamTaskManager:
         )
         self._tasks[task.task_id] = task
         logger.info(f"[TaskManager:{self.team_id}] Created task #{task.task_id}: {subject}")
+        self._persist_task(task)
         return task
 
     async def create_task_async(
@@ -118,6 +122,8 @@ class TeamTaskManager:
                 blocker_task = self._tasks.get(blocker_id)
                 if blocker_task and task_id not in blocker_task.blocks:
                     blocker_task.blocks.append(task_id)
+
+        self._persist_task(task)
 
         # Emit update SSE
         sse = SSEEventBuilder.team_task_updated(
@@ -212,6 +218,53 @@ class TeamTaskManager:
                     )
                     await self._bus.send_message(notification)
 
+    def _persist_task(self, task: EnhancedTaskBoardItem) -> None:
+        """Append current task state to the store (if attached)."""
+        if not self._store:
+            return
+        try:
+            self._store.save_task({
+                "task_id": task.task_id,
+                "title": task.title,
+                "description": task.description,
+                "owner": task.owner,
+                "status": task.status,
+                "active_form": task.active_form,
+                "blocks": task.blocks,
+                "blocked_by": task.blocked_by,
+            })
+        except Exception as e:
+            logger.warning(f"[TaskManager:{self.team_id}] Persist failed: {e}")
+
+    def load_from_store(self, store: "TeamStore") -> None:
+        """Rebuild task state from persisted JSONL data."""
+        self._store = store
+        tasks = store.load_tasks()
+        max_id = 0
+        for t in tasks:
+            tid = t.get("task_id", "")
+            item = EnhancedTaskBoardItem(
+                task_id=tid,
+                title=t.get("title", ""),
+                description=t.get("description", ""),
+                owner=t.get("owner"),
+                status=t.get("status", "pending"),
+                active_form=t.get("active_form", ""),
+                blocks=t.get("blocks", []),
+                blocked_by=t.get("blocked_by", []),
+            )
+            self._tasks[tid] = item
+            try:
+                num = int(tid)
+                if num > max_id:
+                    max_id = num
+            except (ValueError, TypeError):
+                pass
+        self._counter = max_id
+        logger.info(
+            f"[TaskManager:{self.team_id}] Loaded {len(self._tasks)} tasks from store"
+        )
+
     def delete_task(self, task_id: str) -> bool:
         """Remove a task and clean up dependency edges."""
         task = self._tasks.get(task_id)
@@ -238,10 +291,14 @@ class TeamTaskManager:
 _team_task_managers: Dict[str, TeamTaskManager] = {}
 
 
-def get_or_create_task_manager(team_id: str, message_bus: "TeamMessageBus") -> TeamTaskManager:
+def get_or_create_task_manager(
+    team_id: str,
+    message_bus: "TeamMessageBus",
+    store: Optional["TeamStore"] = None,
+) -> TeamTaskManager:
     """Get or create a task manager for a team."""
     if team_id not in _team_task_managers:
-        _team_task_managers[team_id] = TeamTaskManager(team_id, message_bus)
+        _team_task_managers[team_id] = TeamTaskManager(team_id, message_bus, store=store)
     return _team_task_managers[team_id]
 
 
