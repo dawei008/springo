@@ -74,3 +74,12 @@ from .team_comm_tools import (
     task_list as team_task_list,
     task_get as team_task_get,
 )
+
+from .lsp_tools import (
+    lsp_go_to_definition,
+    lsp_find_references,
+    lsp_hover,
+    lsp_document_symbols,
+    lsp_workspace_symbol,
+    lsp_diagnostics,
+)

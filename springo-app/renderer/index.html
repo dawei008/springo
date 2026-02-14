@@ -231,7 +231,6 @@
                     <button class="right-panel-tab active" data-tab="tasks">Tasks</button>
                     <button class="right-panel-tab" data-tab="team" onclick="switchRightPanelTab('team')">Team</button>
                     <button class="right-panel-tab" data-tab="schedules">Schedules</button>
-                    <button class="right-panel-tab" data-tab="terminal" onclick="switchRightPanelTab('terminal')">Terminal</button>
                     <button class="right-panel-tab" data-tab="news">News</button>
                 </div>
                 <div class="right-panel-content">
@@ -306,54 +305,6 @@
                                     </div>
                                 </div>
                                 <div class="team-split-agents" id="team-split-agents"></div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="right-panel-section" id="panel-terminal">
-                        <div class="terminal-panel">
-                            <div class="terminal-panel-header">
-                                <div class="terminal-header-label">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-                                    <span style="font-size:11px;font-weight:600;color:var(--text-secondary);">SSH</span>
-                                </div>
-                                <div class="terminal-cwd" id="terminal-cwd">Not connected</div>
-                                <div class="terminal-panel-actions">
-                                    <button class="terminal-panel-btn" onclick="clearTerminal()" title="Clear">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6"/></svg>
-                                    </button>
-                                </div>
-                            </div>
-                            <div class="ssh-connect-form" id="ssh-connect-form">
-                                <div class="ssh-config-hosts" id="ssh-config-hosts" style="display:none">
-                                    <select id="ssh-host-select" class="ssh-input" onchange="onSSHHostSelect(this.value)">
-                                        <option value="">-- Select from ~/.ssh/config --</option>
-                                    </select>
-                                </div>
-                                <div class="ssh-form-row">
-                                    <input type="text" id="ssh-host" class="ssh-input" placeholder="Host (e.g. ec2-xx.compute.amazonaws.com)">
-                                    <input type="number" id="ssh-port" class="ssh-input ssh-port-input" value="22" min="1" max="65535">
-                                </div>
-                                <div class="ssh-form-row">
-                                    <input type="text" id="ssh-username" class="ssh-input" placeholder="Username (e.g. ec2-user)">
-                                    <input type="text" id="ssh-key-path" class="ssh-input" placeholder="Key path (e.g. ~/.ssh/id_rsa)">
-                                </div>
-                                <div class="ssh-form-row">
-                                    <input type="password" id="ssh-password" class="ssh-input" placeholder="Password (if no key)">
-                                    <button class="ssh-connect-btn" id="ssh-connect-btn" onclick="sshConnect()">Connect</button>
-                                </div>
-                                <div class="ssh-status" id="ssh-status"></div>
-                                <div class="ssh-connections" id="ssh-connections"></div>
-                            </div>
-                            <div class="terminal-panel-output" id="terminal-panel-output"></div>
-                            <div class="terminal-panel-input-row">
-                                <span class="terminal-prompt">></span>
-                                <input type="text" id="terminal-input" class="terminal-panel-input" placeholder="Connect to SSH first..." autocomplete="off" spellcheck="false" disabled>
-                                <button class="terminal-panel-btn terminal-run-btn" id="terminal-run-btn" onclick="executeTerminalCommand()" title="Run (Enter)">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                                </button>
-                                <button class="terminal-panel-btn terminal-stop-btn" id="terminal-stop-btn" onclick="killTerminalProcess()" title="Stop" style="display:none">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"/></svg>
-                                </button>
                             </div>
                         </div>
                     </div>
@@ -492,63 +443,110 @@
 
                     <!-- Models Tab -->
                     <div class="settings-tab-panel" id="tab-models">
-                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AWS Credentials</h3>
-                        <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
-                            Auto-detects from environment variables or <code>~/.aws/credentials</code>.<br>
-                            Only enter below if not using those methods.
-                        </div>
-                        <div class="setting-group">
-                            <label>Access Key ID</label>
-                            <input type="text" id="settings-aws-access-key" placeholder="Enter your access key">
-                        </div>
-                        <div class="setting-group">
-                            <label>Secret Access Key</label>
-                            <input type="password" id="settings-aws-secret-key" placeholder="Enter your secret key">
-                        </div>
-                        <div class="hint">Manual credentials will be saved to <code>~/.springo/.env</code></div>
-                        <div class="setting-group" style="margin-top: 12px;">
-                            <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
-                            <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+
+                        <!-- ── Provider 1: Amazon Bedrock ── -->
+                        <div class="provider-section">
+                            <h3 style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--text-primary);">Amazon Bedrock</h3>
+                            <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
+                                Auto-detects from environment variables or <code>~/.aws/credentials</code>.<br>
+                                Only enter below if not using those methods.
+                            </div>
+                            <div class="setting-group">
+                                <label>Access Key ID</label>
+                                <input type="text" id="settings-aws-access-key" placeholder="Enter your access key">
+                            </div>
+                            <div class="setting-group">
+                                <label>Secret Access Key</label>
+                                <input type="password" id="settings-aws-secret-key" placeholder="Enter your secret key">
+                            </div>
+                            <div class="hint">Manual credentials will be saved to <code>~/.springo/.env</code></div>
+                            <div class="setting-group" style="margin-top: 8px;">
+                                <label>Region</label>
+                                <select id="settings-memory-region">
+                                    <option value="us-west-2">us-west-2 (Oregon)</option>
+                                    <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                                    <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                                    <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                                </select>
+                                <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
+                            </div>
+                            <div class="setting-group" style="margin-top: 12px;">
+                                <button onclick="testAwsConnection()" id="test-aws-btn">Test Connection</button>
+                                <span id="aws-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                            </div>
                         </div>
 
                         <div class="setting-divider"></div>
 
-                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Region</h3>
-                        <div class="setting-group">
-                            <select id="settings-memory-region">
-                                <option value="us-west-2">us-west-2 (Oregon)</option>
-                                <option value="us-east-1">us-east-1 (N. Virginia)</option>
-                                <option value="eu-west-1">eu-west-1 (Ireland)</option>
-                                <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
-                            </select>
-                            <div class="hint" style="margin-top: 4px;">Bedrock API, AgentCore Memory, and S3 bucket should all be in this region</div>
+                        <!-- ── Provider 2: DeepSeek (Direct API) ── -->
+                        <div class="provider-section">
+                            <h3 style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--text-primary);">DeepSeek (Direct API)</h3>
+                            <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
+                                Calls DeepSeek API directly. Get your key from <code>platform.deepseek.com</code>.
+                            </div>
+                            <div class="setting-group">
+                                <label>API Key</label>
+                                <input type="password" id="settings-deepseek-api-key" placeholder="sk-...">
+                            </div>
+                            <div class="setting-group" style="margin-top: 12px;">
+                                <button onclick="testDeepSeekConnection()" id="test-deepseek-btn">Test Connection</button>
+                                <span id="deepseek-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                            </div>
                         </div>
 
                         <div class="setting-divider"></div>
 
-                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Model Settings</h3>
-                        <div class="setting-group">
-                            <label>Default Model</label>
-                            <select id="settings-model">
-                                <!-- Populated dynamically from /v1/models -->
-                            </select>
+                        <!-- ── Provider 3: MiniMax (Direct API) ── -->
+                        <div class="provider-section">
+                            <h3 style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--text-primary);">MiniMax (Direct API)</h3>
+                            <div class="hint" style="margin-bottom: 12px; line-height: 1.5;">
+                                Calls MiniMax API directly. Get your key from <code>platform.minimaxi.com</code>.
+                            </div>
+                            <div class="setting-group">
+                                <label>API Key</label>
+                                <input type="password" id="settings-minimax-api-key" placeholder="eyJ...">
+                            </div>
+                            <div class="setting-group" style="margin-top: 12px;">
+                                <button onclick="testMiniMaxConnection()" id="test-minimax-btn">Test Connection</button>
+                                <span id="minimax-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                            </div>
                         </div>
-                        <div class="setting-group">
-                            <label>Max Tokens</label>
-                            <input type="number" id="settings-max-tokens" value="16384" min="100" max="131072">
-                            <div class="hint">Maximum number of tokens in the response</div>
-                        </div>
-                        <div class="setting-group">
-                            <label>Temperature</label>
-                            <input type="range" id="settings-temperature" min="0" max="1" step="0.1" value="0.7">
-                            <div class="hint">Controls randomness: <span id="temp-value">0.7</span></div>
-                        </div>
-                        <div class="setting-group">
-                            <label>Context Compact Model</label>
-                            <select id="settings-compact-model">
-                                <!-- Populated dynamically from /v1/models -->
-                            </select>
-                            <div class="hint">Model for context summarization (Haiku is faster & cheaper)</div>
+
+                        <div class="setting-divider"></div>
+
+                        <!-- ── Model Settings ── -->
+                        <div class="provider-section">
+                            <h3 style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: var(--text-primary);">Model Settings</h3>
+                            <div class="setting-group">
+                                <label>Default Model</label>
+                                <select id="settings-model">
+                                    <!-- Populated dynamically from /v1/models -->
+                                </select>
+                            </div>
+                            <div class="setting-group" id="extended-context-group" style="display: none;">
+                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" id="settings-extended-context" style="width: auto;" checked>
+                                    Enable 1M Context Window (Beta)
+                                </label>
+                                <div class="hint">Uses full 1,000,000 token context (vs standard 200,000). Requires Bedrock beta access.</div>
+                            </div>
+                            <div class="setting-group">
+                                <label>Max Tokens</label>
+                                <input type="number" id="settings-max-tokens" value="16384" min="100" max="131072">
+                                <div class="hint">Maximum number of tokens in the response</div>
+                            </div>
+                            <div class="setting-group">
+                                <label>Temperature</label>
+                                <input type="range" id="settings-temperature" min="0" max="1" step="0.1" value="0.7">
+                                <div class="hint">Controls randomness: <span id="temp-value">0.7</span></div>
+                            </div>
+                            <div class="setting-group">
+                                <label>Context Compact Model</label>
+                                <select id="settings-compact-model">
+                                    <!-- Populated dynamically from /v1/models -->
+                                </select>
+                                <div class="hint">Model for context summarization (Haiku is faster & cheaper)</div>
+                            </div>
                         </div>
                     </div>
 

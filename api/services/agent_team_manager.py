@@ -14,6 +14,7 @@ from ..models.teams import (
     TeamSpawnRequest, ROLE_CONFIGS,
 )
 from .bedrock import get_bedrock_service, BedrockService
+from .vendor_router import get_vendor_router
 from .model_registry import get_model_info, get_model_limits
 from .session_state import get_working_dir
 from .mcp_manager import get_mcp_manager
@@ -124,10 +125,94 @@ def _with_working_dir(system_prompt: str) -> str:
     return "".join(parts)
 
 
-def _build_body(model_name: str, max_tokens: int, system: str, messages: list) -> dict:
-    """Build a Bedrock request body with conditional anthropic_version."""
+def _build_body(model_name: str, max_tokens: int, system: str, messages: list,
+                 tools: list = None) -> dict:
+    """Build a vendor-appropriate request body.
+
+    For Anthropic/Converse (Bedrock): returns Anthropic-shaped body.
+    For OpenAI (DeepSeek direct): returns OpenAI-shaped body with converted messages.
+    """
+    from .model_registry import get_vendor_model_id
     info = get_model_info(model_name)
     api_format = info["api_format"] if info else "anthropic"
+
+    if api_format == "openai":
+        # OpenAI format (DeepSeek direct, etc.)
+        openai_messages = [{"role": "system", "content": system}]
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                openai_messages.append({"role": role, "content": content})
+            elif isinstance(content, list):
+                # Convert Anthropic content blocks to OpenAI format
+                text_parts = []
+                tool_calls = []
+                tool_results = []
+                for block in content:
+                    btype = block.get("type", "")
+                    if btype == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif btype == "tool_use":
+                        import json as _json
+                        tool_calls.append({
+                            "id": block.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": block.get("name", ""),
+                                "arguments": _json.dumps(block.get("input", {})),
+                            },
+                        })
+                    elif btype == "tool_result":
+                        result_content = block.get("content", "")
+                        if isinstance(result_content, list):
+                            result_content = " ".join(
+                                b.get("text", "") for b in result_content if b.get("type") == "text"
+                            )
+                        tool_results.append({
+                            "role": "tool",
+                            "tool_call_id": block.get("tool_use_id", ""),
+                            "content": str(result_content),
+                        })
+
+                if role == "assistant":
+                    msg_dict = {"role": "assistant"}
+                    if text_parts:
+                        msg_dict["content"] = "".join(text_parts)
+                    if tool_calls:
+                        msg_dict["tool_calls"] = tool_calls
+                        if "content" not in msg_dict:
+                            msg_dict["content"] = None
+                    openai_messages.append(msg_dict)
+                elif role == "user" and tool_results:
+                    # tool_result blocks become separate tool messages
+                    for tr in tool_results:
+                        openai_messages.append(tr)
+                else:
+                    openai_messages.append({"role": role, "content": "".join(text_parts)})
+
+        body = {
+            "model": get_vendor_model_id(model_name),
+            "max_tokens": max_tokens,
+            "messages": openai_messages,
+            "_original_model": model_name,
+        }
+        if tools:
+            # Convert Anthropic tools to OpenAI function format
+            openai_tools = []
+            for t in tools:
+                openai_tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": t.get("name", ""),
+                        "description": t.get("description", ""),
+                        "parameters": t.get("input_schema", {}),
+                    },
+                })
+            body["tools"] = openai_tools
+        return body
+
+    # Anthropic / Converse format (Bedrock)
     body: dict = {
         "max_tokens": max_tokens,
         "system": system,
@@ -135,6 +220,8 @@ def _build_body(model_name: str, max_tokens: int, system: str, messages: list) -
     }
     if api_format == "anthropic":
         body["anthropic_version"] = "bedrock-2023-05-31"
+    if tools:
+        body["tools"] = tools
     # Carry the short model name so bedrock.py can register beta headers
     body["_original_model"] = model_name
     return body
@@ -149,8 +236,10 @@ def _get_api_format(model_name: str) -> str:
 class AgentTeamManager:
     """Agent 团队管理器 - 协调多个 Agent 并行工作"""
 
-    def __init__(self, bedrock: BedrockService = None):
-        self.bedrock = bedrock or get_bedrock_service()
+    def __init__(self, bedrock=None):
+        # Use VendorRouter so non-Bedrock models (e.g. deepseek-v3.2-direct)
+        # are dispatched to the correct vendor service.
+        self.bedrock = bedrock or get_vendor_router()
         self._teams: Dict[str, Team] = {}
         self._running_tasks: Dict[str, List[asyncio.Task]] = {}  # team_id -> agent tasks
         self._cleanup_task: Optional[asyncio.Task] = None
@@ -634,10 +723,9 @@ class AgentTeamManager:
         try:
             for iteration in range(1, self._ORCH_MAX_TOOL_ITERATIONS + 1):
                 body = _build_body(
-                    orchestrator.role.model, 4096, system_prompt, messages
+                    orchestrator.role.model, 4096, system_prompt, messages,
+                    tools=tools if tools else None,
                 )
-                if tools and orch_api_format == "anthropic":
-                    body["tools"] = tools
 
                 response = await _retry_bedrock_call(
                     lambda b=body: self.bedrock.invoke_model(model_id, b, api_format=orch_api_format),
@@ -1251,39 +1339,70 @@ class AgentTeamManager:
             yield SSEEventBuilder.team_spawned(team.team_id, agent_info, team.user_request)
 
             team.status = "executing"
+            yield SSEEventBuilder.team_planning(team.team_id)
+
             team_lead = team.agents[0]
             lead_mailbox = bus.get_mailbox(team_lead.name or "team-lead")
 
             if not lead_mailbox:
                 lead_mailbox = bus.register_agent(team_lead.name or "team-lead")
 
-            # Create initial message for the team lead
+            # Override the orchestrator system prompt for collaborative mode.
+            # The default ROLE_CONFIGS["orchestrator"] prompt is for classic mode
+            # (JSON array output). In collaborative mode the lead coordinates via
+            # task_create / send_message / ask_user.
+            #
+            # The team lead only receives team tools (structural scoping in
+            # run_agent_loop with team_tools_only=True), so we don't need to list
+            # forbidden tools — the lead simply can't call them.
+            team_lead.role.system_prompt = (
+                "You are the team lead coordinating a collaborative agent team.\n\n"
+                "## Your Workflow\n"
+                "1. Analyze the user's request and break it into independent tasks using task_create\n"
+                "2. Spawn workers for tasks using spawn_worker — each worker runs autonomously\n"
+                "3. Workers will message you when they complete tasks\n"
+                "4. Review results, create follow-up tasks and spawn more workers if needed\n"
+                "5. When all work is done, synthesize the final answer for the user\n\n"
+                "## How Workers Operate\n"
+                "Workers are autonomous agents with full tool access — they can read files, "
+                "execute commands, search the web, write code, and more. They handle all "
+                "research, exploration, and implementation. Your job is to decompose, "
+                "coordinate, and synthesize.\n\n"
+                "## Task Design\n"
+                "- Each task should be self-contained enough for a worker to complete independently\n"
+                "- If the request has parallel dimensions (e.g., 'compare A vs B', 'each module'), "
+                "create one task per dimension to maximize parallelism\n"
+                "- Set dependencies with task_update when tasks must run in sequence\n"
+                "- Include enough context in each task description for the worker to succeed\n\n"
+                "## Spawning Workers\n"
+                "- Use spawn_worker after creating tasks — provide a name and the task IDs\n"
+                "- For independent tasks, spawn workers in parallel (call spawn_worker multiple times)\n"
+                "- A single worker can handle multiple related tasks\n"
+                "- Use descriptive names: 'researcher', 'implementer', 'reviewer'\n\n"
+                "## Communication\n"
+                "- Use send_message to give workers additional context or relay user feedback\n"
+                "- Use ask_user when you need clarification from the user\n"
+                "- Use send_message(type='shutdown_request') to shut down a worker when done\n\n"
+                "## Idle Behavior\n"
+                "After spawning workers, stop and wait. Workers will send you a message "
+                "when they complete their tasks. You do not need to poll task_list — "
+                "you will receive a notification for each completed task. Only call "
+                "task_list when you need to check overall status after receiving a message.\n\n"
+                "Do not use emojis in any output."
+            )
+
+            # Create initial message — just the user's request.
+            # The system prompt already describes the team lead's workflow.
             from .message_bus import AgentMessage
             initial_msg = AgentMessage(
                 type="message",
                 sender="user",
                 recipient=team_lead.name or "team-lead",
                 content=(
-                    f"You are the team lead orchestrating a team of worker agents. "
-                    f"Here is the user's request:\n\n"
-                    f"{team.user_request}\n\n"
-                    f"{'Additional context: ' + team.shared_context if team.shared_context else ''}\n\n"
-                    f"YOUR ROLE: Decompose the request into tasks and delegate them to worker agents. "
-                    f"Use task_create to create tasks, then workers will pick them up automatically.\n\n"
-                    f"GUIDELINES:\n"
-                    f"- If the user explicitly mentions workers, roles, or team members, "
-                    f"always create separate tasks and delegate to workers.\n"
-                    f"- For complex requests with multiple independent parts, create tasks for parallel work.\n"
-                    f"- For truly simple single-step requests (e.g., 'what time is it'), "
-                    f"you may handle it directly without delegation.\n"
-                    f"- If you are uncertain about the approach or what the user wants, "
-                    f"use the ask_user tool to ask for clarification BEFORE starting work.\n"
-                    f"- Coordinate between workers by relaying information when needed.\n\n"
-                    f"You have access to all tools. Use send_message to communicate with workers. "
-                    f"When all tasks are done, synthesize the final answer for the user.\n\n"
-                    f"IMPORTANT: Do NOT use emojis in any output or messages."
+                    f"{team.user_request}"
+                    f"{chr(10) + chr(10) + 'Additional context: ' + team.shared_context if team.shared_context else ''}"
                 ),
-                summary="Initial user request",
+                summary="User request",
             )
 
             # Shared SSE event queue — agent loops push events here
@@ -1292,7 +1411,20 @@ class AgentTeamManager:
             # Track spawned worker names to avoid duplicates
             spawned_workers: set = set()
 
-            # Start the team lead loop
+            # Build spawn_context so the team lead can spawn workers via
+            # the spawn_worker tool.  Only the lead gets this context.
+            spawn_context = {
+                "team": team,
+                "event_queue": event_queue,
+                "bedrock": self.bedrock,
+                "bus": bus,
+                "task_mgr": task_mgr,
+            }
+
+            # Start the team lead loop — team_tools_only=True gives it only
+            # coordination tools (task_create, send_message, ask_user, spawn_worker, etc.)
+            # while workers get the full tool set.  This is structural scoping,
+            # like Claude Code giving different subagent_types different tools.
             agent_tasks: List[asyncio.Task] = []
             lead_task = asyncio.create_task(
                 run_agent_loop(
@@ -1304,10 +1436,17 @@ class AgentTeamManager:
                     task_manager=task_mgr,
                     event_queue=event_queue,
                     initial_message=initial_msg,
+                    team_tools_only=True,
+                    spawn_context=spawn_context,
                 )
             )
             agent_tasks.append(lead_task)
             self._register_tasks(team_id, agent_tasks)
+
+            # Signal that agents are now executing (enables Stop button in UI)
+            yield SSEEventBuilder.team_task_board(team.team_id, [
+                {"title": "Team lead coordinating", "agent": team_lead.name or "team-lead", "status": "executing"}
+            ])
 
             # Drain events from both the message bus SSE queue and the agent event queue.
             # Uses a wall-clock timeout instead of an iteration count so that
@@ -1316,10 +1455,13 @@ class AgentTeamManager:
             collab_start = asyncio.get_event_loop().time()
             collab_max_runtime = settings.team_collab_max_runtime  # default 24h
             heartbeat_counter = 0
-            # Grace period: require consecutive idle checks before auto-finishing
-            # so the user has time to send follow-up messages.
+            # Grace period: require many consecutive idle checks before auto-finishing.
+            # The team lead may need time to process completion notifications and
+            # create follow-up tasks.  In Claude Code, teams don't auto-finish —
+            # only the lead or user ends them.  We use a generous grace period
+            # (~30 seconds of all-done + lead-idle) before auto-stopping.
             all_done_idle_checks = 0
-            ALL_DONE_GRACE = 5  # ~5 loop iterations (~7-8 seconds)
+            ALL_DONE_GRACE = 30  # ~30 loop iterations (~30 seconds)
 
             while True:
                 if shutdown_requested:
@@ -1375,6 +1517,43 @@ class AgentTeamManager:
                         # Internal sentinel events
                         if event.get("__shutdown__"):
                             shutdown_requested = True
+                        elif event.get("__spawn_worker__"):
+                            # Team lead requested a worker spawn via spawn_worker tool
+                            worker_agent = event["worker_agent"]
+                            worker_mailbox = event["worker_mailbox"]
+                            worker_initial = event["initial_message"]
+
+                            team.agents.append(worker_agent)
+                            spawned_workers.add(worker_agent.name)
+
+                            worker_task = asyncio.create_task(
+                                run_agent_loop(
+                                    team=team,
+                                    agent=worker_agent,
+                                    mailbox=worker_mailbox,
+                                    bedrock=self.bedrock,
+                                    message_bus=bus,
+                                    task_manager=task_mgr,
+                                    event_queue=event_queue,
+                                    initial_message=worker_initial,
+                                )
+                            )
+                            agent_tasks.append(worker_task)
+                            self._register_tasks(team_id, agent_tasks)
+
+                            # Emit SSE so frontend shows the worker card
+                            yield SSEEventBuilder.team_agent_start(
+                                team_id=team_id,
+                                agent_id=worker_agent.agent_id,
+                                role="worker",
+                                task_title=worker_agent.role.purpose,
+                                agent_name=worker_agent.name,
+                            )
+
+                            logger.info(
+                                f"Spawned worker '{worker_agent.name}' "
+                                f"(requested by team lead)"
+                            )
                 except asyncio.TimeoutError:
                     pass
 
@@ -1384,80 +1563,6 @@ class AgentTeamManager:
                     if sse_event is None:
                         break
                     yield sse_event
-
-                # Auto-spawn worker agents for new pending tasks
-                for task in list(task_mgr._tasks.values()):
-                    if task.status != "pending":
-                        continue
-                    # Determine worker name from task owner or generate one
-                    worker_name = task.owner or f"worker-{task.task_id}"
-                    if worker_name in spawned_workers or worker_name == "team-lead":
-                        continue
-
-                    # Create a worker agent
-                    worker_role = AgentRole(
-                        name="worker",
-                        system_prompt=(
-                            f"You are a worker agent. Complete the task assigned to you thoroughly.\n"
-                            f"When done, use task_update to mark your task as completed.\n"
-                            f"If you need clarification from the user, use ask_user.\n"
-                            f"Do NOT use emojis in any output or messages."
-                        ),
-                        model=team_lead.role.model,
-                        purpose=task.title,
-                    )
-                    worker_agent = TeamAgent(
-                        name=worker_name,
-                        role=worker_role,
-                    )
-                    team.agents.append(worker_agent)
-                    spawned_workers.add(worker_name)
-
-                    # Register mailbox and send initial task message
-                    worker_mailbox = bus.register_agent(worker_name)
-                    worker_initial = AgentMessage(
-                        type="message",
-                        sender="team-lead",
-                        recipient=worker_name,
-                        content=(
-                            f"You are assigned the following task:\n\n"
-                            f"**Task #{task.task_id}**: {task.title}\n"
-                            f"{task.description}\n\n"
-                            f"Please complete this task. When done, call task_update "
-                            f"with task_id='{task.task_id}' and status='completed'.\n"
-                            f"If you need to ask the user anything, use ask_user."
-                        ),
-                        summary=f"Task assignment: {task.title[:40]}",
-                    )
-
-                    # Claim the task
-                    await task_mgr.update_task(task.task_id, status="in_progress", owner=worker_name)
-
-                    # Start worker loop
-                    worker_task = asyncio.create_task(
-                        run_agent_loop(
-                            team=team,
-                            agent=worker_agent,
-                            mailbox=worker_mailbox,
-                            bedrock=self.bedrock,
-                            message_bus=bus,
-                            task_manager=task_mgr,
-                            event_queue=event_queue,
-                            initial_message=worker_initial,
-                        )
-                    )
-                    agent_tasks.append(worker_task)
-                    self._register_tasks(team_id, agent_tasks)
-
-                    # Emit SSE so frontend shows the worker card
-                    yield SSEEventBuilder.team_agent_start(
-                        team_id=team_id,
-                        agent_id=worker_agent.agent_id,
-                        role="worker",
-                        task_title=task.title,
-                    )
-
-                    logger.info(f"Auto-spawned worker '{worker_name}' for task '{task.title}'")
 
                 # Yield heartbeat every ~10 iterations (~15s) to keep SSE alive
                 heartbeat_counter += 1

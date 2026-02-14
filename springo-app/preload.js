@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openFolder: (path) => ipcRenderer.invoke('open-folder', path),
     // Open file/folder with system default application
     openPath: (path) => ipcRenderer.invoke('open-path', path),
+    // Read local file as base64 (for inline image rendering)
+    readFileBase64: (path) => ipcRenderer.invoke('read-file-base64', path),
     // Open URL in default browser (Chrome new tab)
     openExternal: (url) => ipcRenderer.invoke('open-external', url),
     // Disk cache API (persists across macOS restarts)

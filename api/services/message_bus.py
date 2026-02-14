@@ -40,6 +40,8 @@ class AgentMailbox:
         self.inbox: asyncio.Queue[AgentMessage] = asyncio.Queue()
         self.priority_inbox: asyncio.Queue[AgentMessage] = asyncio.Queue()
         self.is_idle: bool = True
+        self.shutdown_approved: bool = False
+        self.last_peer_dm_summary: Optional[str] = None
         self._message_history: List[AgentMessage] = []
         self._history_max = settings.team_message_log_max
         # Event that fires when *any* queue gets a message (for efficient waiting)
@@ -188,6 +190,15 @@ class TeamMessageBus:
         else:
             await recipient_mailbox.deliver(msg)
 
+        # Track peer DMs (both sender and recipient are workers, not lead/user/system)
+        non_peer_names = {"team-lead", "user", "system"}
+        if msg.sender not in non_peer_names and msg.recipient not in non_peer_names:
+            sender_mailbox = self._mailboxes.get(msg.sender)
+            if sender_mailbox:
+                sender_mailbox.last_peer_dm_summary = (
+                    msg.summary or (msg.content[:50] if msg.content else "")
+                )
+
         # Emit SSE event
         sse_event = SSEEventBuilder.team_agent_message(
             team_id=self.team_id,
@@ -237,16 +248,41 @@ class TeamMessageBus:
         )
 
     async def notify_idle(self, agent_name: str):
-        """Mark an agent as idle and emit an SSE event."""
+        """Mark an agent as idle and emit an SSE event.
+
+        Includes any peer DM summary from the agent's mailbox, and
+        forwards the summary to team-lead for visibility.
+        """
         mailbox = self._mailboxes.get(agent_name)
+        peer_dm_summary = ""
         if mailbox:
             mailbox.is_idle = True
+            if mailbox.last_peer_dm_summary:
+                peer_dm_summary = mailbox.last_peer_dm_summary
+                mailbox.last_peer_dm_summary = None
 
         sse_event = SSEEventBuilder.team_agent_idle(
             team_id=self.team_id,
             agent_name=agent_name,
+            peer_dm_summary=peer_dm_summary,
         )
         await self._put_sse(sse_event)
+
+        # Forward peer DM summary to team-lead for agent-loop visibility
+        if peer_dm_summary and agent_name != "team-lead":
+            lead_mailbox = self._mailboxes.get("team-lead")
+            if lead_mailbox:
+                notice = AgentMessage(
+                    type="message",
+                    sender="system",
+                    recipient="team-lead",
+                    content=(
+                        f"[Peer DM notice] {agent_name} sent a peer message: "
+                        f"{peer_dm_summary}"
+                    ),
+                    summary=f"Peer DM: {agent_name}",
+                )
+                await lead_mailbox.deliver(notice)
 
     async def notify_shutdown(self, agent_name: str):
         """Emit an SSE event when an agent shuts down."""

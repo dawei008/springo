@@ -2,7 +2,21 @@
 
 ## Project Overview
 
-This is the FastAPI version of Springo, an AI assistant backend powered by Amazon Bedrock.
+This is the FastAPI version of Springo, an AI assistant backend powered by Amazon Bedrock and multi-vendor direct APIs.
+
+## Multi-Vendor Architecture Principle
+
+Springo supports multiple model API platforms (Amazon Bedrock, DeepSeek Direct, etc.) via `VendorRouter`. When fixing bugs or adding features, always determine whether the issue is:
+
+1. **Vendor-specific** — only affects one API platform (e.g., DeepSeek's max_tokens limit of 8192, Bedrock's Converse API quirks). Place the fix in the vendor's own service file (`bedrock.py`, `deepseek.py`, etc.) or use vendor-specific logic gated by `get_vendor(model)`.
+2. **Universal** — affects all vendors (e.g., message format handling, session management, UI rendering). Place the fix in shared code (`vendor_router.py`, `messages.py`, `model_registry.py`, etc.).
+
+Key files in the multi-vendor stack:
+- `api/services/model_registry.py` — `vendor` field determines routing; `vendor_model_id` for native API IDs
+- `api/services/vendor_router.py` — dispatches to correct service based on model's vendor
+- `api/services/bedrock.py` — Amazon Bedrock (Anthropic API + Converse API)
+- `api/services/deepseek.py` — DeepSeek direct API (OpenAI-compatible)
+- Each vendor service handles its own: request conversion, response format, parameter clamping, error handling, retry logic
 
 ## Architecture
 

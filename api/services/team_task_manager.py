@@ -132,8 +132,35 @@ class TeamTaskManager:
         # Resolve dependencies when a task is completed
         if status == "completed":
             await self._resolve_dependencies(task_id)
+            # Automatically notify the team lead so it doesn't depend on
+            # the worker model remembering to call send_message.
+            await self._notify_lead_task_completed(task)
 
         return task
+
+    async def _notify_lead_task_completed(self, task: EnhancedTaskBoardItem):
+        """Send a notification to team-lead when a task is completed.
+
+        This is a structural guarantee — even if the worker doesn't call
+        send_message, the team lead gets woken up and can review results
+        or create follow-up tasks.
+        """
+        # Don't notify if the team lead completed it themselves
+        if task.owner == "team-lead":
+            return
+
+        from .message_bus import AgentMessage
+        notification = AgentMessage(
+            type="message",
+            sender="system",
+            recipient="team-lead",
+            content=(
+                f"Task #{task.task_id} '{task.title}' has been completed"
+                f"{' by ' + task.owner if task.owner else ''}."
+            ),
+            summary=f"Task #{task.task_id} completed",
+        )
+        await self._bus.send_message(notification)
 
     async def _resolve_dependencies(self, completed_task_id: str):
         """When a task completes, check if any tasks it blocks are now unblocked.

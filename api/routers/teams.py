@@ -240,6 +240,17 @@ async def send_team_message(team_id: str, request: TeamMessageRequest):
         )
         await bus.send_message(msg)
 
+        # Emit a brief acknowledgment so the user sees immediate feedback
+        ack_event = SSEEventBuilder.team_agent_message(
+            team_id=team_id,
+            sender=request.recipient,
+            recipient="user",
+            content=f"收到，正在处理...",
+            summary="处理中",
+            message_id=f"ack_{msg.message_id}",
+        )
+        await bus.emit_sse(ack_event)
+
         return JSONResponse(content={
             "status": "sent",
             "message_id": msg.message_id,

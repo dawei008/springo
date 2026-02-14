@@ -507,8 +507,8 @@
 
         /* Right Panel */
         .right-panel {
-            width: 360px;
-            min-width: 200px;
+            width: 420px;
+            min-width: 280px;
             max-width: 70vw;
             background: var(--bg-secondary);
             border-left: 1px solid var(--border);
@@ -5351,6 +5351,58 @@
     word-break: break-word;
 }
 
+/* Team message input — matches main chat .input-box style */
+.team-input-box {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 6px 10px;
+}
+
+.team-input-box:focus-within {
+    border-color: var(--accent);
+}
+
+.team-input-box textarea {
+    flex: 1;
+    border: none;
+    background: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    outline: none;
+    resize: none;
+    min-height: 20px;
+    max-height: 80px;
+    line-height: 1.5;
+    font-family: inherit;
+}
+
+.team-input-box textarea::placeholder {
+    color: var(--text-tertiary);
+}
+
+.team-send-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: opacity 0.15s;
+}
+
+.team-send-btn:hover {
+    opacity: 0.85;
+}
+
 .team-task-item {
     display: flex;
     align-items: center;
@@ -5414,326 +5466,6 @@
 .team-task-status.unblocked {
     color: #f59e0b;
     background: rgba(245, 158, 11, 0.1);
-}
-
-/* ============ Terminal Panel (Right Panel Tab) ============ */
-
-.terminal-panel {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    background: var(--bg-primary);
-}
-
-.terminal-panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
-    min-height: 36px;
-}
-
-.terminal-header-label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-shrink: 0;
-}
-
-.terminal-cwd {
-    color: var(--accent);
-    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
-    font-size: 11px;
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.terminal-panel-actions {
-    display: flex;
-    gap: 4px;
-}
-
-.terminal-panel-btn {
-    width: 28px;
-    height: 28px;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    transition: all 0.15s;
-}
-
-.terminal-panel-btn:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.terminal-panel-output {
-    flex: 1;
-    overflow-y: auto;
-    overflow-x: hidden;
-    padding: 8px 12px;
-    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text-primary);
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.terminal-panel-output .terminal-cmd-line {
-    margin-top: 4px;
-}
-
-.terminal-panel-output .terminal-exit-line {
-    margin-bottom: 4px;
-    font-size: 11px;
-}
-
-.terminal-panel-input-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border-top: 1px solid var(--border);
-}
-
-.terminal-prompt {
-    color: var(--success-text, #198754);
-    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
-    font-size: 12px;
-    font-weight: 600;
-    flex-shrink: 0;
-}
-
-.terminal-panel-input {
-    flex: 1;
-    border: none;
-    background: transparent;
-    color: var(--text-primary);
-    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
-    font-size: 12px;
-    outline: none;
-    padding: 4px 0;
-}
-
-.terminal-panel-input::placeholder {
-    color: var(--text-tertiary);
-}
-
-.terminal-run-btn:hover {
-    color: var(--success-text, #198754) !important;
-}
-
-.terminal-stop-btn:hover {
-    color: var(--error-text, #dc3545) !important;
-}
-
-/* Terminal panel scrollbar */
-.terminal-panel-output::-webkit-scrollbar {
-    width: 6px;
-}
-
-.terminal-panel-output::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.terminal-panel-output::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 3px;
-}
-
-.terminal-panel-output::-webkit-scrollbar-thumb:hover {
-    background: var(--text-tertiary);
-}
-
-/* ============ Terminal SSH Styles ============ */
-
-.terminal-mode-tabs {
-    display: flex;
-    gap: 2px;
-    background: var(--bg-tertiary);
-    border-radius: 4px;
-    padding: 2px;
-}
-
-.terminal-mode-tab {
-    padding: 3px 10px;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    border-radius: 3px;
-    transition: all 0.15s;
-}
-
-.terminal-mode-tab:hover {
-    color: var(--text-primary);
-}
-
-.terminal-mode-tab.active {
-    background: var(--bg-primary);
-    color: var(--accent);
-}
-
-/* SSH Config Hosts Dropdown */
-.ssh-config-hosts {
-    margin-bottom: 6px;
-}
-
-.ssh-config-hosts select {
-    width: 100%;
-    padding: 5px 8px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 11px;
-    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
-    outline: none;
-    cursor: pointer;
-    appearance: auto;
-}
-
-.ssh-config-hosts select:focus {
-    border-color: var(--accent);
-}
-
-.ssh-config-hosts select option {
-    background: var(--bg-primary);
-    color: var(--text-primary);
-}
-
-.ssh-connect-form {
-    padding: 8px 12px;
-    background: var(--bg-secondary);
-    border-bottom: 1px solid var(--border);
-}
-
-.ssh-form-row {
-    display: flex;
-    gap: 6px;
-    margin-bottom: 6px;
-}
-
-.ssh-form-row:last-of-type {
-    margin-bottom: 4px;
-}
-
-.ssh-input {
-    flex: 1;
-    padding: 5px 8px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-size: 11px;
-    font-family: 'SF Mono', Monaco, 'Menlo', monospace;
-    outline: none;
-}
-
-.ssh-input:focus {
-    border-color: var(--accent);
-}
-
-.ssh-input::placeholder {
-    color: var(--text-tertiary);
-}
-
-.ssh-port-input {
-    max-width: 60px;
-    flex: 0;
-}
-
-.ssh-connect-btn {
-    padding: 5px 14px;
-    border: none;
-    border-radius: 4px;
-    background: var(--accent);
-    color: #ffffff;
-    font-size: 11px;
-    font-weight: 600;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: background 0.15s;
-}
-
-.ssh-connect-btn:hover {
-    background: var(--accent-hover);
-}
-
-.ssh-status {
-    font-size: 10px;
-    padding: 2px 0;
-    min-height: 14px;
-}
-
-.ssh-status.connected {
-    color: var(--success-text, #198754);
-}
-
-.ssh-status.connecting {
-    color: var(--warning-text, #d97706);
-}
-
-.ssh-status.error {
-    color: var(--error-text, #dc3545);
-}
-
-.ssh-connections {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    margin-top: 4px;
-}
-
-.ssh-connection-item {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 2px 6px;
-    background: var(--bg-tertiary);
-    border-radius: 3px;
-    font-size: 10px;
-    color: var(--text-tertiary);
-    border: 1px solid transparent;
-}
-
-.ssh-connection-item.active {
-    border-color: var(--accent);
-    color: var(--accent);
-}
-
-.ssh-conn-name {
-    cursor: pointer;
-}
-
-.ssh-conn-name:hover {
-    color: var(--text-primary);
-}
-
-.ssh-disconnect-btn {
-    border: none;
-    background: none;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    font-size: 10px;
-    padding: 0 2px;
-}
-
-.ssh-disconnect-btn:hover {
-    color: var(--error-text, #dc3545);
 }
 
 /* ============ Inline Tasks Collapse ============ */
@@ -5932,13 +5664,58 @@
 }
 
 .team-split-agents {
-    flex: 0 1 auto;
-    max-height: 45%;
+    flex: 1 1 auto;
+    min-height: 60px;
+    max-height: 40%;
     overflow-y: auto;
     padding: 10px 14px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+}
+
+/* In classic mode (no messages section), agents fill all space */
+.team-split-agents.full-height {
+    max-height: none;
+}
+
+/* Vertical resize handle between agents and messages */
+.team-split-divider {
+    flex-shrink: 0;
+    height: 6px;
+    cursor: ns-resize;
+    background: transparent;
+    position: relative;
+    margin: 0 14px;
+}
+
+.team-split-divider::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 32px;
+    height: 3px;
+    border-radius: 2px;
+    background: var(--border);
+    transition: background 0.15s;
+}
+
+.team-split-divider:hover::after,
+.team-split-divider.dragging::after {
+    background: var(--accent);
+}
+
+/* Messages section for collaborative mode */
+.team-split-messages-section {
+    flex: 1 1 auto;
+    min-height: 80px;
+    display: flex;
+    flex-direction: column;
+    padding: 0 14px;
+    gap: 6px;
+    overflow: hidden;
 }
 
 .team-split-agent-card {
@@ -6053,11 +5830,11 @@
     display: none;
     font-size: 12px;
     font-family: var(--font-mono, 'SF Mono', 'Monaco', 'Menlo', 'Consolas', monospace);
-    color: var(--text-secondary);
+    color: #d4d4d4;
     line-height: 1.5;
     margin-top: 6px;
     padding: 8px;
-    background: var(--bg-secondary);
+    background: #1e1e1e;
     border-radius: 6px;
     white-space: pre-wrap;
     word-break: break-word;
@@ -6094,17 +5871,3 @@
     background: var(--text-tertiary);
 }
 
-/* ============ Terminal Panel Light Theme ============ */
-/* terminal-light class no longer needed — terminal uses CSS variables from :root / [data-theme="dark"] */
-
-/* ANSI colors — semantic mappings that work on both light and dark themes */
-.terminal-panel .ansi-red { color: var(--error-text, #dc3545); }
-.terminal-panel .ansi-green { color: var(--success-text, #198754); }
-.terminal-panel .ansi-yellow { color: var(--warning-text, #d97706); }
-.terminal-panel .ansi-blue { color: var(--accent); }
-.terminal-panel .ansi-magenta { color: #9333ea; }
-.terminal-panel .ansi-cyan { color: #0891b2; }
-.terminal-panel .ansi-white { color: var(--text-primary); }
-.terminal-panel .ansi-bold { font-weight: 700; }
-.terminal-panel .ansi-dim { opacity: 0.6; }
-.terminal-panel .ansi-stderr { color: var(--error-text, #dc3545); opacity: 0.85; }

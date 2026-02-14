@@ -480,3 +480,174 @@ async def setup_memory_and_s3(request: CreateMemoryAndS3Request) -> Dict[str, An
 def get_current_working_dir() -> str:
     """获取当前工作目录（供其他模块使用）"""
     return _working_dir
+
+
+# ============ Vendor API Keys ============
+
+class VendorKeyRequest(BaseModel):
+    vendor: str  # e.g., "deepseek"
+    api_key: str
+    base_url: Optional[str] = None
+
+
+@router.get("/config/vendor-keys")
+async def get_vendor_keys() -> Dict[str, Any]:
+    """Get configured vendor API keys (masked)."""
+    import json as json_module
+
+    CONFIG_DIR = os.path.expanduser("~/.springo")
+    CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+
+    result: Dict[str, Any] = {"vendor_keys": {}}
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json_module.load(f)
+            vendor_keys = config.get("vendor_keys", {})
+            for vendor, info in vendor_keys.items():
+                key = info.get("api_key", "")
+                result["vendor_keys"][vendor] = {
+                    "configured": bool(key),
+                    "api_key_masked": f"{key[:6]}...{key[-4:]}" if len(key) > 10 else ("***" if key else ""),
+                    "base_url": info.get("base_url", ""),
+                }
+    except Exception as e:
+        logger.error(f"Get vendor keys error: {e}")
+    return result
+
+
+@router.post("/config/vendor-keys")
+async def set_vendor_key(request: VendorKeyRequest) -> Dict[str, Any]:
+    """Save a vendor API key to ~/.springo/config.json."""
+    import json as json_module
+
+    CONFIG_DIR = os.path.expanduser("~/.springo")
+    CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    try:
+        config = {}
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json_module.load(f)
+
+        if "vendor_keys" not in config:
+            config["vendor_keys"] = {}
+
+        entry: Dict[str, str] = {"api_key": request.api_key}
+        if request.base_url:
+            entry["base_url"] = request.base_url
+        config["vendor_keys"][request.vendor] = entry
+
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json_module.dump(config, f, indent=2, ensure_ascii=False)
+
+        # Reinitialize vendor services when keys change
+        if request.api_key:
+            try:
+                from ..services.vendor_router import get_vendor_router
+                from ..services.bedrock import get_bedrock_service
+                router_svc = get_vendor_router()
+                if request.vendor == "deepseek":
+                    from ..services.deepseek import init_deepseek_service
+                    base_url = request.base_url or "https://api.deepseek.com"
+                    ds = init_deepseek_service(request.api_key, base_url)
+                    router_svc.deepseek = ds
+                    logger.info("DeepSeek service reinitialized with new API key")
+                elif request.vendor == "minimax":
+                    from ..services.minimax import init_minimax_service
+                    base_url = request.base_url or "https://api.minimax.chat/v1"
+                    mm = init_minimax_service(request.api_key, base_url)
+                    router_svc.minimax = mm
+                    logger.info("MiniMax service reinitialized with new API key")
+            except Exception as e:
+                logger.warning(f"Failed to reinitialize {request.vendor} service: {e}")
+
+        return {"success": True, "vendor": request.vendor}
+    except Exception as e:
+        logger.error(f"Set vendor key error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/config/vendor-keys/test")
+async def test_vendor_key(request: VendorKeyRequest) -> Dict[str, Any]:
+    """Test a vendor API key by making a lightweight API call."""
+    # Vendor-specific defaults
+    _vendor_defaults = {
+        "deepseek": "https://api.deepseek.com",
+        "minimax": "https://api.minimax.chat/v1",
+    }
+
+    if request.vendor not in _vendor_defaults:
+        return {"success": False, "error": f"Unsupported vendor: {request.vendor}"}
+
+    import httpx
+    import json as json_module
+
+    api_key = request.api_key
+    default_base = _vendor_defaults[request.vendor]
+    base_url = (request.base_url or default_base).rstrip("/")
+
+    # If api_key is a placeholder, read from stored config
+    if not api_key or api_key == "use-stored":
+        try:
+            cfg_file = os.path.expanduser("~/.springo/config.json")
+            if os.path.exists(cfg_file):
+                with open(cfg_file, 'r') as f:
+                    cfg = json_module.load(f)
+                v_cfg = cfg.get("vendor_keys", {}).get(request.vendor, {})
+                api_key = v_cfg.get("api_key", "")
+                stored_base = v_cfg.get("base_url", "")
+                if stored_base and base_url == default_base:
+                    base_url = stored_base
+        except Exception:
+            pass
+
+    if not api_key:
+        return {"success": False, "vendor": request.vendor, "error": "No API key configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            # MiniMax doesn't have a /models endpoint; use a minimal chat call
+            if request.vendor == "minimax":
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"model": "MiniMax-M2.5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+                )
+                if resp.status_code == 200:
+                    return {
+                        "success": True,
+                        "vendor": request.vendor,
+                        "message": "Connected. MiniMax API key is valid.",
+                    }
+                else:
+                    err_text = resp.text[:200]
+                    # Auth errors are clear failures
+                    return {
+                        "success": False,
+                        "vendor": request.vendor,
+                        "error": f"HTTP {resp.status_code}: {err_text}",
+                    }
+            else:
+                resp = await client.get(
+                    f"{base_url}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    model_ids = [m.get("id", "") for m in data.get("data", [])]
+                    return {
+                        "success": True,
+                        "vendor": request.vendor,
+                        "models": model_ids[:5],
+                        "message": f"Connected. {len(model_ids)} model(s) available.",
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "vendor": request.vendor,
+                        "error": f"HTTP {resp.status_code}: {resp.text[:200]}",
+                    }
+    except Exception as e:
+        return {"success": False, "vendor": request.vendor, "error": str(e)}

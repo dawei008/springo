@@ -32,6 +32,9 @@ from .handlers import (
     # Team communication tools
     team_send_message, team_task_create, team_task_update,
     team_task_list, team_task_get,
+    # LSP code intelligence tools
+    lsp_go_to_definition, lsp_find_references, lsp_hover,
+    lsp_document_symbols, lsp_workspace_symbol, lsp_diagnostics,
 )
 
 # Skill loader import
@@ -103,6 +106,13 @@ TOOL_HANDLERS = {
     "task_update": team_task_update,
     "task_list": team_task_list,
     "task_get": team_task_get,
+    # LSP code intelligence tools
+    "lsp_go_to_definition": lsp_go_to_definition,
+    "lsp_find_references": lsp_find_references,
+    "lsp_hover": lsp_hover,
+    "lsp_document_symbols": lsp_document_symbols,
+    "lsp_workspace_symbol": lsp_workspace_symbol,
+    "lsp_diagnostics": lsp_diagnostics,
 }
 
 

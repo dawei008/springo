@@ -86,6 +86,9 @@ class MessageRequest(BaseModel):
     tools: Optional[List[ToolDefinition]] = Field(default=None, description="Available tools")
     tool_choice: Optional[ToolChoice] = Field(default=None, description="Tool selection mode")
     
+    # Extended context (1M beta)
+    extended_context: Optional[bool] = Field(default=None, description="Enable 1M context for supported models")
+
     # Headers passed through
     x_session_id: Optional[str] = Field(default=None, description="Session ID from header")
 

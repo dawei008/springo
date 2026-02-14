@@ -6,13 +6,50 @@ Only injected into tool list when an agent is in team context.
 
 TEAM_TOOL_DEFINITIONS = [
     {
+        "name": "ask_user",
+        "description": (
+            "Ask the user a question when you need clarification or input.\n\n"
+            "For the team lead: sends the question directly to the user via the UI.\n"
+            "For workers: routes the question through the team lead, who relays it "
+            "to the user and forwards the answer back.\n\n"
+            "After calling ask_user, wait for the reply before proceeding."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user",
+                },
+                "options": {
+                    "type": "array",
+                    "description": "Optional list of choices to present",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": {"type": "string", "description": "Option label"},
+                            "description": {"type": "string", "description": "Option description"},
+                        },
+                        "required": ["label"],
+                    },
+                },
+            },
+            "required": ["question"],
+        },
+    },
+    {
         "name": "send_message",
         "description": (
             "Send a message to a specific teammate or broadcast to the entire team.\n\n"
             "Message types:\n"
             "- 'message': Send a direct message to a specific recipient\n"
             "- 'broadcast': Send to all teammates (use sparingly)\n"
-            "- 'shutdown_request': Request a teammate to shut down gracefully\n\n"
+            "- 'shutdown_request': Request a teammate to shut down gracefully\n"
+            "- 'shutdown_response': Respond to a shutdown request (approve or reject)\n"
+            "- 'plan_approval_response': Approve or reject a worker's plan\n\n"
+            "For shutdown_response: set approve=true to accept shutdown, false to reject.\n"
+            "For plan_approval_response: set approve=true to approve the plan, false to reject "
+            "(include feedback in content).\n\n"
             "Always include a short summary (5-10 words) for UI preview."
         ),
         "input_schema": {
@@ -20,12 +57,19 @@ TEAM_TOOL_DEFINITIONS = [
             "properties": {
                 "type": {
                     "type": "string",
-                    "enum": ["message", "broadcast", "shutdown_request"],
-                    "description": "Message type: 'message' for DMs, 'broadcast' for all, 'shutdown_request' to shut down a teammate",
+                    "enum": ["message", "broadcast", "shutdown_request", "shutdown_response", "plan_approval_response"],
+                    "description": (
+                        "Message type:\n"
+                        "- 'message': Direct message to a specific recipient\n"
+                        "- 'broadcast': Send to all teammates (use sparingly)\n"
+                        "- 'shutdown_request': Request a teammate to shut down\n"
+                        "- 'shutdown_response': Respond to a shutdown request (set approve=true/false)\n"
+                        "- 'plan_approval_response': Approve or reject a worker's plan (set approve=true/false)"
+                    ),
                 },
                 "recipient": {
                     "type": "string",
-                    "description": "Agent name of the recipient (required for 'message' and 'shutdown_request')",
+                    "description": "Agent name of the recipient (required for 'message', 'shutdown_request', 'plan_approval_response')",
                 },
                 "content": {
                     "type": "string",
@@ -34,6 +78,14 @@ TEAM_TOOL_DEFINITIONS = [
                 "summary": {
                     "type": "string",
                     "description": "A 5-10 word summary shown as preview in the UI",
+                },
+                "approve": {
+                    "type": "boolean",
+                    "description": "Whether to approve the request (required for 'shutdown_response' and 'plan_approval_response')",
+                },
+                "request_id": {
+                    "type": "string",
+                    "description": "The request ID to respond to (required for 'shutdown_response')",
                 },
             },
             "required": ["type", "content"],
@@ -150,6 +202,79 @@ TEAM_TOOL_DEFINITIONS = [
                 },
             },
             "required": ["task_id"],
+        },
+    },
+    {
+        "name": "spawn_worker",
+        "description": (
+            "Spawn a new worker agent to work on one or more tasks.\n\n"
+            "Each worker runs autonomously with full tool access (file read/write, "
+            "command execution, web search, etc.). Workers report back via "
+            "send_message when they complete their tasks.\n\n"
+            "Provide a worker name and the task ID(s) to assign. The worker will "
+            "be created, assigned the tasks, and begin working immediately.\n\n"
+            "Tips:\n"
+            "- Use descriptive names like 'researcher', 'implementer', 'reviewer'\n"
+            "- Each worker can handle one or more related tasks\n"
+            "- Workers work in parallel — spawn multiple for independent tasks"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "Name for the worker agent (e.g., 'researcher', 'implementer-1')",
+                },
+                "task_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Task IDs to assign to this worker",
+                },
+                "plan_mode": {
+                    "type": "boolean",
+                    "description": (
+                        "If true, the worker must create and submit an implementation plan "
+                        "via exit_plan_mode before executing. The team lead reviews and "
+                        "approves the plan before the worker proceeds. Default: false."
+                    ),
+                },
+            },
+            "required": ["name", "task_ids"],
+        },
+    },
+    {
+        "name": "exit_plan_mode",
+        "description": (
+            "Submit your implementation plan for team lead approval.\n\n"
+            "When spawned in plan mode, you must:\n"
+            "1. Analyze the task requirements\n"
+            "2. Create a detailed implementation plan\n"
+            "3. Call this tool with the plan\n"
+            "4. Wait for the team lead's approval before implementing\n\n"
+            "The team lead will review your plan and either approve it "
+            "(allowing you to proceed) or reject it with feedback."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "plan": {
+                    "type": "string",
+                    "description": "The detailed implementation plan to submit for approval",
+                },
+            },
+            "required": ["plan"],
+        },
+    },
+    {
+        "name": "team_info",
+        "description": (
+            "Get information about the current team, including all members and their status.\n\n"
+            "Returns team ID, status, user request, and a list of all team members "
+            "with their name, agent_id, role, status, and purpose."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
         },
     },
 ]

@@ -448,5 +448,87 @@ Cron format: "minute hour day month weekday"
             },
             "required": ["action"]
         }
-    }
+    },
+
+    # ============ LSP (Language Server Protocol) Tools ============
+    {
+        "name": "lsp_go_to_definition",
+        "description": "Find where a symbol is defined using LSP code intelligence. Provide the file path and the position (1-based line and character) of the symbol. Returns the file and position of the definition. Requires a language server (pylsp for Python, typescript-language-server for TS/JS).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to the source file"},
+                "line": {"type": "integer", "description": "Line number (1-based)"},
+                "character": {"type": "integer", "description": "Character offset on the line (1-based)"},
+                "workspace_root": {"type": "string", "description": "Optional workspace root directory. Auto-detected if not provided."}
+            },
+            "required": ["file_path", "line", "character"]
+        }
+    },
+    {
+        "name": "lsp_find_references",
+        "description": "Find all references to a symbol across the codebase using LSP. Returns a list of locations where the symbol is used. Useful for understanding impact of changes or finding all callers of a function.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to the source file"},
+                "line": {"type": "integer", "description": "Line number (1-based)"},
+                "character": {"type": "integer", "description": "Character offset on the line (1-based)"},
+                "include_declaration": {"type": "boolean", "description": "Include the declaration itself in results", "default": True},
+                "workspace_root": {"type": "string", "description": "Optional workspace root directory"}
+            },
+            "required": ["file_path", "line", "character"]
+        }
+    },
+    {
+        "name": "lsp_hover",
+        "description": "Get type information and documentation for a symbol at a given position. Returns hover content (type signature, docstring) from the language server.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to the source file"},
+                "line": {"type": "integer", "description": "Line number (1-based)"},
+                "character": {"type": "integer", "description": "Character offset on the line (1-based)"},
+                "workspace_root": {"type": "string", "description": "Optional workspace root directory"}
+            },
+            "required": ["file_path", "line", "character"]
+        }
+    },
+    {
+        "name": "lsp_document_symbols",
+        "description": "Get all symbols (functions, classes, variables, methods) defined in a file. Useful for understanding file structure without reading the entire file.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to the source file"},
+                "workspace_root": {"type": "string", "description": "Optional workspace root directory"}
+            },
+            "required": ["file_path"]
+        }
+    },
+    {
+        "name": "lsp_workspace_symbol",
+        "description": "Search for symbols (functions, classes, etc.) across the entire workspace by name. Useful for finding where something is defined when you only know its name.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Symbol name or partial name to search for"},
+                "file_path": {"type": "string", "description": "A file in the workspace (used to identify the workspace and language)"},
+                "workspace_root": {"type": "string", "description": "Optional workspace root directory"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "lsp_diagnostics",
+        "description": "Get errors and warnings for a file from the language server. Returns diagnostic messages with severity, line number, and description.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to the source file"},
+                "workspace_root": {"type": "string", "description": "Optional workspace root directory"}
+            },
+            "required": ["file_path"]
+        }
+    },
 ]

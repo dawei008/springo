@@ -435,6 +435,27 @@ ipcMain.handle('open-path', async (event, filePath) => {
     return shell.openPath(expandedPath);
 });
 
+// Read a local file as base64 (for inline image rendering)
+ipcMain.handle('read-file-base64', async (event, filePath) => {
+    try {
+        let expandedPath = filePath;
+        if (filePath.startsWith('~/')) {
+            expandedPath = path.join(require('os').homedir(), filePath.slice(2));
+        }
+        const data = fs.readFileSync(expandedPath);
+        const ext = path.extname(expandedPath).toLowerCase();
+        const mimeTypes = {
+            '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
+            '.bmp': 'image/bmp', '.ico': 'image/x-icon',
+        };
+        const mimeType = mimeTypes[ext] || 'application/octet-stream';
+        return { success: true, data: data.toString('base64'), mimeType };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+});
+
 // Open URL in default browser (new tab in Chrome)
 ipcMain.handle('open-external', async (event, url) => {
     try {

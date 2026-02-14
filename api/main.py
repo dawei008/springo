@@ -86,12 +86,74 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"S3 sync not started: {e}")
 
+    # Initialize VendorRouter (Bedrock + optional DeepSeek)
+    try:
+        from .services.bedrock import get_bedrock_service
+        from .services.vendor_router import init_vendor_router
+        bedrock_svc = get_bedrock_service()
+        deepseek_svc = None
+
+        # Load vendor keys from ~/.springo/config.json
+        _vendor_keys = {}
+        try:
+            import json as _json_mod
+            _cfg_file = os.path.expanduser("~/.springo/config.json")
+            if os.path.exists(_cfg_file):
+                with open(_cfg_file, 'r') as _f:
+                    _cfg = _json_mod.load(_f)
+                _vendor_keys = _cfg.get("vendor_keys", {})
+        except Exception as e:
+            logger.debug(f"Vendor keys config not available: {e}")
+
+        # DeepSeek
+        try:
+            _ds_keys = _vendor_keys.get("deepseek", {})
+            _ds_api_key = _ds_keys.get("api_key", "") or settings.deepseek_api_key
+            if _ds_api_key:
+                from .services.deepseek import init_deepseek_service
+                _ds_base = _ds_keys.get("base_url", "") or settings.deepseek_base_url
+                deepseek_svc = init_deepseek_service(_ds_api_key, _ds_base)
+                logger.info(f"DeepSeek service initialized (base_url={_ds_base})")
+        except Exception as e:
+            logger.debug(f"DeepSeek init failed: {e}")
+
+        # MiniMax
+        minimax_svc = None
+        try:
+            _mm_keys = _vendor_keys.get("minimax", {})
+            _mm_api_key = _mm_keys.get("api_key", "")
+            if _mm_api_key:
+                from .services.minimax import init_minimax_service
+                _mm_base = _mm_keys.get("base_url", "") or "https://api.minimax.chat/v1"
+                minimax_svc = init_minimax_service(_mm_api_key, _mm_base)
+        except Exception as e:
+            logger.debug(f"MiniMax init failed: {e}")
+
+        init_vendor_router(bedrock_svc, deepseek_svc, minimax_svc)
+        _vendors = ['bedrock']
+        if deepseek_svc: _vendors.append('deepseek')
+        logger.info(f"VendorRouter initialized with vendors: {_vendors}")
+    except Exception as e:
+        logger.warning(f"Failed to initialize VendorRouter: {e}")
+
     # Initialize Team Manager with periodic cleanup
     try:
         from .services.agent_team_manager import init_team_manager
         await init_team_manager()
     except Exception as e:
         logger.warning(f"Failed to initialize Team Manager: {e}")
+
+    # Initialize LSP Manager (lazy — servers start on first tool call)
+    try:
+        from .services.lsp_manager import get_lsp_manager
+        get_lsp_manager()
+        # Capture main event loop for LSP tool handlers (they run in ThreadPoolExecutor)
+        import asyncio
+        from mcp_tools.handlers.lsp_tools import set_main_loop
+        set_main_loop(asyncio.get_running_loop())
+        logger.info("LSP Manager initialized (servers start lazily on first use)")
+    except Exception as e:
+        logger.warning(f"Failed to initialize LSP Manager: {e}")
 
     yield
 
@@ -122,6 +184,11 @@ async def lifespan(app: FastAPI):
         await shutdown_team_manager()
     except Exception as e:
         logger.warning(f"Error closing Team Manager: {e}")
+    try:
+        from .services.lsp_manager import shutdown_lsp_manager
+        await shutdown_lsp_manager()
+    except Exception as e:
+        logger.warning(f"Error closing LSP Manager: {e}")
 
 
 # Create FastAPI application

@@ -35,6 +35,10 @@ class Settings(BaseSettings):
         description="Default chat model for new sessions"
     )
 
+    # DeepSeek Direct API
+    deepseek_api_key: str = Field(default="", description="DeepSeek API key")
+    deepseek_base_url: str = Field(default="https://api.deepseek.com", description="DeepSeek API base URL")
+
     # Server Configuration
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8081, description="Server port")

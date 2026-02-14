@@ -11,6 +11,7 @@ from ..services.model_registry import (
     MODEL_REGISTRY,
     BEDROCK_MODEL_MAPPING,
     get_model_limits,
+    model_supports_extended_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,11 +37,13 @@ async def list_models() -> Dict[str, Any]:
     models = []
     for model_id, info in MODEL_REGISTRY.items():
         limits = get_model_limits(model_id)
-        models.append({
+        has_extended = model_supports_extended_context(model_id)
+        entry = {
             "id": model_id,
             "object": "model",
             "created": now,
-            "bedrock_model_id": info["bedrock_id"],
+            "vendor": info.get("vendor", "bedrock"),
+            "bedrock_model_id": info.get("bedrock_id", ""),
             "display_name": info.get("display_name", model_id),
             "provider": info.get("provider", "unknown"),
             "context_window": info.get("context_window", 200000),
@@ -48,6 +51,7 @@ async def list_models() -> Dict[str, Any]:
             "supports_vision": info.get("supports_vision", False),
             "supports_thinking": info.get("supports_thinking", False),
             "api_format": info.get("api_format", "anthropic"),
+            "supports_extended_context": has_extended,
             "context": {
                 "max_context_tokens": limits["max_context_tokens"],
                 "compact_threshold": limits["compact_threshold"],
@@ -55,19 +59,32 @@ async def list_models() -> Dict[str, Any]:
                 "target_after_summary": limits["target_after_summary"],
                 "max_output_tokens": limits["max_output_tokens"],
             },
-        })
+        }
+        # Include standard (200K) limits for models that support the 1M toggle
+        if has_extended:
+            std = get_model_limits(model_id, extended_context=False)
+            entry["context_standard"] = {
+                "max_context_tokens": std["max_context_tokens"],
+                "compact_threshold": std["compact_threshold"],
+                "warning_threshold": std["warning_threshold"],
+                "target_after_summary": std["target_after_summary"],
+                "max_output_tokens": std["max_output_tokens"],
+            }
+        else:
+            entry["context_standard"] = None
+        models.append(entry)
 
-    # Build provider-grouped dict for UI optgroup rendering
-    grouped: Dict[str, List[Dict]] = {}
+    # Build vendor-grouped dict for UI optgroup rendering (grouped by API platform)
+    by_vendor: Dict[str, List[Dict]] = {}
     for m in models:
-        provider = m["provider"]
-        if provider not in grouped:
-            grouped[provider] = []
-        grouped[provider].append(m)
+        vendor = m["vendor"]
+        if vendor not in by_vendor:
+            by_vendor[vendor] = []
+        by_vendor[vendor].append(m)
 
     return {
         "data": models,
-        "models": grouped,
+        "models": by_vendor,
         "default_model": DEFAULT_MODEL,
         "default_compact_model": DEFAULT_COMPACT_MODEL,
         "object": "list",

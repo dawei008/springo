@@ -32,28 +32,43 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Bedrock beta header injection for 1M context window
 # ---------------------------------------------------------------------------
-# Models with context_window > 200K need the beta header on Bedrock to unlock
-# the extended context.  The header is harmless for models that don't need it.
+# Models with context_window > 200K need ``anthropic_beta`` in the request body
+# (primary mechanism, set in convert_request_to_bedrock) AND the HTTP header as
+# a belt-and-suspenders fallback.
 _BEDROCK_BETA_CONTEXT_1M = "context-1m-2025-08-07"
 
 
-def _register_beta_header(client, model_name: str) -> None:
+def _register_beta_header(client, model_name: str, extended_context: bool = True) -> None:
     """Register an event hook on *client* to inject the ``x-amz-bedrock-beta``
-    header when the model's configured context_window exceeds 200 000 tokens.
+    HTTP header as a **secondary** mechanism.  The primary mechanism is the
+    ``anthropic_beta`` field in the InvokeModel JSON body (set by
+    ``convert_request_to_bedrock``).
 
-    This is required for Claude Sonnet 4 / 4.5 and may also apply to Opus 4.6.
+    When *extended_context* is False the hook is skipped entirely, matching
+    the body-level logic that omits ``anthropic_beta``.
     """
+    if not extended_context:
+        logger.debug(f"[Beta] Skipped HTTP header hook for {model_name} (extended_context=False)")
+        return
+
     info = MODEL_REGISTRY.get(model_name)
     if not info or info.get("context_window", 200000) <= 200000:
         return
     if info.get("api_format") != "anthropic":
         return  # Only needed for InvokeModel (Anthropic format)
 
-    def _inject(request, **_kwargs):
-        request.headers["x-amz-bedrock-beta"] = _BEDROCK_BETA_CONTEXT_1M
+    beta_features = info.get("beta_features", [])
+    if not beta_features:
+        return
 
-    # Use wildcard to cover InvokeModel and InvokeModelWithResponseStream
+    beta_value = ",".join(beta_features)
+
+    def _inject(request, **_kwargs):
+        request.headers["x-amz-bedrock-beta"] = beta_value
+        logger.debug(f"[Beta] Injected x-amz-bedrock-beta: {beta_value} for {model_name}")
+
     client.meta.events.register("before-sign.bedrock-runtime.*", _inject)
+    logger.debug(f"[Beta] Registered HTTP header hook for {model_name}")
 
 
 def format_error_response(error: Exception, lang: str = "zh") -> dict:
@@ -488,6 +503,17 @@ class BedrockService:
         # Only add anthropic_version for Anthropic-format models
         if api_format == "anthropic":
             bedrock_body["anthropic_version"] = "bedrock-2023-05-31"
+            # Add beta features (e.g. 1M context window) if the model requires them
+            # and extended_context is not explicitly disabled
+            extended_context = request.get("extended_context")
+            if extended_context is None:
+                extended_context = True  # backward-compatible default
+            beta_features = model_info.get("beta_features", []) if model_info else []
+            if beta_features and extended_context:
+                bedrock_body["anthropic_beta"] = beta_features
+                logger.info(f"[Beta] Added anthropic_beta={beta_features} to body for {model}")
+            elif beta_features and not extended_context:
+                logger.info(f"[Beta] Skipped anthropic_beta for {model} (extended_context=False)")
 
         # Copy optional parameters
         for key in ["temperature", "top_p", "top_k", "stop_sequences", "tool_choice"]:
@@ -569,6 +595,9 @@ class BedrockService:
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
         original_model = body.pop("_original_model", None) or ""
+        extended_context = body.pop("extended_context", None)
+        if extended_context is None:
+            extended_context = True
 
         for attempt in range(max_retries):
             try:
@@ -577,7 +606,7 @@ class BedrockService:
                     region_name=self.region,
                     config=self.config
                 ) as client:
-                    _register_beta_header(client, original_model)
+                    _register_beta_header(client, original_model, extended_context=extended_context)
                     response = await client.invoke_model(
                         modelId=model_id,
                         body=json.dumps(body),
@@ -622,6 +651,9 @@ class BedrockService:
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
         body.pop("_original_model", None)
+        extended_context = body.pop("extended_context", None)
+        if extended_context is None:
+            extended_context = True
 
         # Retry connection phase for 429 throttling
         response = None
@@ -634,7 +666,7 @@ class BedrockService:
                     config=self.config
                 )
                 client = await client_ctx.__aenter__()
-                _register_beta_header(client, original_model)
+                _register_beta_header(client, original_model, extended_context=extended_context)
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body),
@@ -755,6 +787,9 @@ class BedrockService:
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
         original_model = body.pop("_original_model", None) or ""
+        extended_context = body.pop("extended_context", None)
+        if extended_context is None:
+            extended_context = True
 
         response = None
         client_ctx = None
@@ -766,7 +801,7 @@ class BedrockService:
                     config=self.config
                 )
                 client = await client_ctx.__aenter__()
-                _register_beta_header(client, original_model)
+                _register_beta_header(client, original_model, extended_context=extended_context)
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body),

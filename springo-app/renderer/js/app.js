@@ -380,6 +380,7 @@
 
                 // Clean up runtime
                 delete convRuntime[convId];
+                delete teamPanelCache[convId];
                 cleanupAbortController(convId);
                 cleanedCount++;
             }
@@ -626,6 +627,13 @@
 
             // Load conversations from backend JSONL storage (with retry for server startup)
             await loadSessionsFromBackend();
+            // Reset any conversations stuck in 'running' status from a previous app session
+            // (no runtime.isStreaming means no active request — the app was restarted)
+            for (const conv of conversations) {
+                if (conv.status === 'running') {
+                    conv.status = 'idle';
+                }
+            }
             renderConversations();
             // Initialize workdir selector and display
             updateWorkdirSelector();
@@ -1302,7 +1310,8 @@
                         tools: window.cachedTools || [],
                         skills: window.loadedSkills || [],
                         memory_files: [],
-                        model: settings.model || getDefaultModel()
+                        model: settings.model || getDefaultModel(),
+                        extended_context: settings.enable1mContext !== false
                     })
                 });
 
@@ -1386,7 +1395,8 @@
                         tools: tools,
                         skills: skills,
                         memory_files: memory_files,
-                        model: settings.model || getDefaultModel()
+                        model: settings.model || getDefaultModel(),
+                        extended_context: settings.enable1mContext !== false
                     })
                 });
 
@@ -1757,7 +1767,7 @@
                 const res = await fetch(`${BASE_URL}/v1/context/stats`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ messages: apiMessages, model: settings.model || getDefaultModel() })
+                    body: JSON.stringify({ messages: apiMessages, model: settings.model || getDefaultModel(), extended_context: settings.enable1mContext !== false })
                 });
                 const stats = await res.json();
 
@@ -1838,6 +1848,11 @@
                     }
                 }
 
+                // Save team panel state for the current session before creating new one
+                if (currentConversationId && activeTeamSplitId) {
+                    saveTeamPanelState(currentConversationId);
+                }
+
                 // Use unique ID with random suffix to avoid collisions
                 const newId = Date.now().toString() + '-' + Math.random().toString(36).substr(2, 9);
                 currentConversationId = newId;
@@ -1871,6 +1886,7 @@
                 hideContextIndicator(); // Reset context indicator for new conversation
                 removeInlineChatToolPanel(); // Remove inline tool panel for new conversation
                 resetTeamSplitPanel(); // Reset team panel for new conversation
+                syncTeamModeUI(false, false); // New chat starts with team mode off
 
                 // Update status bar path display for new conversation
                 updateWorkingDirDisplay(workingDir);
@@ -1890,6 +1906,11 @@
                 // Store the previous conversation ID before switching
                 const previousConvId = currentConversationId;
                 const previousRuntime = previousConvId ? convRuntime[previousConvId] : null;
+
+                // Save team panel state for the previous session before switching
+                if (previousConvId && activeTeamSplitId) {
+                    saveTeamPanelState(previousConvId);
+                }
 
                 // If the previous conversation is streaming, handle gracefully
                 if (previousRuntime && previousRuntime.isStreaming) {
@@ -1964,7 +1985,16 @@
                 renderToolExecutionSidebar(); // Update right sidebar for this conversation
                 refreshContextStats(); // Update context indicator for this conversation
                 removeInlineChatToolPanel(); // Remove inline tool panel when switching conversations
-                resetTeamSplitPanel(); // Reset team panel when switching conversations
+                // Try to restore cached team panel for this session; reset if none
+                if (!restoreTeamPanelState(id)) {
+                    resetTeamSplitPanel();
+                }
+
+                // Restore per-session team mode toggle state
+                syncTeamModeUI(
+                    runtime.teamModeEnabled || false,
+                    runtime.teamCollaborativeMode || false
+                );
 
                 // Restore inline tasks for this conversation
                 updateInlineTasks(runtime.todos);
@@ -2259,6 +2289,8 @@
                 delete convRuntime[id];
                 console.log(`[${id}] Cleaned up runtime state`);
             }
+            // Clean up cached team panel
+            delete teamPanelCache[id];
 
             // Clean up abort controller (memory leak fix)
             cleanupAbortController(id);
@@ -2665,6 +2697,9 @@
             });
 
             scrollToBottom();
+
+            // Post-render: load any inline image placeholders
+            loadInlineImages(container);
         }
 
         // Make file paths clickable in HTML (applied AFTER markdown parsing)
@@ -2755,6 +2790,50 @@
             return temp.innerHTML;
         }
 
+        // Auto-detect image file paths in rendered HTML and insert placeholders.
+        // After the HTML is inserted into the DOM, call loadInlineImages() to fetch and display them.
+        function renderInlineImages(html) {
+            if (!html || typeof html !== 'string') return html;
+            const imageExtensions = /\.(png|jpg|jpeg|gif|svg|webp|bmp)$/i;
+            const temp = document.createElement('div');
+            temp.innerHTML = html;
+
+            const imageLinks = temp.querySelectorAll('a.clickable-path');
+            for (const link of imageLinks) {
+                const filePath = link.getAttribute('data-path');
+                if (!filePath || !imageExtensions.test(filePath)) continue;
+
+                // Insert an image placeholder after the link
+                const container = document.createElement('div');
+                container.className = 'inline-image-container';
+                container.innerHTML = `<img class="chat-image inline-rendered-image" data-image-path="${filePath.replace(/"/g, '&quot;')}" alt="${filePath.split('/').pop()}" title="Click to preview" style="display:none; max-width:400px; max-height:400px; border-radius:8px; cursor:pointer; margin-top:8px;">`;
+                link.parentNode.insertBefore(container, link.nextSibling);
+            }
+
+            return temp.innerHTML;
+        }
+
+        // Post-render: load all inline image placeholders in the DOM
+        async function loadInlineImages(container) {
+            if (!window.electronAPI?.readFileBase64) return;
+            const images = (container || document).querySelectorAll('img.inline-rendered-image[data-image-path]');
+            for (const img of images) {
+                if (img.src && img.src !== '' && !img.src.endsWith('/')) continue; // already loaded
+                const filePath = img.getAttribute('data-image-path');
+                if (!filePath) continue;
+                try {
+                    const result = await window.electronAPI.readFileBase64(filePath);
+                    if (result.success) {
+                        img.src = `data:${result.mimeType};base64,${result.data}`;
+                        img.style.display = 'block';
+                        img.onclick = () => window.openImagePreview(img.src);
+                    }
+                } catch (e) {
+                    console.warn('[InlineImage] Failed to load:', filePath, e);
+                }
+            }
+        }
+
         // Escape HTML to prevent XSS
         function escapeHtml(text) {
             const div = document.createElement('div');
@@ -2795,7 +2874,9 @@
                 // 1. Parse markdown (this also handles URLs)
                 const parsed = marked.parse(text);
                 // 2. Linkify file paths in the rendered HTML
-                return linkifyFilePaths(parsed);
+                const linked = linkifyFilePaths(parsed);
+                // 3. Auto-render inline images from detected file paths
+                return renderInlineImages(linked);
             };
 
             // Strip chat-tool-container HTML (tools shown in inline panel instead)
@@ -3201,6 +3282,7 @@
                             if (currentConversationId === convId) {
                                 updateInlineChatToolPanel(toolUses);
                             }
+
                             break;
 
                         case 'heartbeat':
@@ -3386,6 +3468,11 @@
                         case 'team_agent_idle':
                             if (currentConversationId === convId) {
                                 updateTeamSplitAgent(data.team_id, null, null, 'idle', '', '', data.agent_name);
+                                if (data.peer_dm_summary) {
+                                    appendTeamMessage(data.team_id, 'system', 'all',
+                                        `[Peer DM] ${data.agent_name}: ${data.peer_dm_summary}`,
+                                        `Peer DM from ${data.agent_name}`);
+                                }
                             }
                             break;
 
@@ -4285,7 +4372,6 @@
             'rename': { description: 'Rename current session', handler: handleNameCommand },
             'clear': { description: 'Clear current session messages', handler: handleClearCommand },
             'reset': { description: 'Force reset stuck sessions', handler: handleResetCommand },
-            'terminal': { description: 'Execute a terminal command inline', handler: handleTerminalCommand },
         };
 
         // Handle /reset command - force reset stuck streaming states
@@ -4326,50 +4412,6 @@
             return true;
         }
 
-        // Handle /terminal command - execute command inline in chat
-        // Supports natural language: /terminal 重复执行whoami -> parses to "whoami"
-        async function handleTerminalCommand(args) {
-            const input = args.trim();
-            if (!input) {
-                alert('Usage: /terminal <command>\nExample: /terminal ls -la\nAlso supports: /terminal 查看当前目录');
-                return true;
-            }
-            
-            // Try to parse the input (handles both commands and natural language)
-            try {
-                const res = await fetch(BASE_URL + '/v1/terminal/parse', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ input: input })
-                });
-                
-                if (res.ok) {
-                    const data = await res.json();
-                    if (data.success && data.command) {
-                        // If natural language was parsed, show what command will run
-                        if (data.is_natural_language) {
-                            console.log(`[NL Parse] "${input}" -> "${data.command}"`);
-                        }
-                        executeTerminalFromChat(data.command);
-                    } else {
-                        // Parse failed, try to execute as-is
-                        console.warn('NL parse failed, executing as-is:', data.error);
-                        executeTerminalFromChat(input);
-                    }
-                } else {
-                    // API error, execute as-is
-                    console.warn('NL parse API error, executing as-is');
-                    executeTerminalFromChat(input);
-                }
-            } catch (e) {
-                // Network error, execute as-is
-                console.warn('NL parse network error, executing as-is:', e);
-                executeTerminalFromChat(input);
-            }
-            
-            return true;
-        }
-
         async function sendMessage() {
             const input = document.getElementById('message-input');
             let content = input.value.trim();
@@ -4395,14 +4437,6 @@
                     builtInCommands[cmdName].handler(cmdArgs);
                     return;
                 }
-            }
-
-            // Handle #terminal — inject terminal panel output into chat as context
-            if (content.trim() === '#terminal' || content.startsWith('#terminal ')) {
-                input.value = '';
-                input.style.height = 'auto';
-                injectTerminalOutputToChat(content);
-                return;
             }
 
             // Handle explicit skill selection (via /skillname)
@@ -4867,6 +4901,14 @@ Available MCP tool categories:
 
 NOTE: All web searches use MCP servers. DO NOT use built-in web_search (removed).
 
+## Display Environment
+You are running inside a GUI desktop application (Electron), NOT a terminal.
+The chat window can render images inline. When you generate an image file (QR code, chart, diagram, screenshot, etc.):
+1. Save the file to disk (e.g. using write_file or a Python script)
+2. Mention the full file path in your response - the app will automatically detect image paths (.png, .jpg, .svg, .gif, .webp) and render them inline
+3. The user can click the image to view it full-screen
+Do NOT say "I cannot display images" - the GUI handles image rendering automatically.
+
 Be concise and helpful in your responses.`;
 
                 const requestBody = {
@@ -4878,7 +4920,8 @@ Be concise and helpful in your responses.`;
                     // NOTE: tools not sent - backend manages tools via get_tool_definitions()
                     stream: true,  // Enable streaming
                     compact_model: settings.compactModel || getDefaultCompactModel(),  // Model for context compaction
-                    session_id: convId  // Session ID for tool-results storage (matches session directory)
+                    session_id: convId,  // Session ID for tool-results storage (matches session directory)
+                    extended_context: settings.enable1mContext !== false  // 1M context toggle (default: enabled)
                 };
                 console.log(`[${convId}] Request body (streaming):`, JSON.stringify(requestBody).substring(0, 200));
 
@@ -5072,8 +5115,6 @@ Be concise and helpful in your responses.`;
                     await continueConversation(convId);
                 } else if (toolUses.length > 0 && AUTO_TOOL_EXECUTION) {
                     // AUTO MODE: Tools were executed on server
-                    // CRITICAL: Build tool_result message from collected results
-                    // Without this, tool_use blocks become "orphaned" on reload and get stripped
                     console.log(`[${convId}] Auto mode: ${toolUses.length} tools executed on server`);
 
                     // Handle special tools that need frontend processing (task, delegate_task, background commands)
@@ -5106,31 +5147,40 @@ Be concise and helpful in your responses.`;
                         }
                     }
 
-                    // Build tool_results from toolUses array (results came via SSE tool_result events)
-                    const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
-                    if (toolsWithResults.length > 0) {
-                        const toolResults = toolsWithResults.map(tu => ({
-                            type: 'tool_result',
-                            tool_use_id: tu.id,
-                            content: typeof tu.result === 'string' ? tu.result : JSON.stringify(tu.result)
-                        }));
-
-                        // Add tool_result as user message (matches Claude API message format)
-                        messages.push({ role: 'user', content: toolResults });
-                        console.log(`[${convId}] Added ${toolResults.length} tool_result entries to messages`);
-
-                        // Update chat display - tool calls shown in inline panel, not in message
-                        if (textContent && currentConversationId === convId) {
-                            const lastMsg = messages[messages.length - 2]; // Assistant message before tool_result
-                            if (lastMsg && lastMsg.role === 'assistant') {
-                                lastMsg.displayContent = textContent;
-                                updateLastMessageContent(textContent);
-                            }
+                    // CRITICAL: In AUTO mode, the backend already saved the properly structured
+                    // messages (separate per-iteration assistant/tool_result pairs + final assistant)
+                    // via _auto_save_session. Reload from backend to sync frontend state instead
+                    // of overwriting with merged messages.
+                    try {
+                        const backendMessages = await SessionAPI.load(convId);
+                        if (backendMessages.length > 0) {
+                            const runtime = getConvRuntime(convId);
+                            runtime.messages = validateConversationMessages(backendMessages);
+                            console.log(`[${convId}] AUTO mode: synced ${runtime.messages.length} messages from backend`);
                         }
+                    } catch (syncErr) {
+                        console.warn(`[${convId}] AUTO mode: failed to sync from backend, falling back to local save`, syncErr);
+                        // Fallback: build tool_results locally and save
+                        const toolsWithResults = toolUses.filter(tu => tu.result !== undefined);
+                        if (toolsWithResults.length > 0) {
+                            const toolResults = toolsWithResults.map(tu => ({
+                                type: 'tool_result',
+                                tool_use_id: tu.id,
+                                content: typeof tu.result === 'string' ? tu.result : JSON.stringify(tu.result)
+                            }));
+                            messages.push({ role: 'user', content: toolResults });
+                        }
+                        saveConversation(convId);
+                    }
+
+                    // Update chat display with final text (includes all iterations' text for display)
+                    if (textContent && currentConversationId === convId) {
+                        updateLastMessageContent(textContent);
                     }
 
                     if (stillViewing) hideToolPanel();
-                    saveConversation(convId);
+                    // Update local conversation list (title, etc.) without overwriting backend JSONL
+                    renderConversations();
                     if (currentConversationId === convId) refreshContextStats();
                 } else {
                     // No tools - save and hide panel
@@ -5390,6 +5440,8 @@ Be concise and helpful in your responses.`;
                         pre.appendChild(btn);
                     }
                 });
+                // Load inline images from file paths
+                loadInlineImages(lastMessageEl);
                 // Auto-scroll to bottom as content updates
                 scrollToBottom();
             }
@@ -5713,10 +5765,22 @@ Be concise and helpful in your responses.`;
             document.getElementById('settings-max-tokens').value = settings.maxTokens || 16384;
             document.getElementById('settings-temperature').value = settings.temperature || 0.7;
             document.getElementById('temp-value').textContent = settings.temperature || 0.7;
+            // Extended context toggle (default to enabled)
+            const extCtxCheckbox = document.getElementById('settings-extended-context');
+            if (extCtxCheckbox) {
+                extCtxCheckbox.checked = settings.enable1mContext !== false;
+            }
+            updateExtendedContextVisibility(settings.model || getDefaultModel());
+            // Clamp max tokens to selected model's limit
+            updateTokenLimits(settings.model || getDefaultModel());
             // Compact model setting (default to Haiku 4.5)
             document.getElementById('settings-compact-model').value = settings.compactModel || getDefaultCompactModel();
             // Load AWS credentials settings
             loadAwsSettings();
+            // Load DeepSeek settings
+            loadDeepSeekSettings();
+            // Load MiniMax settings
+            loadMiniMaxSettings();
             // Load Memory settings
             loadMemorySettings();
             // Load Skills and MCP servers lists
@@ -5740,11 +5804,18 @@ Be concise and helpful in your responses.`;
             settings.maxTokens = document.getElementById('settings-max-tokens').value;
             settings.temperature = document.getElementById('settings-temperature').value;
             settings.compactModel = document.getElementById('settings-compact-model').value;
+            // Save extended context toggle
+            const extCtxCheckbox = document.getElementById('settings-extended-context');
+            if (extCtxCheckbox) {
+                settings.enable1mContext = extCtxCheckbox.checked;
+            }
             localStorage.setItem('settings', JSON.stringify(settings));
             // Update token limits for the selected model
             updateTokenLimits(settings.model);
             // Save AWS credentials
             saveAwsSettings();
+            // Save DeepSeek settings
+            saveDeepSeekSettings();
             // Save Memory settings
             saveMemorySettings();
         }
@@ -5807,14 +5878,11 @@ Be concise and helpful in your responses.`;
         let _defaultModel = 'claude-opus-4-6';
         let _defaultCompactModel = 'claude-haiku-4-5-20251001';
 
-        // Provider display names for optgroup headers
+        // Vendor (API platform) display names for optgroup headers
         const _providerLabels = {
-            anthropic: 'Anthropic',
-            deepseek: 'DeepSeek',
-            minimax: 'MiniMax',
-            moonshot: 'Moonshot (Kimi)',
-            qwen: 'Qwen',
-            zai: 'Z.AI (GLM)',
+            bedrock: 'Amazon Bedrock',
+            deepseek: 'DeepSeek (Direct)',
+            minimax: 'MiniMax (Direct)',
         };
 
         async function loadModelsFromAPI() {
@@ -5891,25 +5959,64 @@ Be concise and helpful in your responses.`;
                 saveSettings();
             }
 
-            // Listen for model change to update token limits
+            // Listen for model change to update token limits and extended context visibility
             modelSelect.addEventListener('change', () => {
+                updateExtendedContextVisibility(modelSelect.value);
                 updateTokenLimits(modelSelect.value);
             });
+
+            // Listen for extended context checkbox change to update token limits
+            const extCtxCheckbox = document.getElementById('settings-extended-context');
+            if (extCtxCheckbox) {
+                extCtxCheckbox.addEventListener('change', () => {
+                    updateTokenLimits(modelSelect.value);
+                });
+            }
+        }
+
+        function updateExtendedContextVisibility(modelId) {
+            const model = _availableModels.find(m => m.id === modelId);
+            const group = document.getElementById('extended-context-group');
+            if (!group) return;
+            if (model && model.supports_extended_context) {
+                group.style.display = '';
+            } else {
+                group.style.display = 'none';
+            }
         }
 
         function updateTokenLimits(modelId) {
             const model = _availableModels.find(m => m.id === modelId);
             if (model && model.context) {
-                CONFIG.TOKENS.MAX_CONTEXT = model.context.max_context_tokens;
-                CONFIG.TOKENS.WARNING_THRESHOLD = model.context.warning_threshold;
-                CONFIG.TOKENS.COMPACT_THRESHOLD = model.context.compact_threshold;
-                CONFIG.TOKENS.MAX_OUTPUT = model.context.max_output_tokens;
-                // Update the max tokens input constraint to match the model's max output
+                // Check if this model supports extended context and the toggle is OFF
+                const extCheckbox = document.getElementById('settings-extended-context');
+                const extEnabled = extCheckbox ? extCheckbox.checked : true;
+                if (model.supports_extended_context && !extEnabled && model.context_standard) {
+                    // Use standard 200K limits
+                    CONFIG.TOKENS.MAX_CONTEXT = model.context_standard.max_context_tokens;
+                    CONFIG.TOKENS.WARNING_THRESHOLD = model.context_standard.warning_threshold;
+                    CONFIG.TOKENS.COMPACT_THRESHOLD = model.context_standard.compact_threshold;
+                    CONFIG.TOKENS.MAX_OUTPUT = model.context_standard.max_output_tokens;
+                } else {
+                    // Use full (possibly 1M) limits
+                    CONFIG.TOKENS.MAX_CONTEXT = model.context.max_context_tokens;
+                    CONFIG.TOKENS.WARNING_THRESHOLD = model.context.warning_threshold;
+                    CONFIG.TOKENS.COMPACT_THRESHOLD = model.context.compact_threshold;
+                    CONFIG.TOKENS.MAX_OUTPUT = model.context.max_output_tokens;
+                }
+                // Update the max tokens input: clamp to model's max output, smart default
                 const maxTokensInput = document.getElementById('settings-max-tokens');
                 if (maxTokensInput) {
-                    maxTokensInput.max = model.context.max_output_tokens;
+                    const modelMax = model.max_output || CONFIG.TOKENS.MAX_OUTPUT;
+                    maxTokensInput.max = modelMax;
+                    const currentVal = parseInt(maxTokensInput.value, 10) || 16384;
+                    // Smart default: min(16K, modelMax). Clamp current value if it exceeds model max.
+                    const smartDefault = Math.min(16384, modelMax);
+                    if (currentVal > modelMax) {
+                        maxTokensInput.value = smartDefault;
+                    }
                 }
-                console.log(`[Models] Token limits updated for ${modelId}: ${CONFIG.TOKENS.MAX_CONTEXT.toLocaleString()} context, ${model.context.max_output_tokens.toLocaleString()} max output`);
+                console.log(`[Models] Token limits updated for ${modelId}: ${CONFIG.TOKENS.MAX_CONTEXT.toLocaleString()} context, ${CONFIG.TOKENS.MAX_OUTPUT.toLocaleString()} max output (extended=${extEnabled})`);
             }
         }
 
@@ -5984,6 +6091,179 @@ Be concise and helpful in your responses.`;
                     statusEl.innerHTML = `<span style="color: #22c55e;">✓ Connected (${data.account})</span>`;
                     // Reload to show auto-detected state
                     loadAwsSettings();
+                } else {
+                    statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
+                }
+            } catch (e) {
+                statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Test Connection';
+            }
+        }
+
+        // ==================== DeepSeek Settings ====================
+
+        async function loadDeepSeekSettings() {
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/vendor-keys`);
+                const data = await res.json();
+                const statusEl = document.getElementById('deepseek-connection-status');
+                const ds = data.vendor_keys?.deepseek;
+                if (ds && ds.configured) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ Key configured (${ds.api_key_masked})</span>`;
+                } else {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not configured</span>';
+                }
+            } catch (e) {
+                console.log('Failed to load DeepSeek settings:', e);
+            }
+        }
+
+        async function saveDeepSeekSettings() {
+            const apiKey = document.getElementById('settings-deepseek-api-key').value;
+            if (!apiKey) return;
+
+            try {
+                await fetch(`${BASE_URL}/v1/config/vendor-keys`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendor: 'deepseek',
+                        api_key: apiKey,
+                    })
+                });
+                // Reload models since DeepSeek direct model is now available
+                loadModelsFromAPI();
+            } catch (e) {
+                console.log('Failed to save DeepSeek settings:', e);
+            }
+        }
+
+        async function testDeepSeekConnection() {
+            const btn = document.getElementById('test-deepseek-btn');
+            const statusEl = document.getElementById('deepseek-connection-status');
+            const apiKey = document.getElementById('settings-deepseek-api-key').value;
+
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+            statusEl.innerHTML = '';
+
+            // Save key first if entered
+            if (apiKey) {
+                await saveDeepSeekSettings();
+            }
+
+            try {
+                // Use stored key if no new one entered
+                const testKey = apiKey || '';
+                if (!testKey) {
+                    // Try to test with the stored key
+                    const keysRes = await fetch(`${BASE_URL}/v1/config/vendor-keys`);
+                    const keysData = await keysRes.json();
+                    if (!keysData.vendor_keys?.deepseek?.configured) {
+                        statusEl.innerHTML = '<span style="color: #ef4444;">✗ No API key configured</span>';
+                        return;
+                    }
+                }
+
+                const res = await fetch(`${BASE_URL}/v1/config/vendor-keys/test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendor: 'deepseek',
+                        api_key: testKey || 'use-stored',
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ ${data.message}</span>`;
+                    loadDeepSeekSettings();
+                } else {
+                    statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
+                }
+            } catch (e) {
+                statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Test Connection';
+            }
+        }
+
+
+        // ==================== MiniMax Settings ====================
+
+        async function loadMiniMaxSettings() {
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/vendor-keys`);
+                const data = await res.json();
+                const statusEl = document.getElementById('minimax-connection-status');
+                const mm = data.vendor_keys?.minimax;
+                if (mm && mm.configured) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ Key configured (${mm.api_key_masked})</span>`;
+                } else {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not configured</span>';
+                }
+            } catch (e) {
+                console.log('Failed to load MiniMax settings:', e);
+            }
+        }
+
+        async function saveMiniMaxSettings() {
+            const apiKey = document.getElementById('settings-minimax-api-key').value;
+            if (!apiKey) return;
+
+            try {
+                await fetch(`${BASE_URL}/v1/config/vendor-keys`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendor: 'minimax',
+                        api_key: apiKey,
+                    })
+                });
+                loadModelsFromAPI();
+            } catch (e) {
+                console.log('Failed to save MiniMax settings:', e);
+            }
+        }
+
+        async function testMiniMaxConnection() {
+            const btn = document.getElementById('test-minimax-btn');
+            const statusEl = document.getElementById('minimax-connection-status');
+            const apiKey = document.getElementById('settings-minimax-api-key').value;
+
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+            statusEl.innerHTML = '';
+
+            if (apiKey) {
+                await saveMiniMaxSettings();
+            }
+
+            try {
+                const testKey = apiKey || '';
+                if (!testKey) {
+                    const keysRes = await fetch(`${BASE_URL}/v1/config/vendor-keys`);
+                    const keysData = await keysRes.json();
+                    if (!keysData.vendor_keys?.minimax?.configured) {
+                        statusEl.innerHTML = '<span style="color: #ef4444;">✗ No API key configured</span>';
+                        return;
+                    }
+                }
+
+                const res = await fetch(`${BASE_URL}/v1/config/vendor-keys/test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        vendor: 'minimax',
+                        api_key: testKey || 'use-stored',
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ ${data.message}</span>`;
+                    loadMiniMaxSettings();
                 } else {
                     statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error || 'Connection failed'}</span>`;
                 }
@@ -6905,7 +7185,7 @@ Be concise and helpful in your responses.`;
 
         // ==================== Right Panel ====================
         let rightPanelOpen = false;
-        let rightPanelWidth = 280;
+        let rightPanelWidth = 420;
 
         function initRightPanel() {
             const toggle = document.getElementById('right-panel-toggle');
@@ -7005,10 +7285,6 @@ Be concise and helpful in your responses.`;
                 section.classList.toggle('active', sectionId === tabName);
             });
 
-            // Load SSH config when switching to terminal tab
-            if (tabName === 'terminal') {
-                loadSSHConfig();
-            }
         }
 
         // Update tasks in right panel
@@ -10581,6 +10857,38 @@ ${content || 'Task completed successfully.'}
                 btn.title = 'Team Mode - multi-agent collaboration';
                 input.placeholder = 'Message Springo... (/ for skills)';
             }
+            // Persist to current session's runtime
+            if (currentConversationId) {
+                const runtime = getConvRuntime(currentConversationId);
+                runtime.teamModeEnabled = teamModeEnabled;
+                runtime.teamCollaborativeMode = teamCollaborativeMode;
+            }
+        }
+
+        /**
+         * Sync the team mode toggle button with the given state.
+         * Called when switching sessions to restore per-session team mode.
+         */
+        function syncTeamModeUI(enabled, collaborative) {
+            teamModeEnabled = enabled;
+            teamCollaborativeMode = collaborative;
+            const btn = document.getElementById('team-toggle');
+            const input = document.getElementById('message-input');
+            if (!btn || !input) return;
+
+            btn.classList.remove('active', 'collab');
+            if (enabled && collaborative) {
+                btn.classList.add('active', 'collab');
+                btn.title = 'Team Mode: Collaborative (click again to disable)';
+                input.placeholder = 'Team Mode (Collaborative): agents communicate and coordinate...';
+            } else if (enabled) {
+                btn.classList.add('active');
+                btn.title = 'Team Mode: Classic (click again for Collaborative)';
+                input.placeholder = 'Team Mode (Classic): agents work in parallel on your request...';
+            } else {
+                btn.title = 'Team Mode - multi-agent collaboration';
+                input.placeholder = 'Message Springo... (/ for skills)';
+            }
         }
 
         async function sendTeamMessage(userMessage) {
@@ -10671,6 +10979,11 @@ ${content || 'Task completed successfully.'}
                 }
 
                 if (!execRes.ok) {
+                    // 4xx errors (team not found, bad request) are non-recoverable — stop immediately
+                    if (execRes.status >= 400 && execRes.status < 500) {
+                        console.error(`Team SSE: server returned ${execRes.status}, team may no longer exist`);
+                        break;
+                    }
                     reconnectCount++;
                     if (reconnectCount > 50) {
                         console.error('Team SSE: max reconnect attempts (50) reached, giving up');
@@ -10719,7 +11032,7 @@ ${content || 'Task completed successfully.'}
                                         updateTeamSplitStatus(data.team_id, 'executing', 'Agents working...');
                                         break;
                                     case 'team_agent_start':
-                                        updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title);
+                                        updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'thinking', data.task_title, '', data.agent_name);
                                         break;
                                     case 'team_agent_progress':
                                         updateTeamSplitAgent(data.team_id, data.agent_id, data.role, 'executing', '', data.preview);
@@ -10756,6 +11069,8 @@ ${content || 'Task completed successfully.'}
                                                 debouncedUpdateAssistantMessage(thisConvId, synthesisText, [], false);
                                             }
                                         }
+                                        // Terminal event — stop reconnection after stream ends
+                                        streamDone = true;
                                         break;
                                     case 'team_error':
                                         updateTeamSplitStatus(data.team_id, 'error', data.error);
@@ -10763,6 +11078,8 @@ ${content || 'Task completed successfully.'}
                                         if (!synthesisText) {
                                             synthesisText = `**Team Error:** ${data.error || 'Unknown error'}`;
                                         }
+                                        // Terminal event — stop reconnection after stream ends
+                                        streamDone = true;
                                         break;
                                     // Collaborative team events
                                     case 'team_agent_message':
@@ -10776,6 +11093,11 @@ ${content || 'Task completed successfully.'}
                                         break;
                                     case 'team_agent_idle':
                                         updateTeamSplitAgent(data.team_id, null, null, 'idle', '', '', data.agent_name);
+                                        if (data.peer_dm_summary) {
+                                            appendTeamMessage(data.team_id, 'system', 'all',
+                                                `[Peer DM] ${data.agent_name}: ${data.peer_dm_summary}`,
+                                                `Peer DM from ${data.agent_name}`);
+                                        }
                                         break;
                                     case 'team_agent_shutdown':
                                         updateTeamSplitAgent(data.team_id, null, null, 'shutdown', '', '', data.agent_name);
@@ -10837,8 +11159,27 @@ ${content || 'Task completed successfully.'}
                     updateAssistantMessage(thisConvId, synthesisText, [], true);
                 }
 
-                updateConversationStatus(thisConvId, 'completed');
-                updateStatus('completed');
+                // If the stream exited without [DONE] (reconnection exhausted or team gone),
+                // treat as error instead of completion
+                if (!streamDone) {
+                    const errMsg = synthesisText || '**Team Error:** Connection lost and could not reconnect';
+                    if (!synthesisText) {
+                        runtime.messages.push({
+                            role: 'assistant',
+                            content: errMsg,
+                            timestamp: Date.now(),
+                            _teamMode: true
+                        });
+                        if (currentConversationId === thisConvId) {
+                            renderMessages();
+                        }
+                    }
+                    updateConversationStatus(thisConvId, 'error');
+                    updateStatus('error', 'connection lost');
+                } else {
+                    updateConversationStatus(thisConvId, 'completed');
+                    updateStatus('completed');
+                }
 
             } catch (e) {
                 // Abort errors are expected when user clicks Stop — don't treat as error
@@ -10870,565 +11211,6 @@ ${content || 'Task completed successfully.'}
         }
 
         // LTM Panel removed - LTM retrieval will be implemented via skill
-
-        // ============ Terminal Panel ============
-
-        let terminalCurrentPid = null;
-        let terminalHistory = [];
-        let terminalHistoryIndex = -1;
-
-        // SSH state (terminal is SSH-only)
-        let currentSSHConnectionId = null;
-
-        function toggleTerminalPanel() {
-            const panel = document.getElementById('right-panel');
-            const btn = document.getElementById('terminal-toggle');
-
-            if (panel.classList.contains('hidden')) {
-                panel.classList.remove('hidden');
-            }
-
-            // Switch to terminal tab
-            switchRightPanelTab('terminal');
-            btn.classList.add('active');
-
-            // Load SSH config hosts
-            loadSSHConfig();
-
-            // Focus the input
-            setTimeout(() => {
-                document.getElementById('terminal-input')?.focus();
-            }, 100);
-        }
-
-        function clearTerminal() {
-            const output = document.getElementById('terminal-panel-output');
-            if (output) output.innerHTML = '';
-        }
-
-        // Terminal theme now follows the main app theme via CSS variables — no separate toggle needed
-        function toggleTerminalTheme() {}
-        function initTerminalTheme() {}
-
-        function appendTerminalOutput(html, className) {
-            const output = document.getElementById('terminal-panel-output');
-            if (!output) return;
-            const div = document.createElement('div');
-            if (className) div.className = className;
-            div.innerHTML = html;
-            output.appendChild(div);
-            output.scrollTop = output.scrollHeight;
-        }
-
-        async function executeTerminalCommand() {
-            const input = document.getElementById('terminal-input');
-            const command = input.value.trim();
-            if (!command) return;
-
-            // Terminal is SSH-only — require connection
-            if (!currentSSHConnectionId) {
-                appendTerminalOutput(`<span class="ansi-red">No SSH connection active. Please connect first.</span>`, 'terminal-error-line');
-                return;
-            }
-            return executeSSHCommand(command);
-        }
-
-        function handleTerminalEvent(eventType, data) {
-            switch (eventType) {
-                case 'start':
-                    terminalCurrentPid = data.pid;
-                    if (data.working_dir) {
-                        const cwd = data.working_dir.replace(/^\/Users\/[^/]+/, '~');
-                        document.getElementById('terminal-cwd').textContent = cwd;
-                    }
-                    break;
-                case 'output':
-                    if (data.type === 'stderr') {
-                        appendTerminalOutput(`<span class="ansi-stderr">${ansiToHtml(data.data)}</span>`);
-                    } else {
-                        appendTerminalOutput(ansiToHtml(data.data));
-                    }
-                    break;
-                case 'exit':
-                    if (data.exit_code !== 0) {
-                        appendTerminalOutput(`<span class="ansi-dim">exit ${data.exit_code}</span>`, 'terminal-exit-line');
-                    }
-                    // Update prompt with current working directory from server
-                    if (data.cwd) {
-                        const cwdEl = document.getElementById('terminal-cwd');
-                        const sshName = cwdEl?.dataset?.sshName || '';
-                        const homeDir = `/home/${sshName.split('@')[0] || 'user'}`;
-                        // Show ~ for home directory, basename for others
-                        let displayPath = data.cwd;
-                        if (data.cwd === homeDir) {
-                            displayPath = '~';
-                        } else if (data.cwd.startsWith(homeDir + '/')) {
-                            displayPath = '~' + data.cwd.slice(homeDir.length);
-                        }
-                        const termPrompt = document.querySelector('.terminal-prompt');
-                        if (termPrompt && sshName) {
-                            termPrompt.textContent = `${sshName}:${displayPath}$`;
-                        }
-                    }
-                    break;
-                case 'error':
-                    appendTerminalOutput(`<span class="ansi-red">${escapeHtml(data.message)}</span>`, 'terminal-error-line');
-                    break;
-            }
-        }
-
-        async function killTerminalProcess() {
-            if (!terminalCurrentPid) return;
-            try {
-                await fetch(BASE_URL + '/v1/terminal/kill/' + terminalCurrentPid, { method: 'POST' });
-            } catch (e) {
-                console.error('Failed to kill process:', e);
-            }
-        }
-
-        // Terminal input keyboard handling
-        document.addEventListener('DOMContentLoaded', function() {
-            // Initialize terminal theme from saved preference
-            initTerminalTheme();
-            
-            const termInput = document.getElementById('terminal-input');
-            if (termInput) {
-                termInput.addEventListener('keydown', function(e) {
-                    if (e.key === 'Enter') {
-                        e.preventDefault();
-                        executeTerminalCommand();
-                    } else if (e.key === 'ArrowUp') {
-                        e.preventDefault();
-                        if (terminalHistoryIndex > 0) {
-                            terminalHistoryIndex--;
-                            this.value = terminalHistory[terminalHistoryIndex];
-                        }
-                    } else if (e.key === 'ArrowDown') {
-                        e.preventDefault();
-                        if (terminalHistoryIndex < terminalHistory.length - 1) {
-                            terminalHistoryIndex++;
-                            this.value = terminalHistory[terminalHistoryIndex];
-                        } else {
-                            terminalHistoryIndex = terminalHistory.length;
-                            this.value = '';
-                        }
-                    }
-                });
-            }
-        });
-
-        // Keyboard shortcut: Cmd+` to toggle terminal
-        document.addEventListener('keydown', function(e) {
-            if ((e.metaKey || e.ctrlKey) && e.key === '`') {
-                e.preventDefault();
-                toggleTerminalPanel();
-            }
-        });
-
-        // ============ Terminal SSH Mode ============
-
-        // SSH config hosts cache
-        let sshConfigHosts = [];
-
-        async function loadSSHConfig() {
-            const select = document.getElementById('ssh-host-select');
-            const container = document.getElementById('ssh-config-hosts');
-            if (!select || !container) return;
-
-            try {
-                const res = await fetch(BASE_URL + '/v1/terminal/ssh/config');
-                if (!res.ok) return;
-                const data = await res.json();
-                sshConfigHosts = data.hosts || [];
-
-                if (sshConfigHosts.length === 0) {
-                    container.style.display = 'none';
-                    return;
-                }
-
-                // Populate dropdown
-                select.innerHTML = '<option value="">-- Select from ~/.ssh/config --</option>';
-                for (const host of sshConfigHosts) {
-                    const label = host.user ? `${host.name} (${host.user}@${host.hostname || host.name})` : host.name;
-                    const opt = document.createElement('option');
-                    opt.value = host.name;
-                    opt.textContent = label;
-                    select.appendChild(opt);
-                }
-                container.style.display = '';
-            } catch (e) {
-                console.warn('Failed to load SSH config:', e);
-            }
-        }
-
-        window.onSSHHostSelect = function(hostName) {
-            if (!hostName) return;
-            const host = sshConfigHosts.find(h => h.name === hostName);
-            if (!host) return;
-
-            // Auto-fill fields
-            const hostInput = document.getElementById('ssh-host');
-            const portInput = document.getElementById('ssh-port');
-            const userInput = document.getElementById('ssh-username');
-            const keyInput = document.getElementById('ssh-key-path');
-
-            if (hostInput) hostInput.value = host.hostname || host.name;
-            if (portInput) portInput.value = host.port || 22;
-            if (userInput) userInput.value = host.user || '';
-            if (keyInput) keyInput.value = host.identity_file || '';
-        };
-
-        async function sshConnect() {
-            const host = document.getElementById('ssh-host')?.value?.trim();
-            const port = parseInt(document.getElementById('ssh-port')?.value) || 22;
-            const username = document.getElementById('ssh-username')?.value?.trim();
-            const password = document.getElementById('ssh-password')?.value;
-            const keyPath = document.getElementById('ssh-key-path')?.value?.trim();
-
-            if (!host || !username) {
-                updateSSHStatus('Host and username are required', 'error');
-                return;
-            }
-
-            updateSSHStatus('Connecting...', 'connecting');
-
-            try {
-                const body = { host, port, username };
-                if (keyPath) body.key_path = keyPath;
-                if (password) body.password = password;
-
-                const res = await fetch(BASE_URL + '/v1/terminal/ssh/connect', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-
-                const data = await res.json();
-
-                if (!res.ok) {
-                    throw new Error(data.detail || 'Connection failed');
-                }
-
-                currentSSHConnectionId = data.connection_id;
-                updateSSHStatus(`Connected: ${data.name}`, 'connected');
-
-                // Update CWD to show SSH host
-                const cwdEl = document.getElementById('terminal-cwd');
-                cwdEl.textContent = data.name;
-                cwdEl.dataset.sshName = data.name;
-
-                // Enable terminal input and update prompt
-                const termInput = document.getElementById('terminal-input');
-                if (termInput) {
-                    termInput.disabled = false;
-                    termInput.placeholder = `Enter command...`;
-                }
-                const termPrompt = document.querySelector('.terminal-prompt');
-                if (termPrompt) termPrompt.textContent = `${data.name}:~$`;
-
-                // Add to connections list
-                refreshSSHConnections();
-
-                // Show success in terminal output
-                appendTerminalOutput(`<span class="ansi-green">Connected to ${escapeHtml(data.name)}</span>`, 'terminal-cmd-line');
-
-                document.getElementById('terminal-input')?.focus();
-
-            } catch (e) {
-                updateSSHStatus(e.message, 'error');
-            }
-        }
-
-        function updateSSHStatus(message, type) {
-            const el = document.getElementById('ssh-status');
-            if (!el) return;
-            el.textContent = message;
-            el.className = 'ssh-status ' + (type || '');
-        }
-
-        async function refreshSSHConnections() {
-            try {
-                const res = await fetch(BASE_URL + '/v1/terminal/ssh/connections');
-                const data = await res.json();
-
-                const container = document.getElementById('ssh-connections');
-                if (!container || !data.connections?.length) return;
-
-                container.innerHTML = data.connections.map(c => `
-                    <div class="ssh-connection-item ${c.connection_id === currentSSHConnectionId ? 'active' : ''}">
-                        <span class="ssh-conn-name" onclick="switchSSHConnection('${c.connection_id}', '${escapeHtml(c.name)}')">${escapeHtml(c.name)}</span>
-                        <button class="ssh-disconnect-btn" onclick="sshDisconnect('${c.connection_id}')" title="Disconnect">&times;</button>
-                    </div>
-                `).join('');
-            } catch (e) {
-                console.error('Failed to refresh SSH connections:', e);
-            }
-        }
-
-        function switchSSHConnection(connectionId, name) {
-            currentSSHConnectionId = connectionId;
-            const cwdEl = document.getElementById('terminal-cwd');
-            cwdEl.textContent = name;
-            cwdEl.dataset.sshName = name;
-            const termInput = document.getElementById('terminal-input');
-            if (termInput) {
-                termInput.disabled = false;
-                termInput.placeholder = `Enter command...`;
-            }
-            const termPrompt = document.querySelector('.terminal-prompt');
-            if (termPrompt) termPrompt.textContent = `${name}:~$`;
-            refreshSSHConnections();
-            appendTerminalOutput(`<span class="ansi-cyan">Switched to ${escapeHtml(name)}</span>`, 'terminal-cmd-line');
-        }
-
-        async function sshDisconnect(connectionId) {
-            try {
-                await fetch(BASE_URL + '/v1/terminal/ssh/disconnect/' + connectionId, { method: 'POST' });
-
-                if (connectionId === currentSSHConnectionId) {
-                    currentSSHConnectionId = null;
-                    updateSSHStatus('Disconnected', '');
-                    document.getElementById('terminal-cwd').textContent = 'Not connected';
-                    const termInput = document.getElementById('terminal-input');
-                    if (termInput) {
-                        termInput.disabled = true;
-                        termInput.placeholder = 'Connect to SSH first...';
-                    }
-                    const termPrompt = document.querySelector('.terminal-prompt');
-                    if (termPrompt) termPrompt.textContent = '>';
-                }
-
-                refreshSSHConnections();
-                appendTerminalOutput(`<span class="ansi-yellow">Disconnected</span>`, 'terminal-cmd-line');
-            } catch (e) {
-                console.error('Disconnect error:', e);
-            }
-        }
-
-        async function executeSSHCommand(command) {
-            if (!currentSSHConnectionId) {
-                appendTerminalOutput(`<span class="ansi-red">No SSH connection active. Please connect first.</span>`, 'terminal-error-line');
-                return;
-            }
-
-            // Add to history
-            terminalHistory.push(command);
-            terminalHistoryIndex = terminalHistory.length;
-
-            // Show command in output
-            const promptPrefix = document.querySelector('.terminal-prompt')?.textContent || '>';
-            appendTerminalOutput(`<span class="ansi-green">${escapeHtml(promptPrefix)}</span> <span class="ansi-cyan">${escapeHtml(command)}</span>`, 'terminal-cmd-line');
-
-            // Clear input
-            document.getElementById('terminal-input').value = '';
-
-            // Show stop button
-            document.getElementById('terminal-run-btn').style.display = 'none';
-            document.getElementById('terminal-stop-btn').style.display = '';
-
-            try {
-                const response = await fetch(BASE_URL + '/v1/terminal/ssh/execute', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        connection_id: currentSSHConnectionId,
-                        command: command,
-                        timeout: 300
-                    })
-                });
-
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let eventType = null;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('event: ')) {
-                            eventType = line.slice(7).trim();
-                        } else if (line.startsWith('data: ')) {
-                            const dataStr = line.slice(6);
-                            if (dataStr === '[DONE]') continue;
-                            try {
-                                const data = JSON.parse(dataStr);
-                                handleTerminalEvent(eventType, data);
-                            } catch (e) {}
-                            eventType = null;
-                        }
-                    }
-                }
-            } catch (e) {
-                appendTerminalOutput(`<span class="ansi-red">SSH Error: ${escapeHtml(e.message)}</span>`, 'terminal-error-line');
-            } finally {
-                document.getElementById('terminal-run-btn').style.display = '';
-                document.getElementById('terminal-stop-btn').style.display = 'none';
-                document.getElementById('terminal-input')?.focus();
-            }
-        }
-
-        // ============ #terminal — Read terminal output into chat ============
-
-        function injectTerminalOutputToChat(userInput) {
-            const thisConvId = currentConversationId || Date.now().toString();
-            if (!currentConversationId) {
-                currentConversationId = thisConvId;
-                convRuntime[thisConvId] = { isStreaming: false, attachments: [], messages: [] };
-            }
-            const runtime = getConvRuntime(thisConvId);
-
-            // Hide welcome
-            const welcome = document.getElementById('welcome');
-            if (welcome) welcome.style.display = 'none';
-
-            // Read terminal panel output
-            const outputEl = document.getElementById('terminal-panel-output');
-            if (!outputEl || !outputEl.textContent.trim()) {
-                runtime.messages.push({ role: 'user', content: userInput, timestamp: Date.now() });
-                runtime.messages.push({
-                    role: 'assistant',
-                    content: 'Terminal panel is empty. Run some commands in the SSH terminal first.',
-                    timestamp: Date.now()
-                });
-                if (currentConversationId === thisConvId) { renderMessages(); scrollToBottom(); }
-                return;
-            }
-
-            // Extract text content from terminal output (preserving line structure)
-            const terminalText = outputEl.innerText.trim();
-
-            // Optional: user can add a question/instruction after #terminal
-            const extra = userInput.trim().substring('#terminal'.length).trim();
-
-            // Build the message that gets sent to AI:
-            // Show #terminal as the visible user message, but append terminal content
-            // so the AI can read and reason about it
-            const messageForAI = extra
-                ? `[SSH Terminal Output]\n\`\`\`\n${terminalText}\n\`\`\`\n\n${extra}`
-                : `[SSH Terminal Output]\n\`\`\`\n${terminalText}\n\`\`\``;
-
-            // Inject into input and let sendMessage() handle the full flow
-            const input = document.getElementById('message-input');
-            input.value = messageForAI;
-            sendMessage();
-        }
-
-        // ============ /terminal — Execute command on remote SSH ============
-
-        async function executeTerminalFromChat(command) {
-            const thisConvId = currentConversationId || Date.now().toString();
-            if (!currentConversationId) {
-                currentConversationId = thisConvId;
-                convRuntime[thisConvId] = { isStreaming: false, attachments: [], messages: [] };
-            }
-            const runtime = getConvRuntime(thisConvId);
-
-            // Hide welcome
-            const welcome = document.getElementById('welcome');
-            if (welcome) welcome.style.display = 'none';
-
-            // Add user message
-            runtime.messages.push({
-                role: 'user',
-                content: `/terminal ${command}`,
-                timestamp: Date.now()
-            });
-            if (currentConversationId === thisConvId) renderMessages();
-
-            // SSH-only: require connection
-            if (!currentSSHConnectionId) {
-                runtime.messages.push({
-                    role: 'assistant',
-                    content: 'No SSH connection active. Please connect to a remote host first via the Terminal panel.',
-                    timestamp: Date.now()
-                });
-                if (currentConversationId === thisConvId) { renderMessages(); scrollToBottom(); }
-                return;
-            }
-
-            const url = BASE_URL + '/v1/terminal/ssh/execute';
-            const body = { connection_id: currentSSHConnectionId, command, timeout: 300 };
-
-            let outputLines = [];
-            let exitCode = null;
-
-            try {
-                const res = await fetch(url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-
-                if (!res.ok) {
-                    const errData = await res.json().catch(() => ({}));
-                    throw new Error(errData.detail || res.statusText);
-                }
-
-                const reader = res.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let eventType = null;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-
-                    buffer += decoder.decode(value, { stream: true });
-                    const lines = buffer.split('\n');
-                    buffer = lines.pop();
-
-                    for (const line of lines) {
-                        if (line.startsWith('event: ')) {
-                            eventType = line.slice(7).trim();
-                        } else if (line.startsWith('data: ')) {
-                            const dataStr = line.slice(6);
-                            if (dataStr === '[DONE]') continue;
-                            try {
-                                const data = JSON.parse(dataStr);
-
-                                // Also push to terminal panel
-                                handleTerminalEvent(eventType, data);
-
-                                if (eventType === 'output') {
-                                    outputLines.push(data.data || '');
-                                } else if (eventType === 'exit') {
-                                    exitCode = data.exit_code;
-                                } else if (eventType === 'error') {
-                                    outputLines.push(`Error: ${data.message}`);
-                                }
-                            } catch (e) {}
-                            eventType = null;
-                        }
-                    }
-                }
-            } catch (e) {
-                outputLines.push(`Error: ${e.message}`);
-            }
-
-            // Build result message
-            const outputText = outputLines.join('').trimEnd();
-            const exitInfo = exitCode !== null ? `\n[exit code: ${exitCode}]` : '';
-            const resultContent = `\`\`\`\n$ ${command}\n${outputText}${exitInfo}\n\`\`\``;
-
-            runtime.messages.push({
-                role: 'assistant',
-                content: resultContent,
-                timestamp: Date.now()
-            });
-            if (currentConversationId === thisConvId) {
-                renderMessages();
-                scrollToBottom();
-            }
-
-            // Also show command in terminal panel
-            appendTerminalOutput(`<span class="ansi-blue">$ ${escapeHtml(command)}</span>`, 'terminal-cmd-line');
-        }
 
         // ============ Team Split Panel ============
 
@@ -11468,8 +11250,46 @@ ${content || 'Task completed successfully.'}
             handle.addEventListener('mousedown', onMouseDown);
         }
 
+        // Drag-to-resize divider between agents section and messages section
+        function initTeamSectionDivider(divider, agentsContainer) {
+            let startY = 0;
+            let startH = 0;
+
+            function onMouseDown(e) {
+                e.preventDefault();
+                startY = e.clientY;
+                startH = agentsContainer.getBoundingClientRect().height;
+                divider.classList.add('dragging');
+                document.addEventListener('mousemove', onMouseMove);
+                document.addEventListener('mouseup', onMouseUp);
+                document.body.style.cursor = 'ns-resize';
+                document.body.style.userSelect = 'none';
+            }
+
+            function onMouseMove(e) {
+                const delta = e.clientY - startY;
+                const newH = Math.max(60, startH + delta);
+                // Use explicit height + remove max-height so user drag takes priority
+                agentsContainer.style.maxHeight = 'none';
+                agentsContainer.style.height = newH + 'px';
+                agentsContainer.style.flex = '0 0 auto';
+            }
+
+            function onMouseUp() {
+                divider.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMouseMove);
+                document.removeEventListener('mouseup', onMouseUp);
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+            }
+
+            divider.addEventListener('mousedown', onMouseDown);
+        }
+
         let activeTeamSplitId = null;
         let teamAbortController = null;
+        // Cache team panel DOM per session so switching sessions preserves state
+        const teamPanelCache = {}; // convId → { teamId, contentClone, abortController }
 
         function initTeamSplitPanel(teamId, agents, userRequest) {
             activeTeamSplitId = teamId;
@@ -11498,6 +11318,12 @@ ${content || 'Task completed successfully.'}
 
             // Create agent cards
             agentsContainer.innerHTML = '';
+            // In classic mode agents fill all space; collaborative mode limits to 40%
+            if (isCollaborative) {
+                agentsContainer.classList.remove('full-height');
+            } else {
+                agentsContainer.classList.add('full-height');
+            }
             if (agents && agents.length > 0) {
                 for (const a of agents) {
                     const cfg = getTeamRoleConfig(a.role);
@@ -11524,14 +11350,24 @@ ${content || 'Task completed successfully.'}
                 }
             }
 
-            // For collaborative mode: add messages container, task board, and message input
+            // For collaborative mode: add divider, messages container, and message input
             if (isCollaborative) {
+                // Draggable divider between agents and messages
+                let divider = document.getElementById('team-split-divider');
+                if (!divider) {
+                    divider = document.createElement('div');
+                    divider.id = 'team-split-divider';
+                    divider.className = 'team-split-divider';
+                    content.appendChild(divider);
+                    initTeamSectionDivider(divider, agentsContainer);
+                }
+
                 // Two-part messages section
                 let messagesSection = document.getElementById('team-split-messages-section');
                 if (!messagesSection) {
                     messagesSection = document.createElement('div');
                     messagesSection.id = 'team-split-messages-section';
-                    messagesSection.style.cssText = 'flex:1;min-height:0;display:flex;flex-direction:column;padding:0 14px;gap:6px;';
+                    messagesSection.className = 'team-split-messages-section';
 
                     // Part 1: Team internal comms (worker↔worker, worker↔lead)
                     const teamHeader = document.createElement('div');
@@ -11565,7 +11401,7 @@ ${content || 'Task completed successfully.'}
                 if (!inputEl) {
                     inputEl = document.createElement('div');
                     inputEl.id = 'team-split-input';
-                    inputEl.style.cssText = 'display:none;padding:8px 14px;align-items:center;gap:6px;flex-shrink:0;';
+                    inputEl.style.cssText = 'display:none;padding:8px 12px;flex-shrink:0;';
                     content.appendChild(inputEl);
                 }
                 initTeamMessageInput(teamId);
@@ -11746,13 +11582,132 @@ ${content || 'Task completed successfully.'}
             if (agentsContainer) agentsContainer.innerHTML = '';
             if (stopBtn) stopBtn.style.display = 'none';
 
+            // Reset agents container styles from drag
+            if (agentsContainer) {
+                agentsContainer.style.maxHeight = '';
+                agentsContainer.style.height = '';
+                agentsContainer.style.flex = '';
+                agentsContainer.classList.remove('full-height');
+            }
+
             // Clean up collaborative mode elements
+            const divider = document.getElementById('team-split-divider');
+            if (divider) divider.remove();
             const messagesSection = document.getElementById('team-split-messages-section');
             if (messagesSection) messagesSection.remove();
             const taskBoard = document.getElementById('team-split-task-board');
             if (taskBoard) taskBoard.remove();
             const inputEl = document.getElementById('team-split-input');
             if (inputEl) inputEl.remove();
+        }
+
+        /**
+         * Save the current team panel DOM into cache for the given convId,
+         * then show the placeholder. Called when switching AWAY from a session.
+         */
+        function saveTeamPanelState(convId) {
+            if (!convId || !activeTeamSplitId) return;
+            const content = document.getElementById('team-split-content');
+            if (!content || content.style.display === 'none') return;
+
+            // Clone the entire content subtree (agents, messages, input)
+            const clone = content.cloneNode(true);
+            teamPanelCache[convId] = {
+                teamId: activeTeamSplitId,
+                contentClone: clone,
+                abortController: teamAbortController,
+            };
+
+            // Null out active team so SSE events are dropped while on another session.
+            // The cached snapshot will be restored when switching back.
+            activeTeamSplitId = null;
+            teamAbortController = null;
+
+            // Hide content, show placeholder, clear dynamic children
+            const placeholder = document.getElementById('team-split-placeholder');
+            if (placeholder) placeholder.style.display = '';
+            content.style.display = 'none';
+            const agentsContainer = document.getElementById('team-split-agents');
+            if (agentsContainer) agentsContainer.innerHTML = '';
+            const messagesSection = document.getElementById('team-split-messages-section');
+            if (messagesSection) messagesSection.remove();
+            const inputEl = document.getElementById('team-split-input');
+            if (inputEl) inputEl.remove();
+        }
+
+        /**
+         * Restore a cached team panel DOM for the given convId.
+         * Returns true if restored, false if no cache exists.
+         */
+        function restoreTeamPanelState(convId) {
+            const cached = teamPanelCache[convId];
+            if (!cached) return false;
+
+            const content = document.getElementById('team-split-content');
+            const placeholder = document.getElementById('team-split-placeholder');
+            const agentsContainer = document.getElementById('team-split-agents');
+            if (!content) return false;
+
+            // Restore the team ID and abort controller
+            activeTeamSplitId = cached.teamId;
+            teamAbortController = cached.abortController;
+
+            // Restore DOM: copy children from the clone back into live content
+            // First, clear existing dynamic elements
+            const oldMsgs = document.getElementById('team-split-messages-section');
+            if (oldMsgs) oldMsgs.remove();
+            const oldInput = document.getElementById('team-split-input');
+            if (oldInput) oldInput.remove();
+
+            // Restore agents
+            const cachedAgents = cached.contentClone.querySelector('#team-split-agents');
+            if (agentsContainer && cachedAgents) {
+                agentsContainer.innerHTML = cachedAgents.innerHTML;
+                // Re-init resize handles on restored cards
+                agentsContainer.querySelectorAll('.team-split-agent-card').forEach(card => {
+                    initTeamCardResize(card);
+                });
+            }
+
+            // Restore header
+            const cachedBadge = cached.contentClone.querySelector('#team-split-status-badge');
+            const liveBadge = document.getElementById('team-split-status-badge');
+            if (cachedBadge && liveBadge) {
+                liveBadge.textContent = cachedBadge.textContent;
+                liveBadge.className = cachedBadge.className;
+            }
+            const cachedPreview = cached.contentClone.querySelector('#team-split-request-preview');
+            const livePreview = document.getElementById('team-split-request-preview');
+            if (cachedPreview && livePreview) {
+                livePreview.textContent = cachedPreview.textContent;
+            }
+
+            // Restore stop button visibility
+            const cachedStop = cached.contentClone.querySelector('#team-stop-btn');
+            const liveStop = document.getElementById('team-stop-btn');
+            if (cachedStop && liveStop) {
+                liveStop.style.display = cachedStop.style.display;
+            }
+
+            // Restore messages section and input (collaborative mode)
+            const cachedMsgsSection = cached.contentClone.querySelector('#team-split-messages-section');
+            if (cachedMsgsSection) {
+                const restored = cachedMsgsSection.cloneNode(true);
+                content.appendChild(restored);
+            }
+            const cachedInput = cached.contentClone.querySelector('#team-split-input');
+            if (cachedInput) {
+                const restoredInput = cachedInput.cloneNode(true);
+                content.appendChild(restoredInput);
+                // Re-bind message input events
+                initTeamMessageInput(cached.teamId);
+            }
+
+            // Show content, hide placeholder
+            if (placeholder) placeholder.style.display = 'none';
+            content.style.display = '';
+
+            return true;
         }
 
         window.stopTeamExecution = async function() {
@@ -11954,21 +11909,33 @@ ${content || 'Task completed successfully.'}
             const inputContainer = document.getElementById('team-split-input');
             if (!inputContainer) return;
 
-            inputContainer.style.display = 'flex';
+            inputContainer.style.display = 'block';
             inputContainer.innerHTML = `
-                <input type="text" id="team-msg-input" placeholder="Send message to team lead..."
-                       style="flex:1;padding:6px 10px;border:1px solid var(--border-color);border-radius:6px;background:var(--input-bg);color:var(--text-color);font-size:13px;">
-                <button id="team-msg-send" style="margin-left:6px;padding:6px 12px;border:none;border-radius:6px;background:var(--accent-color);color:#fff;cursor:pointer;font-size:13px;">Send</button>
+                <div class="team-input-box">
+                    <textarea id="team-msg-input" placeholder="Message team lead..." rows="1"></textarea>
+                    <button id="team-msg-send" class="team-send-btn" title="Send">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M4 10l4-4 4 4"/>
+                        </svg>
+                    </button>
+                </div>
             `;
 
             const input = document.getElementById('team-msg-input');
             const sendBtn = document.getElementById('team-msg-send');
+
+            // Auto-resize textarea
+            input.addEventListener('input', () => {
+                input.style.height = 'auto';
+                input.style.height = Math.min(input.scrollHeight, 80) + 'px';
+            });
 
             function doSend() {
                 const text = input.value.trim();
                 if (!text) return;
                 sendTeamPanelMessage(teamId, text);
                 input.value = '';
+                input.style.height = 'auto';
             }
 
             sendBtn.addEventListener('click', doSend);

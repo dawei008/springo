@@ -348,7 +348,7 @@ class SSEEventBuilder:
         })
 
     @staticmethod
-    def team_agent_start(team_id: str, agent_id: str, role: str, task_title: str) -> str:
+    def team_agent_start(team_id: str, agent_id: str, role: str, task_title: str, agent_name: str = "") -> str:
         """An agent started working on a task"""
         return format_sse_event('team_agent_start', {
             'type': 'team_agent_start',
@@ -356,6 +356,7 @@ class SSEEventBuilder:
             'agent_id': agent_id,
             'role': role,
             'task_title': task_title,
+            'agent_name': agent_name,
             'timestamp': datetime.now().isoformat(),
         })
 
@@ -498,14 +499,17 @@ class SSEEventBuilder:
         })
 
     @staticmethod
-    def team_agent_idle(team_id: str, agent_name: str) -> str:
+    def team_agent_idle(team_id: str, agent_name: str, peer_dm_summary: str = "") -> str:
         """Agent went idle (waiting for input)"""
-        return format_sse_event('team_agent_idle', {
+        data = {
             'type': 'team_agent_idle',
             'team_id': team_id,
             'agent_name': agent_name,
             'timestamp': datetime.now().isoformat(),
-        })
+        }
+        if peer_dm_summary:
+            data['peer_dm_summary'] = peer_dm_summary
+        return format_sse_event('team_agent_idle', data)
 
     @staticmethod
     def team_agent_shutdown(team_id: str, agent_name: str) -> str:

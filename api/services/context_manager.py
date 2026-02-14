@@ -22,11 +22,11 @@ TARGET_AFTER_SUMMARY = 40000
 RECENT_MESSAGES_TO_KEEP = 10
 
 
-def _resolve_limits(model: str = None) -> tuple:
+def _resolve_limits(model: str = None, extended_context: bool = True) -> tuple:
     """Resolve context limits for a model. Returns (max_tokens, summary_threshold, target_after_summary)."""
     if model:
-        from .bedrock import get_model_limits
-        limits = get_model_limits(model)
+        from .model_registry import get_model_limits
+        limits = get_model_limits(model, extended_context=extended_context)
         return limits["max_context_tokens"], limits["compact_threshold"], limits["target_after_summary"]
     return MAX_TOKENS, SUMMARY_THRESHOLD, TARGET_AFTER_SUMMARY
 
@@ -199,9 +199,10 @@ def get_context_stats(
     system_prompt: str = "",
     tools: List[Dict] = None,
     model: str = None,
+    extended_context: bool = True,
 ) -> Dict[str, Any]:
     """获取上下文统计信息"""
-    max_tok, summary_thresh, _ = _resolve_limits(model)
+    max_tok, summary_thresh, _ = _resolve_limits(model, extended_context=extended_context)
     bd = compute_breakdown(messages, system_prompt, tools)
 
     return {
@@ -765,6 +766,7 @@ def get_context_breakdown(
     skills: List[Dict] = None,
     memory_files: List[Dict] = None,
     model: str = None,
+    extended_context: bool = True,
 ) -> Dict[str, Any]:
     """详细分解：每个分类返回 {tokens, count, percent}
 
@@ -871,7 +873,7 @@ def get_context_breakdown(
         tokens = breakdown[cat]["tokens"]
         breakdown[cat]["percent"] = round((tokens / total_tokens) * 100, 1) if total_tokens > 0 else 0
 
-    max_tok, _, _ = _resolve_limits(model)
+    max_tok, _, _ = _resolve_limits(model, extended_context=extended_context)
     return {
         "breakdown": breakdown,
         "total_tokens": total_tokens,
@@ -937,9 +939,9 @@ def count_messages_tokens(messages: List[Dict[str, Any]]) -> int:
     return total
 
 
-def should_summarize(messages: List[Dict[str, Any]], model: str = None) -> bool:
+def should_summarize(messages: List[Dict[str, Any]], model: str = None, extended_context: bool = True) -> bool:
     """检查是否需要摘要"""
-    _, summary_thresh, _ = _resolve_limits(model)
+    _, summary_thresh, _ = _resolve_limits(model, extended_context=extended_context)
     return count_messages_tokens(messages) > summary_thresh
 
 
@@ -1081,6 +1083,19 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                         remaining.append((msg_idx, tool_id, tool_name))
                 tool_uses_needing_result = remaining
 
+    # ── Pass 1b: Build adjacency map — for each user msg, which tool_use IDs
+    # are in the immediately preceding assistant message ──
+    prev_assistant_tool_ids: Dict[int, set] = {}  # user_msg_index -> set of tool_use IDs from prev assistant
+    for i, msg in enumerate(messages):
+        if msg.get("role") == "user" and i > 0:
+            prev_msg = messages[i - 1]
+            if prev_msg.get("role") == "assistant" and isinstance(prev_msg.get("content"), list):
+                ids = set()
+                for block in prev_msg["content"]:
+                    if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
+                        ids.add(block["id"])
+                prev_assistant_tool_ids[i] = ids
+
     # ── Pass 2: Build repaired message list ──
     # Fix orphan tool_uses (add dummy results) AND orphan tool_results (remove them)
 
@@ -1116,20 +1131,32 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                 logger.info(f"Merged {len(pending_orphans)} dummy tool_results into user msg[{i}]")
                 pending_orphans = []
 
-            # Filter out orphan tool_results (no matching tool_use in conversation)
+            # Filter out orphan tool_results:
+            # 1. tool_use_id not in conversation at all → orphan
+            # 2. tool_use_id exists but NOT in the immediately preceding assistant msg → adjacency orphan
+            adjacent_ids = prev_assistant_tool_ids.get(i, set())
             orphan_result_count = 0
+            adjacency_orphan_count = 0
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     ref_id = block.get("tool_use_id")
                     if ref_id and ref_id not in all_tool_use_ids:
                         orphan_result_count += 1
-                        continue  # Drop this orphan tool_result
+                        continue  # Drop: no matching tool_use anywhere
+                    if ref_id and adjacent_ids and ref_id not in adjacent_ids:
+                        adjacency_orphan_count += 1
+                        continue  # Drop: tool_use exists but not in previous message
                 new_content.append(block)
 
             if orphan_result_count:
                 logger.warning(
                     f"Removed {orphan_result_count} orphan tool_result(s) from user msg[{i}] "
                     f"(no matching tool_use in conversation)"
+                )
+            if adjacency_orphan_count:
+                logger.warning(
+                    f"Removed {adjacency_orphan_count} adjacency-orphan tool_result(s) from user msg[{i}] "
+                    f"(tool_use exists but not in previous assistant message)"
                 )
 
             # If all content was removed, add a placeholder

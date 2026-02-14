@@ -31,7 +31,7 @@ from .context_manager import (
 logger = logging.getLogger(__name__)
 
 # Team tool names that require special handling
-TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "task_get", "ask_user"}
+TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "task_get", "ask_user", "spawn_worker", "exit_plan_mode", "team_info"}
 
 
 def _get_api_format(model_name: str) -> str:
@@ -59,6 +59,19 @@ def _with_working_dir(system_prompt: str) -> str:
     return "".join(parts)
 
 
+def _load_team_only_tools() -> List[Dict[str, Any]]:
+    """Load only team coordination tools (no MCP/execution tools).
+
+    Used for the team lead agent, which delegates all execution work
+    to workers and only needs coordination tools.  This is a structural
+    constraint — like Claude Code giving different subagent_types
+    different tool sets.
+    """
+    from mcp_tools.schemas_team import TEAM_TOOL_DEFINITIONS
+    import copy
+    return copy.deepcopy(TEAM_TOOL_DEFINITIONS)
+
+
 async def run_agent_loop(
     team: Team,
     agent: TeamAgent,
@@ -68,6 +81,8 @@ async def run_agent_loop(
     task_manager: TeamTaskManager,
     event_queue: asyncio.Queue,
     initial_message: Optional[AgentMessage] = None,
+    team_tools_only: bool = False,
+    spawn_context: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Run a long-lived agent loop.
 
@@ -84,6 +99,8 @@ async def run_agent_loop(
         task_manager: The team's shared task manager
         event_queue: Queue for SSE events
         initial_message: Optional first message to process (skips first receive)
+        spawn_context: Optional dict with team/event_queue/bedrock for spawn_worker
+                       (only provided to the team lead)
     """
     agent_name = agent.name or agent.agent_id
     model_name = agent.role.model
@@ -99,8 +116,12 @@ async def run_agent_loop(
         system_base + _build_team_context_prompt(agent_name, team)
     )
 
-    # Load tools (standard + team tools)
-    tools = await _load_team_tools()
+    # Load tools — team lead gets only team tools (structural scoping),
+    # workers get all tools (MCP + team tools).
+    if team_tools_only:
+        tools = _load_team_only_tools()
+    else:
+        tools = await _load_team_tools()
 
     # Conversation history
     messages: List[Dict[str, Any]] = []
@@ -156,20 +177,26 @@ async def run_agent_loop(
             agent.status = "thinking"
             message_count += 1
 
-            # Handle shutdown request
+            # Handle shutdown request — inject as message so the model can approve/reject
             if current_message.type == "shutdown_request":
-                logger.info(f"[AgentLoop:{agent_name}] Received shutdown request")
-                await message_bus.notify_shutdown(agent_name)
-                agent.status = "complete"
-                agent.completed_at = datetime.now().isoformat()
-                return
-
-            # Inject message into conversation context
-            msg_content = (
-                f"[Message from {current_message.sender}]\n"
-                f"{current_message.content}"
-            )
-            messages.append({"role": "user", "content": msg_content})
+                logger.info(f"[AgentLoop:{agent_name}] Received shutdown request from {current_message.sender}")
+                msg_content = (
+                    f"[Shutdown Request from {current_message.sender}]\n"
+                    f"{current_message.content}\n\n"
+                    f"You have received a shutdown request (request_id: {current_message.message_id}). "
+                    f"To approve, call send_message with type='shutdown_response', "
+                    f"approve=true, request_id='{current_message.message_id}', "
+                    f"and content describing your status. "
+                    f"To reject, set approve=false with a reason."
+                )
+                messages.append({"role": "user", "content": msg_content})
+            else:
+                # Inject message into conversation context
+                msg_content = (
+                    f"[Message from {current_message.sender}]\n"
+                    f"{current_message.content}"
+                )
+                messages.append({"role": "user", "content": msg_content})
 
             # Run tool loop — model responds, potentially calls tools, repeats
             full_text, tokens, messages = await _run_tool_loop(
@@ -186,6 +213,7 @@ async def run_agent_loop(
                 system_prompt=system_prompt,
                 messages=messages,
                 tools=tools,
+                spawn_context=spawn_context,
             )
 
             # Accumulate tokens
@@ -195,6 +223,14 @@ async def run_agent_loop(
             # Store findings
             if full_text:
                 agent.findings = full_text
+
+            # Check if agent approved shutdown during this tool loop
+            if mailbox.shutdown_approved:
+                logger.info(f"[AgentLoop:{agent_name}] Shutdown approved — terminating")
+                await message_bus.notify_shutdown(agent_name)
+                agent.status = "complete"
+                agent.completed_at = datetime.now().isoformat()
+                return
 
             # Context management: summarize if messages grow too large
             if len(messages) > 30:
@@ -239,6 +275,7 @@ async def _run_tool_loop(
     system_prompt: str,
     messages: List[Dict[str, Any]],
     tools: List[Dict[str, Any]],
+    spawn_context: Optional[Dict[str, Any]] = None,
 ) -> tuple:
     """Run the model tool loop for a single message turn.
 
@@ -251,6 +288,8 @@ async def _run_tool_loop(
     _FULL_TEXT_MAX = 100_000  # Cap findings accumulation at ~100K chars
     tokens = {"input_tokens": 0, "output_tokens": 0}
     working_dir = get_working_dir() or None
+    consecutive_poll_only = 0  # Anti-polling: track consecutive task_list-only iterations
+    _POLL_TOOLS = {"task_list"}  # Only task_list is polling; task_get is reviewing details
 
     agent.status = "executing"
 
@@ -310,25 +349,35 @@ async def _run_tool_loop(
 
             if evt_type == "content_block_start":
                 block = data.get("content_block", {})
+                block_index = data.get("index", len(content_blocks))
                 if block.get("type") == "tool_use":
                     entry = {
                         "type": "tool_use",
                         "id": block.get("id"),
                         "name": block.get("name"),
                         "input": {},
+                        "_block_index": block_index,
                     }
                     content_blocks.append(entry)
                     tool_uses.append(entry)
                 elif block.get("type") == "text":
-                    content_blocks.append({"type": "text", "text": ""})
+                    content_blocks.append({"type": "text", "text": "", "_block_index": block_index})
 
             elif evt_type == "content_block_delta":
                 delta = data.get("delta", {})
                 if delta.get("type") == "input_json_delta" and tool_uses:
                     partial = delta.get("partial_json", "")
                     if partial:
-                        tool_uses[-1]["_partial_input"] = (
-                            tool_uses[-1].get("_partial_input", "") + partial
+                        # Route delta to the correct tool_use by matching block index
+                        delta_index = data.get("index")
+                        target = tool_uses[-1]  # fallback to last
+                        if delta_index is not None:
+                            for tu in tool_uses:
+                                if tu.get("_block_index") == delta_index:
+                                    target = tu
+                                    break
+                        target["_partial_input"] = (
+                            target.get("_partial_input", "") + partial
                         )
                 elif delta.get("type") == "text_delta":
                     text = delta.get("text", "")
@@ -363,10 +412,13 @@ async def _run_tool_loop(
 
         # Parse accumulated tool inputs
         for tool in tool_uses:
+            tool.pop("_block_index", None)  # clean up internal tracking field
             if "_partial_input" in tool:
+                raw = tool.pop("_partial_input")
                 try:
-                    tool["input"] = json.loads(tool.pop("_partial_input"))
-                except Exception:
+                    tool["input"] = json.loads(raw)
+                except Exception as e:
+                    logger.warning(f"[AgentLoop:{agent_name}] Failed to parse tool input JSON for {tool.get('name')}: {e}, raw={raw[:200]}")
                     tool["input"] = {}
 
         # Execute tools
@@ -391,6 +443,8 @@ async def _run_tool_loop(
                 result = await _execute_team_tool(
                     tool_name, tool_input, team.team_id, agent_name,
                     message_bus, task_manager,
+                    spawn_context=spawn_context,
+                    team=team,
                 )
                 is_error = "error" in result
             else:
@@ -430,6 +484,25 @@ async def _run_tool_loop(
                 "is_error": is_error,
             })
 
+        # Anti-polling: detect consecutive iterations where the model only
+        # calls read-only status tools (task_list, task_get).  This is the
+        # team lead stuck in a polling loop waiting for workers.  After 2
+        # consecutive poll-only iterations, break so it goes idle and waits
+        # for worker messages — matching Claude Code's idle-between-turns
+        # pattern.
+        tool_names_this_iter = {t["name"] for t in tool_uses}
+        if tool_names_this_iter and tool_names_this_iter <= _POLL_TOOLS:
+            consecutive_poll_only += 1
+            if consecutive_poll_only >= 3:
+                logger.info(
+                    f"[AgentLoop:{agent_name}] Detected polling loop "
+                    f"({consecutive_poll_only} consecutive status-only iterations), "
+                    f"yielding control"
+                )
+                break
+        else:
+            consecutive_poll_only = 0
+
         # Append assistant + tool results for next iteration
         assistant_content = []
         for block in content_blocks:
@@ -458,6 +531,8 @@ async def _execute_team_tool(
     agent_name: str,
     message_bus: TeamMessageBus,
     task_manager: TeamTaskManager,
+    spawn_context: Optional[Dict[str, Any]] = None,
+    team: Optional[Team] = None,
 ) -> Dict[str, Any]:
     """Execute a team communication tool with injected context.
 
@@ -471,8 +546,16 @@ async def _execute_team_tool(
         summary = tool_input.get("summary", content[:50] if content else "")
 
         if not content:
+            logger.warning(
+                f"[{agent_name}] send_message missing content, "
+                f"input keys={list(tool_input.keys())}, input={str(tool_input)[:200]}"
+            )
             return {"error": "content is required"}
         if msg_type == "message" and not recipient:
+            logger.warning(
+                f"[{agent_name}] send_message missing recipient, "
+                f"type={msg_type}, input keys={list(tool_input.keys())}, input={str(tool_input)[:200]}"
+            )
             return {"error": "recipient is required for direct messages"}
 
         msg = AgentMessage(
@@ -488,6 +571,40 @@ async def _execute_team_tool(
         elif msg_type == "shutdown_request":
             msg.type = "shutdown_request"
             await message_bus.send_message(msg)
+        elif msg_type == "shutdown_response":
+            approve = tool_input.get("approve", False)
+            request_id = tool_input.get("request_id", "")
+            if approve:
+                # Mark this agent's mailbox for shutdown after tool loop returns
+                agent_mailbox = message_bus.get_mailbox(agent_name)
+                if agent_mailbox:
+                    agent_mailbox.shutdown_approved = True
+            # Deliver the response to the requester
+            response_content = (
+                f"[Shutdown {'Approved' if approve else 'Rejected'}] "
+                f"{content}"
+            )
+            response_msg = AgentMessage(
+                type="message",
+                sender=agent_name,
+                recipient=recipient,
+                content=response_content,
+                summary=f"Shutdown {'approved' if approve else 'rejected'}",
+            )
+            await message_bus.send_message(response_msg)
+        elif msg_type == "plan_approval_response":
+            approve = tool_input.get("approve", False)
+            if not recipient:
+                return {"error": "recipient is required for plan_approval_response"}
+            prefix = "[Plan Approved]" if approve else "[Plan Rejected]"
+            approval_msg = AgentMessage(
+                type="message",
+                sender=agent_name,
+                recipient=recipient,
+                content=f"{prefix} {content}",
+                summary=f"Plan {'approved' if approve else 'rejected'}",
+            )
+            await message_bus.send_message(approval_msg)
         else:
             await message_bus.send_message(msg)
 
@@ -500,12 +617,14 @@ async def _execute_team_tool(
         }
 
     elif tool_name == "task_create":
-        subject = tool_input.get("subject", "")
-        description = tool_input.get("description", "")
-        active_form = tool_input.get("active_form", "")
+        # Accept 'title' as fallback for 'subject' (some models use different field names)
+        subject = tool_input.get("subject", "") or tool_input.get("title", "") or tool_input.get("name", "")
+        description = tool_input.get("description", "") or tool_input.get("content", "")
+        active_form = tool_input.get("active_form", "") or tool_input.get("activeForm", "")
 
         if not subject:
-            return {"error": "subject is required"}
+            logger.warning(f"task_create missing subject, received keys: {list(tool_input.keys())}, input: {str(tool_input)[:200]}")
+            return {"error": f"subject is required. Received fields: {list(tool_input.keys())}. Use 'subject' for the task title."}
 
         task = await task_manager.create_task_async(
             subject=subject,
@@ -523,9 +642,24 @@ async def _execute_team_tool(
         if not task_id:
             return {"error": "task_id is required"}
 
+        # Guard: only the task owner can mark a task as "completed".
+        # The team lead should not mark other agents' in-progress tasks
+        # as completed — only the worker doing the work knows when it's done.
+        new_status = tool_input.get("status")
+        if new_status == "completed":
+            existing = task_manager.get_task(task_id)
+            if existing and existing.owner and existing.owner != agent_name:
+                return {
+                    "error": (
+                        f"Only the task owner ('{existing.owner}') can mark task "
+                        f"#{task_id} as completed. If the task is no longer needed, "
+                        f"use status='error' or send a message to the owner."
+                    ),
+                }
+
         task = await task_manager.update_task(
             task_id=task_id,
-            status=tool_input.get("status"),
+            status=new_status,
             subject=tool_input.get("subject"),
             description=tool_input.get("description"),
             active_form=tool_input.get("active_form"),
@@ -544,7 +678,7 @@ async def _execute_team_tool(
 
     elif tool_name == "task_list":
         tasks = task_manager.list_tasks()
-        return {
+        result = {
             "tasks": [
                 {
                     "task_id": t.task_id,
@@ -559,6 +693,15 @@ async def _execute_team_tool(
                 for t in tasks
             ],
         }
+        # Hint the team lead to stop polling and wait for worker messages
+        in_progress = [t for t in tasks if t.status == "in_progress"]
+        if in_progress and agent_name == "team-lead":
+            result["note"] = (
+                f"{len(in_progress)} task(s) still in progress. "
+                "Workers will send you a message when they finish. "
+                "Stop and wait for incoming messages instead of polling task_list."
+            )
+        return result
 
     elif tool_name == "task_get":
         task_id = tool_input.get("task_id", "")
@@ -670,70 +813,258 @@ async def _execute_team_tool(
                 ),
             }
 
+    elif tool_name == "spawn_worker":
+        if not spawn_context:
+            return {"error": "spawn_worker is only available to the team lead"}
+
+        worker_name = tool_input.get("name", "")
+        task_ids = tool_input.get("task_ids", [])
+
+        if not worker_name:
+            return {"error": "name is required"}
+        if not task_ids:
+            return {"error": "task_ids is required (provide at least one task ID)"}
+        if worker_name == "team-lead":
+            return {"error": "Cannot use 'team-lead' as worker name"}
+
+        # Check if worker name is already taken
+        team = spawn_context["team"]
+        for existing_agent in team.agents:
+            if existing_agent.name == worker_name:
+                return {"error": f"Worker name '{worker_name}' is already in use"}
+
+        # Validate all task IDs exist
+        for tid in task_ids:
+            task = task_manager.get_task(tid)
+            if not task:
+                return {"error": f"Task '{tid}' not found"}
+
+        # Gather task descriptions for the initial message
+        # (all task_ids validated above, so get_task won't return None)
+        task_descriptions = []
+        task_titles = []
+        for tid in task_ids:
+            t = task_manager.get_task(tid)
+            if t:  # guaranteed by validation above
+                task_descriptions.append(
+                    f"**Task #{t.task_id}**: {t.title}\n{t.description}"
+                )
+                task_titles.append(t.title)
+
+        # Build initial message with all assigned tasks
+        initial_content = (
+            f"You are assigned the following task(s):\n\n"
+            + "\n\n".join(task_descriptions)
+            + "\n\nPlease complete "
+            + ("this task" if len(task_ids) == 1 else "these tasks")
+            + ". When done, call task_update with status='completed' for each task, "
+            "then send a brief summary to team-lead with send_message.\n"
+            "If you need to ask the user anything, use ask_user."
+        )
+
+        # Create worker agent and role
+        plan_mode = tool_input.get("plan_mode", False)
+        from ..models.teams import TeamAgent as _TeamAgent, AgentRole as _AgentRole
+
+        base_system_prompt = (
+            "You are a worker agent. Complete the task(s) assigned to you thoroughly.\n"
+            "When done:\n"
+            "1. Use task_update to mark each task as completed.\n"
+            "2. Use send_message to send a brief summary of your findings to team-lead.\n"
+            "If you need clarification from the user, use ask_user.\n"
+            "Do NOT use emojis in any output or messages."
+        )
+        if plan_mode:
+            base_system_prompt = (
+                "You are a worker agent in PLAN MODE.\n\n"
+                "Before implementing anything, you MUST:\n"
+                "1. Analyze the task requirements thoroughly\n"
+                "2. Create a detailed implementation plan\n"
+                "3. Call exit_plan_mode with your plan\n"
+                "4. Wait for the team lead's approval (you will receive a message "
+                "with [Plan Approved] or [Plan Rejected])\n"
+                "5. Only after receiving [Plan Approved], proceed with implementation\n\n"
+                "If your plan is rejected, revise based on the feedback and resubmit.\n\n"
+                "After implementation is complete:\n"
+                "1. Use task_update to mark each task as completed.\n"
+                "2. Use send_message to send a brief summary of your findings to team-lead.\n"
+                "If you need clarification from the user, use ask_user.\n"
+                "Do NOT use emojis in any output or messages."
+            )
+
+        worker_role = _AgentRole(
+            name="worker",
+            system_prompt=base_system_prompt,
+            model=team.agents[0].role.model,  # Use team lead's model
+            purpose=", ".join(task_titles),
+        )
+        worker_agent = _TeamAgent(
+            name=worker_name,
+            role=worker_role,
+        )
+
+        # Register mailbox
+        bus = spawn_context["bus"]
+        worker_mailbox = bus.register_agent(worker_name)
+
+        # Claim the tasks
+        for tid in task_ids:
+            await task_manager.update_task(tid, status="in_progress", owner=worker_name)
+
+        # Build initial message
+        worker_initial = AgentMessage(
+            type="message",
+            sender="team-lead",
+            recipient=worker_name,
+            content=initial_content,
+            summary=f"Task assignment: {task_descriptions[0][:40]}",
+        )
+
+        # Put spawn sentinel on event queue for the main loop to handle
+        event_queue = spawn_context["event_queue"]
+        await event_queue.put({
+            "__spawn_worker__": True,
+            "worker_agent": worker_agent,
+            "worker_mailbox": worker_mailbox,
+            "initial_message": worker_initial,
+        })
+
+        return {
+            "status": "spawned",
+            "worker_name": worker_name,
+            "task_ids": task_ids,
+            "message": (
+                f"Worker '{worker_name}' is being spawned and will start working on "
+                f"{len(task_ids)} task(s) immediately. The worker will message you "
+                "when tasks are completed."
+            ),
+        }
+
+    elif tool_name == "exit_plan_mode":
+        plan = tool_input.get("plan", "")
+        if not plan:
+            return {"error": "plan is required"}
+
+        # Send plan to team-lead for approval
+        plan_msg = AgentMessage(
+            type="message",
+            sender=agent_name,
+            recipient="team-lead",
+            content=(
+                f"[Plan Approval Request]\n"
+                f"Worker '{agent_name}' has submitted an implementation plan for review:\n\n"
+                f"{plan}\n\n"
+                f"To approve, call send_message with type='plan_approval_response', "
+                f"recipient='{agent_name}', approve=true, and content='Approved'.\n"
+                f"To reject, set approve=false with feedback in content."
+            ),
+            summary=f"Plan from {agent_name}",
+        )
+        await message_bus.send_message(plan_msg)
+
+        return {
+            "status": "plan_submitted",
+            "message": (
+                "Your plan has been sent to the team lead for review. "
+                "Wait for their approval before proceeding with implementation. "
+                "You will receive a message with [Plan Approved] or [Plan Rejected]."
+            ),
+        }
+
+    elif tool_name == "team_info":
+        if not team:
+            return {"error": "team context not available"}
+
+        members = []
+        for a in team.agents:
+            members.append({
+                "name": a.name or a.agent_id,
+                "agent_id": a.agent_id,
+                "role": a.role.name if a.role else "unknown",
+                "status": a.status or "unknown",
+                "purpose": a.role.purpose if a.role and a.role.purpose else "",
+            })
+
+        return {
+            "team_id": team.team_id,
+            "status": team.status,
+            "user_request": team.user_request,
+            "members": members,
+        }
+
     return {"error": f"Unknown team tool: {tool_name}"}
 
 
 async def _load_team_tools() -> List[Dict[str, Any]]:
-    """Load standard MCP tools plus team communication tools."""
+    """Load standard MCP tools plus team communication tools (for workers).
+
+    Workers get all MCP tools plus team tools, but NOT spawn_worker
+    (only the team lead can spawn workers).  Also deduplicates by tool name
+    to avoid Bedrock's "Tool names must be unique" validation error.
+    """
     tools = []
+    seen_names: set = set()
     try:
         mcp_mgr = await get_mcp_manager()
         tool_defs = mcp_mgr.get_tool_definitions()
         if tool_defs:
-            tools = [t.model_dump() if hasattr(t, "model_dump") else t for t in tool_defs]
+            for t in tool_defs:
+                td = t.model_dump() if hasattr(t, "model_dump") else t
+                name = td.get("name", "")
+                if name and name not in seen_names:
+                    tools.append(td)
+                    seen_names.add(name)
     except Exception as e:
         logger.warning(f"Failed to load tools: {e}")
 
-    # Add team tool schemas
+    # Add team tool schemas (excluding spawn_worker — that's team-lead only)
     from mcp_tools.schemas_team import TEAM_TOOL_DEFINITIONS
     import copy
-    tools.extend(copy.deepcopy(TEAM_TOOL_DEFINITIONS))
+    for td in TEAM_TOOL_DEFINITIONS:
+        if td["name"] == "spawn_worker":
+            continue  # Only available to team lead via _load_team_only_tools
+        if td["name"] not in seen_names:
+            tools.append(copy.deepcopy(td))
+            seen_names.add(td["name"])
 
     return tools
 
 
 def _build_team_context_prompt(agent_name: str, team: Team) -> str:
-    """Build additional system prompt with team context information."""
+    """Build additional system prompt with team context information.
+
+    Uses descriptive style (like Claude Code's team prompts) rather than
+    prescriptive tool restrictions.  Behavior is guided by role description
+    and structural tool scoping, not "NEVER use X" rules.
+    """
     other_agents = [a for a in team.agents if a.name != agent_name]
     agent_list = ", ".join(a.name or a.agent_id for a in other_agents) if other_agents else "none yet"
     is_lead = agent_name == "team-lead"
 
     base = (
         f"\n\n## Team Context\n"
-        f"You are agent '{agent_name}' in team '{team.team_id}'.\n"
+        f"You are '{agent_name}' in team '{team.team_id}'.\n"
         f"Team request: {team.user_request}\n"
         f"Other agents: {agent_list}\n\n"
-        f"You have access to team tools:\n"
-        f"- send_message: Send DMs to teammates or broadcast to all\n"
-        f"- task_create: Create tasks on the shared task board\n"
-        f"- task_update: Update task status, assign owners, set dependencies\n"
-        f"- task_list: List all tasks\n"
-        f"- task_get: Get full task details\n"
-        f"- ask_user: Ask the user a question for clarification\n\n"
     )
 
     if is_lead:
         base += (
-            f"As team lead, you can ask the user questions directly using ask_user.\n\n"
-            f"IMPORTANT — Worker clarification relay flow:\n"
-            f"When a worker sends you a message requesting user input (e.g. 'Needs user input:'), "
-            f"you MUST follow these steps exactly:\n"
-            f"  1. Call ask_user with the worker's question (relay it to the user)\n"
-            f"  2. Wait for the user's reply (it arrives as your next message)\n"
-            f"  3. Forward the user's answer to that worker using send_message\n"
-            f"Do NOT answer on behalf of the user. Always relay and forward.\n\n"
-            f"Coordinate with your team using these tools. When you finish processing a message, "
-            f"provide your response and then wait for the next message.\n"
+            "## Worker Clarification Relay\n"
+            "When a worker sends you a message requesting user input:\n"
+            "1. Call ask_user with the worker's question\n"
+            "2. Wait for the user's reply (arrives as your next message)\n"
+            "3. Forward the user's answer to that worker using send_message\n"
+            "Always relay — do not answer on behalf of the user.\n"
         )
     else:
         base += (
-            f"IMPORTANT: You cannot ask the user directly. If you need user input or clarification, "
-            f"call ask_user — it will route your question to the team lead, "
-            f"who will ask the user and forward the answer back to you.\n"
-            f"After calling ask_user, STOP and WAIT for the team lead's reply. "
-            f"Do NOT proceed with assumptions — wait for the actual answer.\n\n"
-            f"Focus on completing your assigned tasks. When you finish processing a message, "
-            f"provide your response and then wait for the next message.\n"
+            "If you need user input or clarification, call ask_user — it routes "
+            "through the team lead who relays the answer back. After calling "
+            "ask_user, wait for the reply before proceeding.\n\n"
+            "When you finish your task:\n"
+            "1. Mark it completed with task_update\n"
+            "2. Send a brief summary to team-lead with send_message\n"
         )
 
     return base

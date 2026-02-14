@@ -17,6 +17,7 @@ from ..config import settings
 from ..models.requests import MessageRequest, MessageAutoRequest
 from ..models.responses import MessageResponse, ErrorResponse, Usage
 from ..services.bedrock import get_bedrock_service, BedrockService, get_model_limits
+from ..services.vendor_router import get_vendor_router, VendorRouter
 from ..services.model_registry import MODEL_REGISTRY
 from ..services.mcp_manager import get_mcp_manager, MCPManager
 from ..services.context_manager import (
@@ -38,15 +39,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# Dependency: Get Bedrock service
+# Dependency: Get Bedrock service (kept for backward compat)
 async def get_bedrock() -> BedrockService:
     return get_bedrock_service()
+
+# Dependency: Get VendorRouter (routes to correct backend)
+async def get_router() -> VendorRouter:
+    return get_vendor_router()
 
 
 @router.post("/messages")
 async def messages_api(
     request: Request,
-    bedrock: BedrockService = Depends(get_bedrock),
+    bedrock: VendorRouter = Depends(get_router),
     x_session_id: Optional[str] = Header(default=None)
 ):
     """
@@ -148,7 +153,7 @@ async def messages_api(
 @router.post("/messages-auto")
 async def messages_auto_api(
     request: Request,
-    bedrock: BedrockService = Depends(get_bedrock),
+    bedrock: VendorRouter = Depends(get_router),
     x_session_id: Optional[str] = Header(default=None)
 ):
     """
@@ -308,9 +313,12 @@ async def messages_auto_api(
 
                     # Step 2: Auto-compact if approaching threshold (structured summary)
                     current_model = body.get("model", "")
-                    model_limits = get_model_limits(current_model)
+                    _ext_ctx = body.get("extended_context")
+                    if _ext_ctx is None:
+                        _ext_ctx = True
+                    model_limits = get_model_limits(current_model, extended_context=_ext_ctx)
                     current_tokens = count_messages_tokens(messages)
-                    if should_summarize(messages, model=current_model):
+                    if should_summarize(messages, model=current_model, extended_context=_ext_ctx):
                         logger.info(f"[Context] Approaching limit ({current_tokens:,}/{model_limits['max_context_tokens']:,} tokens), compacting...")
                         yield SSEEventBuilder.context_compact('approaching_limit', 'haiku', current_tokens)
                         # Send heartbeat before compaction (compaction calls Bedrock and can take 30+ seconds)
@@ -383,51 +391,74 @@ async def messages_auto_api(
                     tool_uses = []
                     _current_block_idx = -1
 
-                    # Stream response
-                    async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
-                        yield event
+                    # Stream response (with safety net for token limit errors)
+                    _prompt_too_long = False
+                    try:
+                        async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
+                            yield event
 
-                        # Parse event to track content and tool uses
-                        if "data: " in event:
+                            # Parse event to track content and tool uses
+                            if "data: " in event:
+                                try:
+                                    data_str = event.split("data: ", 1)[1].strip()
+                                    if data_str and data_str != "[DONE]":
+                                        data = json.loads(data_str)
+
+                                        if data.get("type") == "content_block_start":
+                                            block = data.get("content_block", {})
+                                            _current_block_idx = data.get("index", len(content_blocks))
+                                            if block.get("type") == "tool_use":
+                                                entry = {
+                                                    "type": "tool_use",
+                                                    "id": block.get("id"),
+                                                    "name": block.get("name"),
+                                                    "input": {},
+                                                }
+                                                content_blocks.append(entry)
+                                                tool_uses.append(entry)
+                                            elif block.get("type") == "text":
+                                                content_blocks.append({
+                                                    "type": "text",
+                                                    "text": "",
+                                                })
+
+                                        elif data.get("type") == "content_block_delta":
+                                            delta = data.get("delta", {})
+                                            if delta.get("type") == "input_json_delta" and tool_uses:
+                                                partial = delta.get("partial_json", "")
+                                                if partial:
+                                                    tool_uses[-1]["_partial_input"] = tool_uses[-1].get("_partial_input", "") + partial
+                                            elif delta.get("type") == "text_delta":
+                                                text = delta.get("text", "")
+                                                if text and content_blocks and content_blocks[-1].get("type") == "text":
+                                                    content_blocks[-1]["text"] += text
+
+                                        elif data.get("type") == "message_delta":
+                                            delta = data.get("delta", {})
+                                            stop_reason = delta.get("stop_reason")
+                                except:
+                                    pass
+                    except Exception as _stream_err:
+                        _err_msg = str(_stream_err)
+                        if "prompt is too long" in _err_msg or "too many tokens" in _err_msg.lower():
+                            logger.warning(f"[Context] Bedrock rejected: {_err_msg}. Forcing emergency compaction...")
+                            yield SSEEventBuilder.context_compact('emergency', 'haiku', count_messages_tokens(messages))
+                            messages = truncate_tool_results(messages, max_size=2048)
                             try:
-                                data_str = event.split("data: ", 1)[1].strip()
-                                if data_str and data_str != "[DONE]":
-                                    data = json.loads(data_str)
+                                result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)
+                                if result.get("success") and not result.get("skipped"):
+                                    messages = result["messages"]
+                                    logger.info(f"[Context] Emergency compaction: {len(messages)} msgs, {count_messages_tokens(messages):,} tokens")
+                                    yield SSEEventBuilder.context_compact_done(0, len(messages), count_messages_tokens(messages))
+                            except Exception as _compact_err:
+                                logger.error(f"[Context] Emergency compaction failed: {_compact_err}")
+                                yield SSEEventBuilder.context_compact_failed(str(_compact_err))
+                            _prompt_too_long = True
+                        else:
+                            raise  # Re-raise non-token-limit errors
 
-                                    if data.get("type") == "content_block_start":
-                                        block = data.get("content_block", {})
-                                        _current_block_idx = data.get("index", len(content_blocks))
-                                        if block.get("type") == "tool_use":
-                                            entry = {
-                                                "type": "tool_use",
-                                                "id": block.get("id"),
-                                                "name": block.get("name"),
-                                                "input": {},
-                                            }
-                                            content_blocks.append(entry)
-                                            tool_uses.append(entry)
-                                        elif block.get("type") == "text":
-                                            content_blocks.append({
-                                                "type": "text",
-                                                "text": "",
-                                            })
-
-                                    elif data.get("type") == "content_block_delta":
-                                        delta = data.get("delta", {})
-                                        if delta.get("type") == "input_json_delta" and tool_uses:
-                                            partial = delta.get("partial_json", "")
-                                            if partial:
-                                                tool_uses[-1]["_partial_input"] = tool_uses[-1].get("_partial_input", "") + partial
-                                        elif delta.get("type") == "text_delta":
-                                            text = delta.get("text", "")
-                                            if text and content_blocks and content_blocks[-1].get("type") == "text":
-                                                content_blocks[-1]["text"] += text
-
-                                    elif data.get("type") == "message_delta":
-                                        delta = data.get("delta", {})
-                                        stop_reason = delta.get("stop_reason")
-                            except:
-                                pass
+                    if _prompt_too_long:
+                        continue  # Retry the iteration with compacted messages
 
                     # Parse accumulated tool inputs
                     for tool in tool_uses:
@@ -652,8 +683,11 @@ async def messages_auto_api(
                 messages = prepare_messages_for_api(messages, keep_recent=3)
                 # Step 2: Auto-compact if approaching threshold (structured summary)
                 ns_model = body.get("model", "")
-                ns_limits = get_model_limits(ns_model)
-                if should_summarize(messages, model=ns_model):
+                _ns_ext_ctx = body.get("extended_context")
+                if _ns_ext_ctx is None:
+                    _ns_ext_ctx = True
+                ns_limits = get_model_limits(ns_model, extended_context=_ns_ext_ctx)
+                if should_summarize(messages, model=ns_model, extended_context=_ns_ext_ctx):
                     logger.info(f"[Context] Non-stream compact: {count_messages_tokens(messages):,}/{ns_limits['max_context_tokens']:,} tokens")
                     try:
                         original_count = len(messages)
