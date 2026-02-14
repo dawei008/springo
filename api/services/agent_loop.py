@@ -8,11 +8,13 @@ Each agent runs in a loop:
 The loop reuses the streaming tool execution pattern from agent_team_manager
 but adds message handling, team tool interception, and context management.
 """
+from __future__ import annotations
+
 import json
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
 from ..models.teams import Team, TeamAgent
 from ..utils.streaming import SSEEventBuilder
@@ -27,6 +29,9 @@ from .context_manager import (
     truncate_tool_results, prepare_messages_for_api,
     count_messages_tokens, repair_orphan_tool_uses,
 )
+
+if TYPE_CHECKING:
+    from .team_store import TeamStore
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +88,8 @@ async def run_agent_loop(
     initial_message: Optional[AgentMessage] = None,
     team_tools_only: bool = False,
     spawn_context: Optional[Dict[str, Any]] = None,
+    store: Optional[TeamStore] = None,
+    restored_messages: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Run a long-lived agent loop.
 
@@ -123,9 +130,10 @@ async def run_agent_loop(
     else:
         tools = await _load_team_tools()
 
-    # Conversation history
-    messages: List[Dict[str, Any]] = []
+    # Conversation history (use restored checkpoint if available)
+    messages: List[Dict[str, Any]] = restored_messages if restored_messages else []
     message_count = 0
+    awaiting_user_reply = False
     consecutive_idle_secs = 0.0
     start_time = asyncio.get_event_loop().time()
 
@@ -190,8 +198,17 @@ async def run_agent_loop(
                     f"To reject, set approve=false with a reason."
                 )
                 messages.append({"role": "user", "content": msg_content})
+            elif current_message.sender == "user":
+                # Differentiate user replies from proactive instructions
+                if awaiting_user_reply:
+                    prefix = "[User Reply to your question]"
+                    awaiting_user_reply = False
+                else:
+                    prefix = "[New instruction from user]"
+                msg_content = f"{prefix}\n{current_message.content}"
+                messages.append({"role": "user", "content": msg_content})
             else:
-                # Inject message into conversation context
+                # Worker / system messages
                 msg_content = (
                     f"[Message from {current_message.sender}]\n"
                     f"{current_message.content}"
@@ -199,7 +216,7 @@ async def run_agent_loop(
                 messages.append({"role": "user", "content": msg_content})
 
             # Run tool loop — model responds, potentially calls tools, repeats
-            full_text, tokens, messages = await _run_tool_loop(
+            full_text, tokens, messages, did_ask_user = await _run_tool_loop(
                 agent=agent,
                 agent_name=agent_name,
                 team=team,
@@ -216,6 +233,9 @@ async def run_agent_loop(
                 spawn_context=spawn_context,
             )
 
+            if did_ask_user:
+                awaiting_user_reply = True
+
             # Accumulate tokens
             agent.token_usage["input_tokens"] += tokens.get("input_tokens", 0)
             agent.token_usage["output_tokens"] += tokens.get("output_tokens", 0)
@@ -223,6 +243,19 @@ async def run_agent_loop(
             # Store findings
             if full_text:
                 agent.findings = full_text
+
+            # Checkpoint agent state to disk
+            if store:
+                try:
+                    store.save_agent_checkpoint(agent_name, {
+                        "messages": messages,
+                        "token_usage": dict(agent.token_usage),
+                        "findings": agent.findings or "",
+                        "message_count": message_count,
+                        "status": agent.status,
+                    })
+                except Exception as cp_err:
+                    logger.warning(f"[AgentLoop:{agent_name}] Checkpoint save failed: {cp_err}")
 
             # Check if agent approved shutdown during this tool loop
             if mailbox.shutdown_approved:
@@ -282,7 +315,7 @@ async def _run_tool_loop(
     Streams model response, executes tool calls, and iterates until
     the model stops calling tools or hits the iteration limit.
 
-    Returns (full_text, tokens_dict, messages).
+    Returns (full_text, tokens_dict, messages, ask_user_called).
     """
     full_text = ""
     _FULL_TEXT_MAX = 100_000  # Cap findings accumulation at ~100K chars
@@ -484,6 +517,29 @@ async def _run_tool_loop(
                 "is_error": is_error,
             })
 
+        # Force yield after ask_user — model must wait for user reply
+        ask_user_called = any(t["name"] == "ask_user" for t in tool_uses)
+        if ask_user_called:
+            logger.info(f"[AgentLoop:{agent_name}] ask_user called, yielding for user reply")
+            # Append assistant + tool results before breaking so context is preserved
+            assistant_content = []
+            for block in content_blocks:
+                if block.get("type") == "tool_use":
+                    assistant_content.append({
+                        "type": "tool_use",
+                        "id": block["id"],
+                        "name": block["name"],
+                        "input": block.get("input", {}),
+                    })
+                elif block.get("type") == "text" and block.get("text"):
+                    assistant_content.append({
+                        "type": "text",
+                        "text": block["text"],
+                    })
+            messages.append({"role": "assistant", "content": assistant_content})
+            messages.append({"role": "user", "content": tool_results})
+            return full_text, tokens, messages, True
+
         # Anti-polling: detect consecutive iterations where the model only
         # calls read-only status tools (task_list, task_get).  This is the
         # team lead stuck in a polling loop waiting for workers.  After 2
@@ -521,7 +577,7 @@ async def _run_tool_loop(
         messages.append({"role": "assistant", "content": assistant_content})
         messages.append({"role": "user", "content": tool_results})
 
-    return full_text, tokens, messages
+    return full_text, tokens, messages, False
 
 
 async def _execute_team_tool(

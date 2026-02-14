@@ -2,15 +2,20 @@
 Springo Team Message Bus
 Inter-agent message routing for collaborative team mode
 """
+from __future__ import annotations
+
 import uuid
 import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, List, Literal
+from typing import Optional, Dict, List, Literal, TYPE_CHECKING
 
 from ..utils.streaming import SSEEventBuilder
 from ..config import settings
+
+if TYPE_CHECKING:
+    from .team_store import TeamStore
 
 logger = logging.getLogger(__name__)
 
@@ -121,8 +126,9 @@ class TeamMessageBus:
     - Emits SSE events for frontend consumption
     """
 
-    def __init__(self, team_id: str):
+    def __init__(self, team_id: str, store: Optional[TeamStore] = None):
         self.team_id = team_id
+        self._store = store
         self._mailboxes: Dict[str, AgentMailbox] = {}
         self._sse_queue: asyncio.Queue[str] = asyncio.Queue(
             maxsize=settings.team_event_queue_max
@@ -166,22 +172,77 @@ class TeamMessageBus:
                 pass
         await self._sse_queue.put(event)
 
+    def _persist_message(self, msg: AgentMessage) -> None:
+        """Write message to store if attached."""
+        if not self._store:
+            return
+        try:
+            self._store.save_message({
+                "message_id": msg.message_id,
+                "type": msg.type,
+                "sender": msg.sender,
+                "recipient": msg.recipient,
+                "content": msg.content,
+                "summary": msg.summary,
+                "timestamp": msg.timestamp,
+            })
+        except Exception as e:
+            logger.warning(f"[MessageBus:{self.team_id}] Persist message failed: {e}")
+
+    def load_from_store(self, store: TeamStore) -> None:
+        """Rebuild message log from persisted JSONL data."""
+        self._store = store
+        entries = store.load_messages()
+        for entry in entries:
+            self._message_log.append(AgentMessage(
+                message_id=entry.get("message_id", f"msg_{uuid.uuid4().hex[:8]}"),
+                type=entry.get("type", "message"),
+                sender=entry.get("sender", ""),
+                recipient=entry.get("recipient", ""),
+                content=entry.get("content", ""),
+                summary=entry.get("summary", ""),
+                timestamp=entry.get("timestamp", ""),
+            ))
+        self._trim_log()
+        logger.info(
+            f"[MessageBus:{self.team_id}] Loaded {len(entries)} messages from store"
+        )
+
     async def send_message(self, msg: AgentMessage):
         """Deliver a message to a specific agent's inbox.
 
         User messages are routed to the priority inbox so they are
         dequeued before worker-to-worker messages.
         Also logs the message and emits an SSE event.
+
+        Messages to non-agent recipients (e.g. "user") still emit SSE
+        events so the frontend can display them in the appropriate panel.
         """
         self._message_log.append(msg)
         self._trim_log()
+        self._persist_message(msg)
 
+        # Always emit SSE event first — even for non-agent recipients
+        # like "user" who have no mailbox.  The frontend needs these
+        # events to display messages in the USER COMMUNICATION panel.
+        sse_event = SSEEventBuilder.team_agent_message(
+            team_id=self.team_id,
+            sender=msg.sender,
+            recipient=msg.recipient,
+            content=msg.content,
+            summary=msg.summary,
+            message_id=msg.message_id,
+        )
+        await self._put_sse(sse_event)
+
+        logger.debug(
+            f"[MessageBus:{self.team_id}] {msg.sender} -> {msg.recipient}: "
+            f"{msg.summary or msg.content[:60]}"
+        )
+
+        # Deliver to agent mailbox (skip for non-agent recipients like "user")
         recipient_mailbox = self._mailboxes.get(msg.recipient)
         if not recipient_mailbox:
-            logger.warning(
-                f"[MessageBus:{self.team_id}] Recipient '{msg.recipient}' not found. "
-                f"Known agents: {list(self._mailboxes.keys())}"
-            )
             return
 
         # User messages get priority delivery
@@ -199,26 +260,11 @@ class TeamMessageBus:
                     msg.summary or (msg.content[:50] if msg.content else "")
                 )
 
-        # Emit SSE event
-        sse_event = SSEEventBuilder.team_agent_message(
-            team_id=self.team_id,
-            sender=msg.sender,
-            recipient=msg.recipient,
-            content=msg.content,
-            summary=msg.summary,
-            message_id=msg.message_id,
-        )
-        await self._put_sse(sse_event)
-
-        logger.debug(
-            f"[MessageBus:{self.team_id}] {msg.sender} -> {msg.recipient}: "
-            f"{msg.summary or msg.content[:60]}"
-        )
-
     async def broadcast(self, msg: AgentMessage):
         """Deliver a message to all agents except the sender."""
         self._message_log.append(msg)
         self._trim_log()
+        self._persist_message(msg)
 
         for name, mailbox in self._mailboxes.items():
             if name != msg.sender:
@@ -324,10 +370,13 @@ class TeamMessageBus:
 _team_buses: Dict[str, TeamMessageBus] = {}
 
 
-def get_or_create_bus(team_id: str) -> TeamMessageBus:
+def get_or_create_bus(
+    team_id: str,
+    store: Optional[TeamStore] = None,
+) -> TeamMessageBus:
     """Get or create a message bus for a team."""
     if team_id not in _team_buses:
-        _team_buses[team_id] = TeamMessageBus(team_id)
+        _team_buses[team_id] = TeamMessageBus(team_id, store=store)
     return _team_buses[team_id]
 
 

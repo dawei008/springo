@@ -24,6 +24,7 @@ from .context_manager import (
 )
 from ..utils.streaming import SSEEventBuilder
 from ..config import settings
+from .team_store import TeamStore, list_persisted_teams
 
 logger = logging.getLogger(__name__)
 
@@ -241,6 +242,7 @@ class AgentTeamManager:
         # are dispatched to the correct vendor service.
         self.bedrock = bedrock or get_vendor_router()
         self._teams: Dict[str, Team] = {}
+        self._stores: Dict[str, TeamStore] = {}
         self._running_tasks: Dict[str, List[asyncio.Task]] = {}  # team_id -> agent tasks
         self._cleanup_task: Optional[asyncio.Task] = None
 
@@ -307,6 +309,37 @@ class AgentTeamManager:
         # If no match, try stripping common prefixes to get a usable name
         return settings.bedrock_model_id
 
+    @staticmethod
+    def _save_team_meta(team: Team, store: TeamStore) -> None:
+        """Persist team metadata to disk."""
+        try:
+            store.save_team_meta({
+                "team_id": team.team_id,
+                "execution_mode": team.execution_mode,
+                "status": team.status,
+                "user_request": team.user_request,
+                "shared_context": team.shared_context[:2000],
+                "created_at": team.created_at,
+                "completed_at": team.completed_at,
+                "total_tokens": team.total_tokens,
+                "agents": [
+                    {
+                        "agent_id": a.agent_id,
+                        "name": a.name,
+                        "role_name": a.role.name,
+                        "role_model": a.role.model,
+                        "role_purpose": a.role.purpose,
+                        "status": a.status,
+                        "token_usage": dict(a.token_usage),
+                        "started_at": a.started_at,
+                        "completed_at": a.completed_at,
+                    }
+                    for a in team.agents
+                ],
+            })
+        except Exception as e:
+            logger.warning(f"[Team:{team.team_id}] Failed to save team meta: {e}")
+
     def spawn_team(self, request: TeamSpawnRequest) -> Team:
         """Create a new team based on the user request"""
         mode = getattr(request, "mode", "classic")
@@ -328,13 +361,18 @@ class AgentTeamManager:
 
         self._teams[team.team_id] = team
 
+        # Create persistent store
+        store = TeamStore(team.team_id)
+        self._stores[team.team_id] = store
+        self._save_team_meta(team, store)
+
         # For collaborative mode, set up message bus and task manager
         if mode == "collaborative":
             from .message_bus import get_or_create_bus
             from .team_task_manager import get_or_create_task_manager
-            bus = get_or_create_bus(team.team_id)
+            bus = get_or_create_bus(team.team_id, store=store)
             bus.register_agent("team-lead")
-            get_or_create_task_manager(team.team_id, bus)
+            get_or_create_task_manager(team.team_id, bus, store=store)
 
         logger.info(f"Team spawned: {team.team_id} mode={mode} for request: {request.user_request[:80]}")
         return team
@@ -1320,6 +1358,7 @@ class AgentTeamManager:
 
         bus = get_bus(team_id)
         task_mgr = get_tm(team_id)
+        store = self._stores.get(team_id)
         if not bus or not task_mgr:
             yield SSEEventBuilder.team_error(team_id, "Message bus or task manager not initialized")
             yield SSEEventBuilder.done()
@@ -1339,6 +1378,8 @@ class AgentTeamManager:
             yield SSEEventBuilder.team_spawned(team.team_id, agent_info, team.user_request)
 
             team.status = "executing"
+            if store:
+                self._save_team_meta(team, store)
             yield SSEEventBuilder.team_planning(team.team_id)
 
             team_lead = team.agents[0]
@@ -1383,6 +1424,15 @@ class AgentTeamManager:
                 "- Use send_message to give workers additional context or relay user feedback\n"
                 "- Use ask_user when you need clarification from the user\n"
                 "- Use send_message(type='shutdown_request') to shut down a worker when done\n\n"
+                "## User Communication\n"
+                "- The user may send you messages at any time — even while workers are running\n"
+                "- Messages tagged [User Reply] are answers to your ask_user question — process and continue\n"
+                "- Messages tagged [New instruction from user] are proactive input — evaluate whether it "
+                "affects current work, notify relevant workers, or adjust tasks accordingly\n"
+                "- Use ask_user when you need the user's approval or clarification before a significant decision\n"
+                "- After calling ask_user, STOP and wait — do not continue working until the user responds\n"
+                "- If a worker message arrives while you're waiting for a user reply, handle it briefly "
+                "(acknowledge completion, note results) but remember you are still awaiting the user's answer\n\n"
                 "## Idle Behavior\n"
                 "After spawning workers, stop and wait. Workers will send you a message "
                 "when they complete their tasks. You do not need to poll task_list — "
@@ -1438,6 +1488,7 @@ class AgentTeamManager:
                     initial_message=initial_msg,
                     team_tools_only=True,
                     spawn_context=spawn_context,
+                    store=store,
                 )
             )
             agent_tasks.append(lead_task)
@@ -1536,6 +1587,7 @@ class AgentTeamManager:
                                     task_manager=task_mgr,
                                     event_queue=event_queue,
                                     initial_message=worker_initial,
+                                    store=store,
                                 )
                             )
                             agent_tasks.append(worker_task)
@@ -1610,6 +1662,9 @@ class AgentTeamManager:
                 team.total_tokens["input_tokens"] += agent.token_usage.get("input_tokens", 0)
                 team.total_tokens["output_tokens"] += agent.token_usage.get("output_tokens", 0)
 
+            if store:
+                self._save_team_meta(team, store)
+
             yield SSEEventBuilder.team_complete(
                 team.team_id, team.final_result, team.total_tokens
             )
@@ -1619,11 +1674,15 @@ class AgentTeamManager:
             logger.warning(f"Collaborative team {team.team_id} execution cancelled")
             team.status = "error"
             team.completed_at = datetime.now().isoformat()
+            if store:
+                self._save_team_meta(team, store)
             yield SSEEventBuilder.team_error(team.team_id, "Team execution cancelled")
             yield SSEEventBuilder.done()
         except Exception as e:
             logger.error(f"Collaborative team execution error: {e}", exc_info=True)
             team.status = "error"
+            if store:
+                self._save_team_meta(team, store)
             yield SSEEventBuilder.team_error(team.team_id, str(e))
             yield SSEEventBuilder.done()
         finally:
@@ -1690,6 +1749,263 @@ class AgentTeamManager:
             yield SSEEventBuilder.heartbeat(0)
             await asyncio.sleep(2.0)
 
+    def load_persisted_teams(self) -> int:
+        """Scan storage dir and restore interrupted teams.
+
+        Non-terminal teams are loaded into _teams with task boards and
+        message logs rebuilt. They are NOT auto-restarted — call /resume.
+
+        Returns the count of teams restored.
+        """
+        from .message_bus import get_or_create_bus
+        from .team_task_manager import get_or_create_task_manager
+
+        count = 0
+        for team_id in list_persisted_teams():
+            if team_id in self._teams:
+                continue
+
+            store = TeamStore(team_id)
+            meta = store.load_team_meta()
+            if not meta:
+                continue
+
+            status = meta.get("status", "complete")
+            if status in ("complete", "error"):
+                continue
+
+            # Rebuild Team from metadata
+            agents = []
+            for ad in meta.get("agents", []):
+                role = AgentRole(
+                    name=ad.get("role_name", "worker"),
+                    model=ad.get("role_model", ""),
+                    purpose=ad.get("role_purpose", ""),
+                )
+                agent = TeamAgent(
+                    agent_id=ad.get("agent_id", ""),
+                    name=ad.get("name", ""),
+                    role=role,
+                    status="idle",
+                    token_usage=ad.get("token_usage", {"input_tokens": 0, "output_tokens": 0}),
+                    started_at=ad.get("started_at"),
+                    completed_at=ad.get("completed_at"),
+                )
+                agents.append(agent)
+
+            team = Team(
+                team_id=team_id,
+                execution_mode=meta.get("execution_mode", "collaborative"),
+                agents=agents,
+                status="created",  # Paused — needs /resume
+                user_request=meta.get("user_request", ""),
+                shared_context=meta.get("shared_context", ""),
+                created_at=meta.get("created_at", ""),
+                completed_at=None,
+                total_tokens=meta.get("total_tokens", {"input_tokens": 0, "output_tokens": 0}),
+            )
+
+            self._teams[team_id] = team
+            self._stores[team_id] = store
+
+            # Rebuild bus + task manager from persisted data
+            bus = get_or_create_bus(team_id, store=store)
+            bus.load_from_store(store)
+            for agent in agents:
+                bus.register_agent(agent.name or agent.agent_id)
+
+            task_mgr = get_or_create_task_manager(team_id, bus, store=store)
+            task_mgr.load_from_store(store)
+
+            count += 1
+            logger.info(
+                f"[TeamManager] Restored team {team_id} "
+                f"({len(agents)} agents, was '{status}')"
+            )
+
+        return count
+
+    async def resume_team(
+        self, team_id: str,
+    ) -> AsyncGenerator[str, None]:
+        """Resume a persisted team by restarting agent loops with checkpoints."""
+        from .message_bus import get_bus, AgentMessage
+        from .team_task_manager import get_task_manager as get_tm
+        from .agent_loop import run_agent_loop
+
+        team = self._teams.get(team_id)
+        if not team:
+            yield SSEEventBuilder.team_error(team_id, "Team not found")
+            yield SSEEventBuilder.done()
+            return
+
+        store = self._stores.get(team_id)
+        if not store:
+            yield SSEEventBuilder.team_error(team_id, "No store for team")
+            yield SSEEventBuilder.done()
+            return
+
+        bus = get_bus(team_id)
+        task_mgr = get_tm(team_id)
+        if not bus or not task_mgr:
+            yield SSEEventBuilder.team_error(team_id, "Bus or task manager missing")
+            yield SSEEventBuilder.done()
+            return
+
+        team.status = "executing"
+        self._save_team_meta(team, store)
+
+        agent_info = [
+            {
+                "agent_id": a.agent_id,
+                "name": a.name,
+                "role": a.role.name,
+                "purpose": a.role.purpose,
+                "status": "resuming",
+            }
+            for a in team.agents
+        ]
+        yield SSEEventBuilder.team_spawned(team.team_id, agent_info, team.user_request)
+
+        event_queue: asyncio.Queue = asyncio.Queue(maxsize=settings.team_event_queue_max)
+        agent_tasks: List[asyncio.Task] = []
+
+        spawn_context = {
+            "team": team,
+            "event_queue": event_queue,
+            "bedrock": self.bedrock,
+            "bus": bus,
+            "task_mgr": task_mgr,
+        }
+
+        for agent in team.agents:
+            agent_name = agent.name or agent.agent_id
+            mailbox = bus.get_mailbox(agent_name)
+            if not mailbox:
+                mailbox = bus.register_agent(agent_name)
+
+            checkpoint = store.load_agent_checkpoint(agent_name)
+            restored_msgs = checkpoint.get("messages") if checkpoint else None
+
+            is_lead = agent_name == "team-lead"
+
+            resume_msg = AgentMessage(
+                type="message",
+                sender="system",
+                recipient=agent_name,
+                content=(
+                    "Your session has been restored after a server restart. "
+                    "Check the task board and continue where you left off."
+                ),
+                summary="Session restored",
+            )
+
+            task = asyncio.create_task(
+                run_agent_loop(
+                    team=team,
+                    agent=agent,
+                    mailbox=mailbox,
+                    bedrock=self.bedrock,
+                    message_bus=bus,
+                    task_manager=task_mgr,
+                    event_queue=event_queue,
+                    initial_message=resume_msg,
+                    team_tools_only=is_lead,
+                    spawn_context=spawn_context if is_lead else None,
+                    store=store,
+                    restored_messages=restored_msgs,
+                )
+            )
+            agent_tasks.append(task)
+
+        self._register_tasks(team_id, agent_tasks)
+
+        # Event drain loop (same pattern as execute_team_collaborative)
+        collab_start = asyncio.get_event_loop().time()
+        collab_max_runtime = settings.team_collab_max_runtime
+        heartbeat_counter = 0
+
+        while True:
+            elapsed = asyncio.get_event_loop().time() - collab_start
+            if elapsed > collab_max_runtime:
+                break
+
+            if all(t.done() for t in agent_tasks):
+                while not event_queue.empty():
+                    event = event_queue.get_nowait()
+                    if isinstance(event, str):
+                        yield event
+                while True:
+                    sse_event = await bus.get_sse_event(timeout=0.5)
+                    if sse_event is None:
+                        break
+                    yield sse_event
+                break
+
+            try:
+                event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                if isinstance(event, str):
+                    yield event
+                elif isinstance(event, dict) and event.get("__spawn_worker__"):
+                    worker_agent = event["worker_agent"]
+                    worker_mailbox = event["worker_mailbox"]
+                    worker_initial = event["initial_message"]
+                    team.agents.append(worker_agent)
+                    worker_task = asyncio.create_task(
+                        run_agent_loop(
+                            team=team,
+                            agent=worker_agent,
+                            mailbox=worker_mailbox,
+                            bedrock=self.bedrock,
+                            message_bus=bus,
+                            task_manager=task_mgr,
+                            event_queue=event_queue,
+                            initial_message=worker_initial,
+                            store=store,
+                        )
+                    )
+                    agent_tasks.append(worker_task)
+                    self._register_tasks(team_id, agent_tasks)
+                    yield SSEEventBuilder.team_agent_start(
+                        team_id=team_id,
+                        agent_id=worker_agent.agent_id,
+                        role="worker",
+                        task_title=worker_agent.role.purpose,
+                        agent_name=worker_agent.name,
+                    )
+            except asyncio.TimeoutError:
+                pass
+
+            while True:
+                sse_event = await bus.get_sse_event(timeout=0.5)
+                if sse_event is None:
+                    break
+                yield sse_event
+
+            heartbeat_counter += 1
+            if heartbeat_counter % 10 == 0:
+                yield SSEEventBuilder.heartbeat(elapsed)
+
+        # Cleanup
+        for t in agent_tasks:
+            if not t.done():
+                t.cancel()
+                try:
+                    await asyncio.wait_for(t, timeout=5.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+
+        team.status = "complete"
+        team.completed_at = datetime.now().isoformat()
+        for agent in team.agents:
+            team.total_tokens["input_tokens"] += agent.token_usage.get("input_tokens", 0)
+            team.total_tokens["output_tokens"] += agent.token_usage.get("output_tokens", 0)
+
+        self._save_team_meta(team, store)
+        self._unregister_tasks(team_id)
+        yield SSEEventBuilder.team_complete(team.team_id, team.final_result or "", team.total_tokens)
+        yield SSEEventBuilder.done()
+
     def get_message_bus(self, team_id: str):
         """Get the message bus for a collaborative team."""
         from .message_bus import get_bus
@@ -1728,12 +2044,16 @@ async def init_team_manager():
     """Initialize the team manager and start periodic cleanup.
 
     Call this from the FastAPI lifespan to guarantee the cleanup task runs.
+    Also restores teams that were interrupted by a previous shutdown.
     """
     manager = get_team_manager()
     if manager._cleanup_task is None:
         manager._cleanup_task = asyncio.create_task(
             _periodic_team_cleanup(manager)
         )
+        restored = manager.load_persisted_teams()
+        if restored:
+            logger.info(f"Team manager restored {restored} team(s) from disk")
         logger.info("Team manager initialized with periodic cleanup task")
     return manager
 
