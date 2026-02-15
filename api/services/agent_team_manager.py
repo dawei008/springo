@@ -992,7 +992,7 @@ class AgentTeamManager:
                 # tool formatting, time injection, and model-specific quirks)
                 request_body = {
                     "model": agent.role.model,
-                    "max_tokens": 4096,
+                    "max_tokens": model_limits.get("max_output_tokens", 16384),
                     "system": _with_working_dir(system_prompt),
                     "messages": messages,
                 }
@@ -1430,7 +1430,7 @@ class AgentTeamManager:
                 "2. Spawn workers for tasks using spawn_worker — each worker runs autonomously\n"
                 "3. Workers will message you when they complete tasks\n"
                 "4. Review results, create follow-up tasks and spawn more workers if needed\n"
-                "5. When all work is done, synthesize the final answer for the user\n\n"
+                "5. When all work is done, compose and send a Final Answer to the user (see Final Answer section), then shut down workers\n\n"
                 "## How Workers Operate\n"
                 "Workers are autonomous agents with full tool access — they can read files, "
                 "execute commands, search the web, write code, and more. They handle all "
@@ -1466,10 +1466,35 @@ class AgentTeamManager:
                 "- When you receive a user message: briefly confirm what you understood and what action you are taking\n"
                 "- After spawning workers: which workers were created and what they are doing\n"
                 "- When a worker completes a task: summarize the result in one sentence\n"
-                "- When all tasks are done: provide a concise synthesis of the team's output\n"
+                "- When all tasks are done: send a Final Answer (see below)\n"
                 "- When something goes wrong: explain the issue and your recovery plan\n"
                 "Keep these updates concise (1-2 sentences each). Do not flood the user with every detail — "
                 "only report significant state changes.\n\n"
+                "## Final Answer\n"
+                "When ALL tasks are complete, before shutting down workers, you MUST send a final "
+                "answer to the user via send_message(recipient='user'). This is the most important "
+                "message of the entire session.\n\n"
+                "Rules:\n"
+                "- Answer the user's ORIGINAL question directly — as if you are the one answering, "
+                "not reporting what workers did\n"
+                "- Include key data, findings, and conclusions INLINE — the user should not need to "
+                "read worker messages to understand the result\n"
+                "- If workers produced output files (reports, code, documents), include their full "
+                "paths so the user can access them. Example: "
+                "\"审查计划已保存到 /path/to/CODE_REVIEW_PLAN.md\"\n"
+                "- If workers produced images or diagrams, include the full path on its own line "
+                "so it renders inline. Example:\n"
+                "  架构图：\n"
+                "  /path/to/architecture.png\n"
+                "- Use markdown formatting (tables, headers, lists, code blocks) for readability\n"
+                "- If the result is long, present a structured summary with the most important points "
+                "first, followed by details\n"
+                "- Only AFTER sending this final answer, proceed to shut down workers\n\n"
+                "Bad example (status report):\n"
+                "  \"planner 完成了分析，reviewer 完成了统计，两个 worker 已关闭\"\n"
+                "Good example (direct answer):\n"
+                "  \"## 代码审查计划\\n\\napi/services/ 共 24 个文件，13,818 行代码...\\n\\n"
+                "## 端点统计\\n\\n| 路由文件 | 端点数 |...\"\n\n"
                 "## Idle Behavior\n"
                 "After spawning workers, stop and wait. Workers will send you a message "
                 "when they complete their tasks. You do not need to poll task_list — "
@@ -1596,17 +1621,24 @@ class AgentTeamManager:
                 else:
                     all_done_idle_checks = 0
 
-                # Drain agent event queue
-                try:
-                    event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+                # Drain both queues using non-blocking get_nowait().
+                # Never cancel a Queue.get() — cancellation can lose items
+                # due to a race in asyncio.Queue internals.
+                got_any = False
+
+                # Drain event_queue (agent internal events)
+                while True:
+                    try:
+                        event = event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    got_any = True
                     if isinstance(event, str):
                         yield event
                     elif isinstance(event, dict):
-                        # Internal sentinel events
                         if event.get("__shutdown__"):
                             shutdown_requested = True
                         elif event.get("__spawn_worker__"):
-                            # Team lead requested a worker spawn via spawn_worker tool
                             worker_agent = event["worker_agent"]
                             worker_mailbox = event["worker_mailbox"]
                             worker_initial = event["initial_message"]
@@ -1630,7 +1662,6 @@ class AgentTeamManager:
                             agent_tasks.append(worker_task)
                             self._register_tasks(team_id, agent_tasks)
 
-                            # Emit SSE so frontend shows the worker card
                             yield SSEEventBuilder.team_agent_start(
                                 team_id=team_id,
                                 agent_id=worker_agent.agent_id,
@@ -1643,17 +1674,22 @@ class AgentTeamManager:
                                 f"Spawned worker '{worker_agent.name}' "
                                 f"(requested by team lead)"
                             )
-                except asyncio.TimeoutError:
-                    pass
 
-                # Drain message bus SSE queue (drain all available, not just one)
+                # Drain message bus SSE queue
                 while True:
-                    sse_event = await bus.get_sse_event(timeout=0.5)
-                    if sse_event is None:
+                    try:
+                        sse_event = bus._sse_queue.get_nowait()
+                    except asyncio.QueueEmpty:
                         break
+                    got_any = True
                     yield sse_event
 
-                # Yield heartbeat every ~10 iterations (~15s) to keep SSE alive
+                # If neither queue had anything, yield control briefly
+                # to avoid busy-wait (~100ms latency floor when idle)
+                if not got_any:
+                    await asyncio.sleep(0.1)
+
+                # Yield heartbeat every ~10 iterations to keep SSE alive
                 heartbeat_counter += 1
                 if heartbeat_counter % 10 == 0:
                     yield SSEEventBuilder.heartbeat(elapsed)
@@ -1974,51 +2010,71 @@ class AgentTeamManager:
                     if isinstance(event, str):
                         yield event
                 while True:
-                    sse_event = await bus.get_sse_event(timeout=0.5)
-                    if sse_event is None:
+                    try:
+                        sse_event = bus._sse_queue.get_nowait()
+                    except asyncio.QueueEmpty:
                         break
                     yield sse_event
                 break
 
-            try:
-                event = await asyncio.wait_for(event_queue.get(), timeout=1.0)
+            # Drain both queues using non-blocking get_nowait().
+            # Never cancel a Queue.get() — cancellation can lose items
+            # due to a race in asyncio.Queue internals.
+            got_any = False
+
+            # Drain event_queue (agent internal events)
+            while True:
+                try:
+                    event = event_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                got_any = True
                 if isinstance(event, str):
                     yield event
-                elif isinstance(event, dict) and event.get("__spawn_worker__"):
-                    worker_agent = event["worker_agent"]
-                    worker_mailbox = event["worker_mailbox"]
-                    worker_initial = event["initial_message"]
-                    team.agents.append(worker_agent)
-                    worker_task = asyncio.create_task(
-                        run_agent_loop(
-                            team=team,
-                            agent=worker_agent,
-                            mailbox=worker_mailbox,
-                            bedrock=self.bedrock,
-                            message_bus=bus,
-                            task_manager=task_mgr,
-                            event_queue=event_queue,
-                            initial_message=worker_initial,
-                            store=store,
+                elif isinstance(event, dict):
+                    if event.get("__shutdown__"):
+                        pass  # resume doesn't track shutdown_requested
+                    elif event.get("__spawn_worker__"):
+                        worker_agent = event["worker_agent"]
+                        worker_mailbox = event["worker_mailbox"]
+                        worker_initial = event["initial_message"]
+                        team.agents.append(worker_agent)
+                        worker_task = asyncio.create_task(
+                            run_agent_loop(
+                                team=team,
+                                agent=worker_agent,
+                                mailbox=worker_mailbox,
+                                bedrock=self.bedrock,
+                                message_bus=bus,
+                                task_manager=task_mgr,
+                                event_queue=event_queue,
+                                initial_message=worker_initial,
+                                store=store,
+                            )
                         )
-                    )
-                    agent_tasks.append(worker_task)
-                    self._register_tasks(team_id, agent_tasks)
-                    yield SSEEventBuilder.team_agent_start(
-                        team_id=team_id,
-                        agent_id=worker_agent.agent_id,
-                        role="worker",
-                        task_title=worker_agent.role.purpose,
-                        agent_name=worker_agent.name,
-                    )
-            except asyncio.TimeoutError:
-                pass
+                        agent_tasks.append(worker_task)
+                        self._register_tasks(team_id, agent_tasks)
+                        yield SSEEventBuilder.team_agent_start(
+                            team_id=team_id,
+                            agent_id=worker_agent.agent_id,
+                            role="worker",
+                            task_title=worker_agent.role.purpose,
+                            agent_name=worker_agent.name,
+                        )
+                        logger.info(f"Spawned worker '{worker_agent.name}' (resume)")
 
+            # Drain message bus SSE queue
             while True:
-                sse_event = await bus.get_sse_event(timeout=0.5)
-                if sse_event is None:
+                try:
+                    sse_event = bus._sse_queue.get_nowait()
+                except asyncio.QueueEmpty:
                     break
+                got_any = True
                 yield sse_event
+
+            # If neither queue had anything, yield control briefly
+            if not got_any:
+                await asyncio.sleep(0.1)
 
             heartbeat_counter += 1
             if heartbeat_counter % 10 == 0:

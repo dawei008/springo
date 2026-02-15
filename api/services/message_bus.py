@@ -156,6 +156,50 @@ class TeamMessageBus:
     def agent_names(self) -> List[str]:
         return list(self._mailboxes.keys())
 
+    def _offload_if_large(self, msg: AgentMessage) -> None:
+        """Offload large message content to a file, replacing with preview + path.
+
+        When content exceeds team_msg_max_inline_size, the full text is written
+        to an attachment file under the team store directory, and msg.content
+        is replaced with a truncated preview plus the file path.
+        """
+        max_size = settings.team_msg_max_inline_size
+        if len(msg.content) <= max_size:
+            return
+
+        preview = msg.content[:800]
+
+        # Try to write full content to file
+        if self._store:
+            try:
+                attach_dir = self._store.team_dir / "attachments"
+                attach_dir.mkdir(exist_ok=True)
+                file_path = attach_dir / f"{msg.message_id}.md"
+                file_path.write_text(msg.content, encoding="utf-8")
+
+                msg.content = (
+                    f"[Message truncated — full content saved to file]\n"
+                    f"Preview:\n{preview}...\n\n"
+                    f"Full content: {file_path}\n"
+                    f"Use read_file to read the complete message."
+                )
+                logger.info(
+                    f"[MessageBus:{self.team_id}] Offloaded large message "
+                    f"{msg.message_id} ({len(msg.content)} chars) to {file_path}"
+                )
+                return
+            except Exception as e:
+                logger.warning(
+                    f"[MessageBus:{self.team_id}] Failed to offload message "
+                    f"{msg.message_id}: {e}, keeping truncated inline"
+                )
+
+        # Fallback: no store or write failed — truncate only
+        msg.content = (
+            f"[Message truncated — content exceeded {max_size} chars]\n"
+            f"Preview:\n{preview}..."
+        )
+
     def _trim_log(self):
         """Keep message log within bounds (rolling window)."""
         if len(self._message_log) > self._message_log_max:
@@ -218,6 +262,9 @@ class TeamMessageBus:
         Messages to non-agent recipients (e.g. "user") still emit SSE
         events so the frontend can display them in the appropriate panel.
         """
+        # Offload large messages to file before logging/delivering
+        self._offload_if_large(msg)
+
         self._message_log.append(msg)
         self._trim_log()
         self._persist_message(msg)
@@ -280,6 +327,7 @@ class TeamMessageBus:
 
     async def broadcast(self, msg: AgentMessage):
         """Deliver a message to all agents except the sender."""
+        self._offload_if_large(msg)
         self._message_log.append(msg)
         self._trim_log()
         self._persist_message(msg)

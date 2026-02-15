@@ -94,6 +94,8 @@ class Settings(BaseSettings):
         default=5, description="Max simultaneously active teams")
     team_completed_cleanup_secs: int = Field(
         default=3600, description="Seconds after completion before team memory is freed (1h)")
+    team_msg_max_inline_size: int = Field(
+        default=16384, description="Max chars for inline message; larger content offloaded to file")
     team_message_log_max: int = Field(
         default=500, description="Max messages kept in message bus log (rolling window)")
     team_event_queue_max: int = Field(

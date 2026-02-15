@@ -2009,7 +2009,7 @@
             const streaming = isCurrentStreaming();
             // When a team is active and streaming, keep the send button usable
             // so the user can send follow-up messages to the team lead.
-            const teamActive = teamModeEnabled && activeTeamSplitId && streaming;
+            const teamActive = activeTeamSplitId && streaming;
 
             if (btn) {
                 // Disable if streaming OR if input is empty and no attachments OR if server is not connected
@@ -11376,14 +11376,13 @@ ${content || 'Task completed successfully.'}
                     initTeamSectionDivider(divider, agentsContainer);
                 }
 
-                // Two-part messages section
+                // Single messages section — all team communication (including user↔lead)
                 let messagesSection = document.getElementById('team-split-messages-section');
                 if (!messagesSection) {
                     messagesSection = document.createElement('div');
                     messagesSection.id = 'team-split-messages-section';
                     messagesSection.className = 'team-split-messages-section';
 
-                    // Part 1: Team internal comms (worker↔worker, worker↔lead)
                     const teamHeader = document.createElement('div');
                     teamHeader.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;';
                     teamHeader.textContent = 'Team Communication';
@@ -11392,20 +11391,8 @@ ${content || 'Task completed successfully.'}
                     teamMsgs.id = 'team-split-messages-team';
                     teamMsgs.className = 'team-split-messages';
                     teamMsgs.style.cssText = 'flex:1;overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px;min-height:0;';
-                    teamMsgs.innerHTML = '<div class="team-msg-placeholder" style="opacity:0.4;font-style:italic;font-size:11px;">No team messages yet</div>';
+                    teamMsgs.innerHTML = '<div class="team-msg-placeholder" style="opacity:0.4;font-style:italic;font-size:11px;">No messages yet</div>';
                     messagesSection.appendChild(teamMsgs);
-
-                    // Part 2: User comms (lead↔user)
-                    const userHeader = document.createElement('div');
-                    userHeader.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;';
-                    userHeader.textContent = 'User Communication';
-                    messagesSection.appendChild(userHeader);
-                    const userMsgs = document.createElement('div');
-                    userMsgs.id = 'team-split-messages-user';
-                    userMsgs.className = 'team-split-messages';
-                    userMsgs.style.cssText = 'flex:1;overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:6px;font-size:12px;min-height:0;';
-                    userMsgs.innerHTML = '<div class="team-msg-placeholder" style="opacity:0.4;font-style:italic;font-size:11px;">No user messages yet</div>';
-                    messagesSection.appendChild(userMsgs);
 
                     content.appendChild(messagesSection);
                 }
@@ -11436,15 +11423,10 @@ ${content || 'Task completed successfully.'}
                 stopBtn.style.display = activeStatuses.includes(status) ? '' : 'none';
             }
 
-            // Disable message input when team is complete, errored, or stopped
+            // Restore main input placeholder when team session ends
             if (status === 'complete' || status === 'error' || status === 'stopped') {
-                const msgInput = document.getElementById('team-msg-input');
-                const msgSend = document.getElementById('team-msg-send');
-                if (msgInput) {
-                    msgInput.disabled = true;
-                    msgInput.placeholder = 'Team session ended';
-                }
-                if (msgSend) msgSend.disabled = true;
+                const mainInput = document.getElementById('message-input');
+                if (mainInput) mainInput.placeholder = 'Message Springo... (/ for skills)';
             }
         }
 
@@ -11751,11 +11733,27 @@ ${content || 'Task completed successfully.'}
         function appendTeamMessage(teamId, sender, recipient, content, summary, isBroadcast) {
             if (teamId !== activeTeamSplitId) return;
 
-            // Route to correct container: user comms vs team comms
-            const isUserMsg = sender === 'user' || recipient === 'user';
-            const containerId = isUserMsg ? 'team-split-messages-user' : 'team-split-messages-team';
-            // Fallback to old single container if split doesn't exist
-            const messagesContainer = document.getElementById(containerId)
+            // Mirror team-lead → user messages to the main chat as assistant messages
+            if (sender !== 'user' && recipient === 'user' && content) {
+                const convId = currentConversationId;
+                if (convId) {
+                    const runtime = getConvRuntime(convId);
+                    runtime.messages.push({
+                        role: 'assistant',
+                        content: content,
+                        timestamp: Date.now(),
+                        _teamMode: true,
+                    });
+                    renderMessages();
+                    saveConversation(convId);
+                }
+            }
+
+            // User ↔ team-lead messages belong in main chat only, not the team panel
+            if (recipient === 'user' || sender === 'user') return;
+
+            // Inter-agent messages go to the team communication container
+            const messagesContainer = document.getElementById('team-split-messages-team')
                 || document.getElementById('team-split-messages');
             if (!messagesContainer) return;
 
@@ -11833,8 +11831,8 @@ ${content || 'Task completed successfully.'}
 
         function showTeamAskUser(teamId, agentName, question, options) {
             if (teamId !== activeTeamSplitId) return;
-            // Route ask_user to user comms container
-            const messagesContainer = document.getElementById('team-split-messages-user')
+            // Route ask_user to the single team communication container
+            const messagesContainer = document.getElementById('team-split-messages-team')
                 || document.getElementById('team-split-messages');
             if (!messagesContainer) return;
 
@@ -11880,11 +11878,11 @@ ${content || 'Task completed successfully.'}
             messagesContainer.appendChild(card);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-            // Focus the message input for custom response
-            const msgInput = document.getElementById('team-msg-input');
-            if (msgInput) {
-                msgInput.placeholder = 'Type your answer...';
-                msgInput.focus();
+            // Focus main input for custom response
+            const mainInput = document.getElementById('message-input');
+            if (mainInput) {
+                mainInput.placeholder = 'Type your answer...';
+                mainInput.focus();
             }
 
             // Show a toast so user notices the question
@@ -11893,7 +11891,17 @@ ${content || 'Task completed successfully.'}
 
         function sendTeamPanelMessage(teamId, content) {
             if (!teamId || !content) return;
-            // Message will appear via SSE team_agent_message event from the bus
+
+            // Show user message in main chat immediately
+            const convId = currentConversationId;
+            if (convId) {
+                const runtime = getConvRuntime(convId);
+                runtime.messages.push({ role: 'user', content: content, timestamp: Date.now() });
+                renderMessages();
+                saveConversation(convId);
+            }
+
+            // Send to backend
             fetch(`${BASE_URL}/v1/teams/${teamId}/message`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

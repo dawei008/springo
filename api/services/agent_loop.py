@@ -350,7 +350,7 @@ async def _run_tool_loop(
 
         request_body = {
             "model": model_name,
-            "max_tokens": 4096,
+            "max_tokens": model_limits.get("max_output_tokens", 16384),
             "system": system_prompt,
             "messages": messages,
         }
@@ -952,13 +952,25 @@ async def _execute_team_tool(
         plan_mode = tool_input.get("plan_mode", False)
         from ..models.teams import TeamAgent as _TeamAgent, AgentRole as _AgentRole
 
+        _shutdown_section = (
+            "\n\n## Shutdown\n"
+            "When you receive a [Shutdown Request], you MUST immediately call "
+            "send_message with type='shutdown_response' and approve=true. "
+            "Do NOT send any other messages, do NOT submit new plans, "
+            "do NOT call any other tools — just approve the shutdown. "
+            "This is a hard requirement."
+        )
+
         base_system_prompt = (
             "You are a worker agent. Complete the task(s) assigned to you thoroughly.\n"
             "When done:\n"
             "1. Use task_update to mark each task as completed.\n"
             "2. Use send_message to send a brief summary of your findings to team-lead.\n"
+            "3. If you created any files (reports, code, images, diagrams, etc.), "
+            "list their FULL absolute paths in your summary to team-lead.\n"
             "If you need clarification from the user, use ask_user.\n"
             "Do NOT use emojis in any output or messages."
+            + _shutdown_section
         )
         if plan_mode:
             base_system_prompt = (
@@ -974,8 +986,11 @@ async def _execute_team_tool(
                 "After implementation is complete:\n"
                 "1. Use task_update to mark each task as completed.\n"
                 "2. Use send_message to send a brief summary of your findings to team-lead.\n"
+                "3. If you created any files (reports, code, images, diagrams, etc.), "
+                "list their FULL absolute paths in your summary to team-lead.\n"
                 "If you need clarification from the user, use ask_user.\n"
                 "Do NOT use emojis in any output or messages."
+                + _shutdown_section
             )
 
         worker_role = _AgentRole(
@@ -1027,7 +1042,22 @@ async def _execute_team_tool(
         }
 
     elif tool_name == "exit_plan_mode":
+        # Accept both team schema ("plan") and non-team schema ("plan_summary"/"steps")
         plan = tool_input.get("plan", "")
+        if not plan:
+            # Fallback: reconstruct from non-team schema fields
+            summary = tool_input.get("plan_summary", "")
+            steps = tool_input.get("steps", [])
+            if summary or steps:
+                parts = []
+                if summary:
+                    parts.append(summary)
+                if steps:
+                    parts.append("\n".join(f"- {s}" for s in steps))
+                files = tool_input.get("files_to_modify", [])
+                if files:
+                    parts.append("Files: " + ", ".join(files))
+                plan = "\n\n".join(parts)
         if not plan:
             return {"error": "plan is required"}
 
@@ -1103,9 +1133,15 @@ async def _load_team_tools() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.warning(f"Failed to load tools: {e}")
 
-    # Add team tool schemas (excluding spawn_worker — that's team-lead only)
+    # Add team tool schemas (excluding spawn_worker — that's team-lead only).
+    # Team schemas OVERRIDE MCP schemas with the same name to avoid
+    # parameter mismatches (e.g. exit_plan_mode has different schemas
+    # in schemas.py vs schemas_team.py).
     from mcp_tools.schemas_team import TEAM_TOOL_DEFINITIONS
     import copy
+    team_override_names = {td["name"] for td in TEAM_TOOL_DEFINITIONS if td["name"] != "spawn_worker"}
+    tools = [t for t in tools if t.get("name") not in team_override_names]
+    seen_names -= team_override_names
     for td in TEAM_TOOL_DEFINITIONS:
         if td["name"] == "spawn_worker":
             continue  # Only available to team lead via _load_team_only_tools
