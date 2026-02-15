@@ -419,6 +419,12 @@
                         </svg>
                         Memory
                     </button>
+                    <button class="settings-tab" data-tab="integrations" onclick="switchSettingsTab('integrations')">
+                        <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                            <path d="M16 3h5v5M4 20L21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>
+                        </svg>
+                        Integrations
+                    </button>
                 </div>
 
                 <!-- Right Content Area -->
@@ -625,6 +631,38 @@
                             </div>
                             <div class="hint" style="margin-top: 4px;">Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
                         </div>
+                    </div>
+
+                    <!-- Integrations Tab -->
+                    <div class="settings-tab-panel" id="tab-integrations">
+
+                        <!-- ── Feishu Bot ── -->
+                        <div class="provider-section">
+                            <h3 style="margin: 0 0 8px; font-size: 15px; font-weight: 600; color: var(--text-primary);">Feishu Bot</h3>
+                            <div class="hint" style="margin-bottom: 16px; line-height: 1.6;">
+                                Connect Springo to Feishu via WebSocket long-connection. No public IP needed.<br>
+                                Create a bot at <code>open.feishu.cn</code> and enable <strong>Events Subscription</strong> with <strong>Long Connection</strong> mode.
+                            </div>
+                            <div class="setting-group">
+                                <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                    <input type="checkbox" id="settings-feishu-enabled" style="width: auto;">
+                                    Enable Feishu Bot
+                                </label>
+                            </div>
+                            <div class="setting-group">
+                                <label>App ID</label>
+                                <input type="text" id="settings-feishu-app-id" placeholder="cli_xxxxxxxxxx">
+                            </div>
+                            <div class="setting-group">
+                                <label>App Secret</label>
+                                <input type="password" id="settings-feishu-app-secret" placeholder="Enter app secret">
+                            </div>
+                            <div class="setting-group" style="margin-top: 12px;">
+                                <button onclick="testFeishuConnection()" id="test-feishu-btn">Test Connection</button>
+                                <span id="feishu-connection-status" style="margin-left: 12px; font-size: 13px;"></span>
+                            </div>
+                            </div>
+
                     </div>
                 </div>
             </div>

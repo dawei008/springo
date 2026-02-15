@@ -482,6 +482,138 @@ def get_current_working_dir() -> str:
     return _working_dir
 
 
+# ============ Feishu Bot Config ============
+
+class FeishuConfigRequest(BaseModel):
+    enabled: Optional[bool] = None
+    app_id: Optional[str] = None
+    app_secret: Optional[str] = None
+
+
+@router.get("/config/feishu")
+async def get_feishu_config() -> Dict[str, Any]:
+    """Get Feishu bot configuration (secrets masked)."""
+    import json as json_module
+
+    result: Dict[str, Any] = {
+        "enabled": False,
+        "app_id": "",
+        "app_secret_masked": "",
+        "running": False,
+    }
+    try:
+        cfg_file = os.path.expanduser("~/.springo/config.json")
+        if os.path.exists(cfg_file):
+            with open(cfg_file, 'r', encoding='utf-8') as f:
+                cfg = json_module.load(f)
+            feishu = cfg.get("integrations", {}).get("feishu", {})
+            result["enabled"] = feishu.get("enabled", False)
+            result["app_id"] = feishu.get("app_id", "")
+            secret = feishu.get("app_secret", "")
+            result["app_secret_masked"] = (
+                f"{secret[:4]}...{secret[-4:]}" if len(secret) > 8 else ("***" if secret else "")
+            )
+
+        # Check if feishu bot thread is running
+        try:
+            from ..services.feishu_bot import _feishu_thread
+            result["running"] = _feishu_thread is not None and _feishu_thread.is_alive()
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Get Feishu config error: {e}")
+    return result
+
+
+@router.post("/config/feishu")
+async def set_feishu_config(request: FeishuConfigRequest) -> Dict[str, Any]:
+    """Save Feishu bot configuration to ~/.springo/config.json."""
+    import json as json_module
+
+    CONFIG_DIR = os.path.expanduser("~/.springo")
+    CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    try:
+        config = {}
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json_module.load(f)
+
+        if "integrations" not in config:
+            config["integrations"] = {}
+        if "feishu" not in config["integrations"]:
+            config["integrations"]["feishu"] = {}
+
+        feishu = config["integrations"]["feishu"]
+        if request.enabled is not None:
+            feishu["enabled"] = request.enabled
+        if request.app_id is not None:
+            feishu["app_id"] = request.app_id
+        if request.app_secret is not None:
+            feishu["app_secret"] = request.app_secret
+
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json_module.dump(config, f, indent=2, ensure_ascii=False)
+
+        # Hot-reload: restart Feishu bot with new config
+        restarted = False
+        try:
+            from ..services.feishu_bot import restart_feishu_bot
+            restarted = await restart_feishu_bot()
+        except Exception as e:
+            logger.warning(f"Feishu bot restart failed: {e}")
+
+        return {"success": True, "running": restarted}
+    except Exception as e:
+        logger.error(f"Set Feishu config error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/config/feishu/test")
+async def test_feishu_connection() -> Dict[str, Any]:
+    """Test Feishu bot credentials by calling the tenant_access_token API."""
+    import json as json_module
+    import httpx
+
+    # Read stored config
+    app_id = ""
+    app_secret = ""
+    try:
+        cfg_file = os.path.expanduser("~/.springo/config.json")
+        if os.path.exists(cfg_file):
+            with open(cfg_file, 'r', encoding='utf-8') as f:
+                cfg = json_module.load(f)
+            feishu = cfg.get("integrations", {}).get("feishu", {})
+            app_id = feishu.get("app_id", "")
+            app_secret = feishu.get("app_secret", "")
+    except Exception:
+        pass
+
+    if not app_id or not app_secret:
+        return {"success": False, "error": "App ID and App Secret are required"}
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal",
+                json={"app_id": app_id, "app_secret": app_secret},
+            )
+            data = resp.json()
+            if data.get("code") == 0:
+                return {
+                    "success": True,
+                    "message": "Feishu credentials valid. Tenant access token obtained.",
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Feishu API error {data.get('code')}: {data.get('msg', 'Unknown error')}",
+                }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # ============ Vendor API Keys ============
 
 class VendorKeyRequest(BaseModel):

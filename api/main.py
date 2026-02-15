@@ -143,6 +143,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to initialize Team Manager: {e}")
 
+    # Initialize Feishu Bot (if configured)
+    try:
+        from .services.feishu_bot import init_feishu_bot
+        await init_feishu_bot()
+    except Exception as e:
+        logger.debug(f"Feishu bot not started: {e}")
+
     # Initialize LSP Manager (lazy — servers start on first tool call)
     try:
         from .services.lsp_manager import get_lsp_manager
@@ -184,6 +191,11 @@ async def lifespan(app: FastAPI):
         await shutdown_team_manager()
     except Exception as e:
         logger.warning(f"Error closing Team Manager: {e}")
+    try:
+        from .services.feishu_bot import shutdown_feishu_bot
+        shutdown_feishu_bot()
+    except Exception as e:
+        logger.warning(f"Error closing Feishu bot: {e}")
     try:
         from .services.lsp_manager import shutdown_lsp_manager
         await shutdown_lsp_manager()

@@ -5793,6 +5793,8 @@ Be concise and helpful in your responses.`;
             loadMiniMaxSettings();
             // Load Memory settings
             loadMemorySettings();
+            // Load Feishu settings
+            loadFeishuSettings();
             // Load Skills and MCP servers lists
             loadSkillsList();
             loadMcpServersList();
@@ -5826,6 +5828,8 @@ Be concise and helpful in your responses.`;
             saveAwsSettings();
             // Save DeepSeek settings
             saveDeepSeekSettings();
+            // Save Feishu settings
+            saveFeishuSettings();
             // Save Memory settings
             saveMemorySettings();
         }
@@ -6434,6 +6438,95 @@ Be concise and helpful in your responses.`;
                 }
             }
         });
+
+        // ==================== Feishu Bot Settings ====================
+
+        async function loadFeishuSettings() {
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/feishu`);
+                const data = await res.json();
+                const statusEl = document.getElementById('feishu-connection-status');
+
+                document.getElementById('settings-feishu-enabled').checked = data.enabled || false;
+                document.getElementById('settings-feishu-app-id').value = data.app_id || '';
+                // Don't populate password field with masked value
+
+                if (data.running) {
+                    statusEl.innerHTML = '<span style="color: #22c55e;">● Running (WebSocket connected)</span>';
+                } else if (data.enabled && data.app_id) {
+                    statusEl.innerHTML = '<span style="color: #f59e0b;">● Configured but not running</span>';
+                } else {
+                    statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not configured</span>';
+                }
+            } catch (e) {
+                console.log('Failed to load Feishu settings:', e);
+            }
+        }
+
+        async function saveFeishuSettings() {
+            const enabled = document.getElementById('settings-feishu-enabled')?.checked;
+            const appId = document.getElementById('settings-feishu-app-id')?.value?.trim();
+            const appSecret = document.getElementById('settings-feishu-app-secret')?.value?.trim();
+
+            if (enabled === undefined) return;
+
+            const payload = { enabled, app_id: appId };
+            // Only include app_secret if user entered a new one
+            if (appSecret) payload.app_secret = appSecret;
+
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/feishu`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                const statusEl = document.getElementById('feishu-connection-status');
+                if (statusEl) {
+                    if (data.running) {
+                        statusEl.innerHTML = '<span style="color: #22c55e;">● Running (WebSocket connected)</span>';
+                    } else if (!enabled) {
+                        statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Disabled</span>';
+                    } else {
+                        statusEl.innerHTML = '<span style="color: var(--text-tertiary);">Not running</span>';
+                    }
+                }
+                console.log('Feishu settings saved, running:', data.running);
+            } catch (e) {
+                console.error('Failed to save Feishu settings:', e);
+            }
+        }
+
+        async function testFeishuConnection() {
+            const btn = document.getElementById('test-feishu-btn');
+            const statusEl = document.getElementById('feishu-connection-status');
+
+            btn.disabled = true;
+            btn.textContent = 'Testing...';
+            statusEl.innerHTML = '';
+
+            // Save settings first
+            await saveFeishuSettings();
+
+            try {
+                const res = await fetch(`${BASE_URL}/v1/config/feishu/test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    statusEl.innerHTML = `<span style="color: #22c55e;">✓ ${data.message}</span>`;
+                } else {
+                    statusEl.innerHTML = `<span style="color: #ef4444;">✗ ${data.error}</span>`;
+                }
+            } catch (e) {
+                statusEl.innerHTML = `<span style="color: #ef4444;">✗ Connection failed: ${e.message}</span>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Test Connection';
+            }
+        }
 
         // ==================== Memory Sync Status ====================
         let memorySyncStatusInterval = null;

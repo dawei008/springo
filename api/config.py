@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     max_context_tokens: int = Field(default=200000, description="Max context window tokens (200K)")
     compact_threshold: int = Field(default=120000, description="Token threshold to trigger context compaction")
 
+    # Feishu Integration
+    feishu_enabled: bool = Field(default=False, description="Enable Feishu bot integration")
+    feishu_app_id: str = Field(default="", description="Feishu app ID")
+    feishu_app_secret: str = Field(default="", description="Feishu app secret")
+
     # Agent Teams — Collaborative mode limits
     team_agent_wall_clock_timeout: int = Field(
         default=604800, description="Max wall-clock seconds per agent (default 7d)")
