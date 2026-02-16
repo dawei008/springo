@@ -23,10 +23,25 @@ def enter_plan_mode(reason: str = "") -> Dict[str, Any]:
     }
 
 
-def exit_plan_mode(plan: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Exit plan mode and optionally submit a plan for approval"""
+def exit_plan_mode(plan=None, plan_summary: str = None, steps: list = None, files_to_modify: list = None) -> Dict[str, Any]:
+    """Exit plan mode and optionally submit a plan for approval.
+
+    Accepts either:
+      - plan (dict or str): from schemas_team.py
+      - plan_summary + steps + files_to_modify: from schemas.py
+    """
     state = get_session_state()
     state["plan_mode"] = False
+
+    # Normalize: build plan dict from whichever args were provided
+    if plan_summary or steps:
+        plan = {
+            "summary": plan_summary or "",
+            "steps": steps or [],
+            "files_to_modify": files_to_modify or [],
+        }
+    elif isinstance(plan, str):
+        plan = {"summary": plan}
 
     if plan:
         state["pending_plan"] = plan

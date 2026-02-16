@@ -6,9 +6,7 @@ import os
 import json
 import hashlib
 import logging
-import threading
 from typing import Any, Dict, List, Optional
-from pathlib import Path
 from datetime import datetime
 
 from ..config import settings
@@ -27,40 +25,16 @@ class SessionStore:
         """初始化会话存储"""
         self.sessions_dir = settings.session_storage_path
         self._ensure_dir_exists()
-        # Memory sync lazy init
-        self._memory_sync_enabled = False
-        self._memory_sync_init_started = False
-        self._memory_sync_lock = threading.Lock()
 
     def _ensure_dir_exists(self):
         """确保会话目录存在"""
         os.makedirs(self.sessions_dir, exist_ok=True)
 
-    def _ensure_memory_sync_initialized(self):
-        """后台线程懒初始化 memory sync（非阻塞）"""
-        if self._memory_sync_enabled or self._memory_sync_init_started:
-            return
-        with self._memory_sync_lock:
-            if self._memory_sync_init_started:
-                return
-            self._memory_sync_init_started = True
-            try:
-                from .memory_sync import get_sync_manager
-                mgr = get_sync_manager()
-                if mgr and mgr._initialized:
-                    self._memory_sync_enabled = True
-                    logger.debug("SessionStore: memory sync integration enabled")
-            except Exception as e:
-                logger.debug(f"SessionStore: memory sync not available: {e}")
-
-    def _get_sync_manager(self):
-        """获取 memory sync manager（懒导入避免循环依赖）"""
-        self._ensure_memory_sync_initialized()
-        if not self._memory_sync_enabled:
-            return None
+    def _get_memory_backend(self):
+        """获取当前 memory backend（通过抽象层，解耦具体实现）"""
         try:
-            from .memory_sync import get_sync_manager
-            return get_sync_manager()
+            from .memory_backend import get_memory_backend
+            return get_memory_backend()
         except Exception:
             return None
 
@@ -317,11 +291,11 @@ class SessionStore:
             with open(session_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-            # Trigger memory sync
-            sync_mgr = self._get_sync_manager()
-            if sync_mgr:
+            # Trigger memory backend
+            backend = self._get_memory_backend()
+            if backend:
                 actor = "assistant" if message.get("role") == "assistant" else "user"
-                sync_mgr.queue_message(session_id, message, actor)
+                backend.on_message(session_id, message, actor)
 
             return {"success": True, "session_id": session_id}
 
@@ -354,11 +328,11 @@ class SessionStore:
                     }
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-            # Trigger memory sync (batch)
-            sync_mgr = self._get_sync_manager()
+            # Trigger memory backend (batch)
+            backend = self._get_memory_backend()
             queued = 0
-            if sync_mgr:
-                queued = sync_mgr.queue_conversation(session_id, messages)
+            if backend:
+                queued = backend.on_conversation(session_id, messages)
 
             return {
                 "success": True,
@@ -426,11 +400,11 @@ class SessionStore:
             except Exception as e:
                 logger.warning(f"Failed to reset sync state for {session_id}: {e}")
 
-            # 重新队列所有消息到 memory sync
-            sync_mgr = self._get_sync_manager()
+            # 重新队列所有消息到 memory backend
+            backend = self._get_memory_backend()
             queued = 0
-            if sync_mgr:
-                queued = sync_mgr.queue_conversation(session_id, messages)
+            if backend:
+                queued = backend.on_conversation(session_id, messages)
 
             file_size = os.path.getsize(session_file)
             if file_size > MAX_SESSION_FILE_HARD_LIMIT:

@@ -602,13 +602,22 @@
 
                     <!-- Memory Tab -->
                     <div class="settings-tab-panel" id="tab-memory">
-                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">AgentCore Memory</h3>
+                        <h3 style="margin: 0 0 12px; font-size: 14px; color: var(--text-secondary);">Memory</h3>
                         <div class="setting-group">
                             <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
                                 <input type="checkbox" id="settings-memory-enabled" style="width: auto;">
                                 Enable Memory Sync
                             </label>
                         </div>
+                        <div class="setting-group">
+                            <label>Backend</label>
+                            <select id="settings-memory-backend">
+                                <option value="agentcore">AgentCore Memory (AWS)</option>
+                                <option value="local">Local Only (JSONL)</option>
+                            </select>
+                            <div class="hint" style="margin-top: 4px;">AgentCore syncs to cloud; Local stores only in JSONL files.</div>
+                        </div>
+                        <div id="agentcore-settings">
                         <div class="setting-group">
                             <label>Memory ID</label>
                             <input type="text" id="settings-memory-id" placeholder="e.g., springo_memory-xxxxx">
@@ -631,6 +640,7 @@
                             </div>
                             <div class="hint" style="margin-top: 4px;">Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
                         </div>
+                        </div><!-- /agentcore-settings -->
                     </div>
 
                     <!-- Integrations Tab -->

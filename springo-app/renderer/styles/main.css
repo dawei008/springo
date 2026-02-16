@@ -2005,7 +2005,8 @@
             border-bottom: none;
         }
 
-        .skill-picker-item:hover {
+        .skill-picker-item:hover,
+        .skill-picker-item.active {
             background: var(--bg-secondary);
         }
 

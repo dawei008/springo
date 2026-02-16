@@ -555,6 +555,7 @@
         let availableSkills = [];
         let activeSkill = null;  // Currently active skill for the conversation
         let showSkillPicker = false;
+        let skillPickerIndex = 0;  // currently highlighted item in skill picker
 
         let teamModeEnabled = false;
         let teamCollaborativeMode = false; // false = classic, true = collaborative
@@ -723,6 +724,34 @@
             });
 
             input.addEventListener('keydown', (e) => {
+                // Skill picker keyboard navigation (arrow keys + Enter)
+                if (showSkillPicker) {
+                    const items = document.querySelectorAll('.skill-picker-item');
+                    if (items.length > 0) {
+                        if (e.key === 'ArrowDown') {
+                            e.preventDefault();
+                            skillPickerIndex = Math.min(skillPickerIndex + 1, items.length - 1);
+                            updateSkillPickerHighlight(items);
+                            return;
+                        }
+                        if (e.key === 'ArrowUp') {
+                            e.preventDefault();
+                            skillPickerIndex = Math.max(skillPickerIndex - 1, 0);
+                            updateSkillPickerHighlight(items);
+                            return;
+                        }
+                        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+                            e.preventDefault();
+                            items[skillPickerIndex]?.click();
+                            return;
+                        }
+                        if (e.key === 'Escape') {
+                            e.preventDefault();
+                            hideSkillPicker();
+                            return;
+                        }
+                    }
+                }
                 // Check isComposing to prevent sending during IME composition (Chinese/Japanese input)
                 if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
                     e.preventDefault();
@@ -731,14 +760,6 @@
                         const firstItem = document.querySelector('.session-picker-item');
                         if (firstItem) {
                             firstItem.click();
-                            return;
-                        }
-                    }
-                    // If skill picker is visible, select the first item
-                    if (showSkillPicker) {
-                        const firstSkill = document.querySelector('.skill-picker-item');
-                        if (firstSkill) {
-                            firstSkill.click();
                             return;
                         }
                     }
@@ -913,6 +934,18 @@
 
             picker.style.display = 'block';
             showSkillPicker = true;
+            skillPickerIndex = 0;
+            // Highlight first item by default
+            const items = picker.querySelectorAll('.skill-picker-item');
+            updateSkillPickerHighlight(items);
+        }
+
+        function updateSkillPickerHighlight(items) {
+            items.forEach((el, i) => {
+                el.classList.toggle('active', i === skillPickerIndex);
+            });
+            // Scroll highlighted item into view
+            items[skillPickerIndex]?.scrollIntoView({ block: 'nearest' });
         }
 
         // Select a built-in command from the picker
@@ -6300,6 +6333,8 @@ Be concise and helpful in your responses.`;
                 document.getElementById('settings-memory-enabled').checked = memData.memory_enabled !== false;
                 document.getElementById('settings-memory-region').value = memData.memory_region || 'us-west-2';
                 document.getElementById('settings-memory-id').value = memData.memory_id || '';
+                document.getElementById('settings-memory-backend').value = memData.memory_backend || 'agentcore';
+                toggleAgentCoreSettings();
 
                 // Load S3 config
                 try {
@@ -6313,6 +6348,14 @@ Be concise and helpful in your responses.`;
                 // LTM strategies only shown after user clicks Refresh
             } catch (e) {
                 console.log('Failed to load Memory settings:', e);
+            }
+        }
+
+        function toggleAgentCoreSettings() {
+            const backend = document.getElementById('settings-memory-backend')?.value;
+            const section = document.getElementById('agentcore-settings');
+            if (section) {
+                section.style.display = backend === 'agentcore' ? 'block' : 'none';
             }
         }
 
@@ -6387,6 +6430,7 @@ Be concise and helpful in your responses.`;
             const enabled = document.getElementById('settings-memory-enabled')?.checked;
             const memoryId = document.getElementById('settings-memory-id')?.value?.trim();
             const region = document.getElementById('settings-memory-region')?.value;
+            const backend = document.getElementById('settings-memory-backend')?.value;
             const s3Bucket = document.getElementById('settings-s3-bucket')?.value?.trim();
 
             if (enabled === undefined) return; // settings modal not open
@@ -6399,7 +6443,8 @@ Be concise and helpful in your responses.`;
                     body: JSON.stringify({
                         memory_enabled: enabled,
                         memory_id: memoryId,
-                        memory_region: region
+                        memory_region: region,
+                        memory_backend: backend
                     })
                 });
 
@@ -6427,7 +6472,7 @@ Be concise and helpful in your responses.`;
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            const memoryFields = ['settings-memory-id', 'settings-memory-enabled', 'settings-memory-region', 'settings-s3-bucket'];
+            const memoryFields = ['settings-memory-id', 'settings-memory-enabled', 'settings-memory-region', 'settings-memory-backend', 'settings-s3-bucket'];
             for (const id of memoryFields) {
                 const el = document.getElementById(id);
                 if (el) {
@@ -6436,6 +6481,11 @@ Be concise and helpful in your responses.`;
                         el.addEventListener('input', debouncedSaveMemorySettings);
                     }
                 }
+            }
+            // Toggle AgentCore-specific fields when backend changes
+            const backendSelect = document.getElementById('settings-memory-backend');
+            if (backendSelect) {
+                backendSelect.addEventListener('change', toggleAgentCoreSettings);
             }
         });
 
@@ -6587,7 +6637,7 @@ Be concise and helpful in your responses.`;
 
                 // Add tooltip with details (only place to show technical details)
                 document.getElementById('memory-sync-status').title =
-                    `AgentCore Memory Sync\n` +
+                    `Memory Sync (${data.memory_backend || 'agentcore'})\n` +
                     `Status: ${data.status || 'unknown'}\n` +
                     `Memory ID: ${data.memory_id || 'N/A'}\n` +
                     `Region: ${data.region || 'N/A'}\n` +

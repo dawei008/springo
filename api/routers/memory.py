@@ -39,6 +39,7 @@ async def get_memory_status() -> Dict[str, Any]:
 
     try:
         from ..services.memory_sync import get_sync_manager, load_memory_config
+        from ..services.memory_backend import get_memory_backend_type
 
         config = load_memory_config()
         memory_id = config.get("memory_id", "")
@@ -50,6 +51,7 @@ async def get_memory_status() -> Dict[str, Any]:
             "enabled": memory_enabled and bool(memory_id),
             "memory_id": memory_id,
             "region": memory_region,
+            "memory_backend": get_memory_backend_type(),
             "running": False,
             "sessions_synced": 0,
             "total_events": 0,

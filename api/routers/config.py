@@ -80,6 +80,7 @@ class MemoryConfigRequest(BaseModel):
     memory_id: Optional[str] = None
     memory_region: Optional[str] = None
     memory_enabled: Optional[bool] = None
+    memory_backend: Optional[str] = None  # "agentcore" | "local"
 
 
 class CreateMemoryRequest(BaseModel):
@@ -289,7 +290,10 @@ async def get_memory_config() -> Dict[str, Any]:
     """获取 Memory 配置"""
     try:
         from ..services.memory_sync import get_memory_config
-        return get_memory_config()
+        from ..services.memory_backend import get_memory_backend_type
+        config = get_memory_config()
+        config["memory_backend"] = get_memory_backend_type()
+        return config
     except Exception as e:
         logger.error(f"Get memory config error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -310,7 +314,20 @@ async def set_memory_config(request: MemoryConfigRequest) -> Dict[str, Any]:
             config["memory_region"] = request.memory_region
         if request.memory_enabled is not None:
             config["memory_enabled"] = request.memory_enabled
+        if request.memory_backend is not None:
+            config["memory_backend"] = request.memory_backend
         save_memory_config(config)
+
+        # Hot-swap memory backend if backend type changed
+        if request.memory_backend is not None:
+            try:
+                from ..services.memory_backend import init_memory_backend, get_memory_backend_type
+                current = get_memory_backend_type()
+                if request.memory_backend != current:
+                    init_memory_backend(request.memory_backend)
+                    logger.info(f"Memory backend hot-swapped: {current} -> {request.memory_backend}")
+            except Exception as e:
+                logger.warning(f"Memory backend hot-swap failed: {e}")
 
         # Auto-discover LTM strategies when enabling with a valid memory_id
         if config.get("memory_enabled") and config.get("memory_id"):

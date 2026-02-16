@@ -72,12 +72,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to initialize Session Store: {e}")
 
-    # Initialize Memory Sync (if configured)
+    # Initialize Memory Backend (agentcore / local / custom)
     try:
-        from .services.memory_sync import init_memory_sync
-        init_memory_sync()
+        from .services.memory_backend import init_memory_backend, get_memory_backend_type
+        init_memory_backend()
+        logger.info(f"Memory backend: {get_memory_backend_type()}")
     except Exception as e:
-        logger.debug(f"Memory sync not started: {e}")
+        logger.debug(f"Memory backend not started: {e}")
 
     # Initialize S3 Sync (if configured)
     try:
@@ -177,10 +178,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error closing external MCP: {e}")
     try:
-        from .services.memory_sync import shutdown_memory_sync
-        shutdown_memory_sync()
+        from .services.memory_backend import shutdown_memory_backend
+        shutdown_memory_backend()
     except Exception as e:
-        logger.warning(f"Error closing memory sync: {e}")
+        logger.warning(f"Error closing memory backend: {e}")
     try:
         from .services.s3_sync import shutdown_s3_sync
         shutdown_s3_sync()

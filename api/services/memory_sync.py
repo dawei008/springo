@@ -102,6 +102,7 @@ def save_memory_config(memory_config: Dict[str, Any]) -> bool:
             "memory_id": memory_config.get("memory_id", existing.get("memory_id", "")),
             "memory_region": memory_config.get("memory_region", existing.get("memory_region", "us-west-2")),
             "memory_enabled": memory_config.get("memory_enabled", existing.get("memory_enabled", True)),
+            "memory_backend": memory_config.get("memory_backend", existing.get("memory_backend", "agentcore")),
         })
         file_config["memory"] = existing
         os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -502,6 +503,7 @@ def get_memory_config() -> Dict[str, Any]:
         "memory_id": config.get("memory_id", ""),
         "memory_region": config.get("memory_region", "us-west-2"),
         "memory_enabled": config.get("memory_enabled", True),
+        "memory_backend": config.get("memory_backend", "agentcore"),
         "batch_size": config.get("batch_size", 5),
         "batch_timeout": config.get("batch_timeout", 30),
         "max_retries": config.get("max_retries", 3),
