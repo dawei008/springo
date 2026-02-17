@@ -6746,11 +6746,12 @@ Be concise and helpful in your responses.`;
                     const isEnabled = server.enabled !== false;
                     const status = server.status || 'configured';
                     const toolCount = server.tools || 0;
+                    const cachedTools = server.cached_tools || 0;
                     const description = server.description || server.command || '';
 
                     // Status display
                     let statusClass = 'stopped';
-                    let statusText = 'Ready';
+                    let statusText = cachedTools > 0 ? `Ready (${cachedTools} tools)` : 'No tools cached';
                     if (!isEnabled) {
                         statusClass = 'disabled';
                         statusText = 'Disabled';
@@ -6851,6 +6852,28 @@ Be concise and helpful in your responses.`;
                 await loadMcpServersList();
             } catch (e) {
                 alert('Failed to remove server: ' + e.message);
+            }
+        }
+
+        async function refreshMcpTools() {
+            const btn = document.getElementById('btn-refresh-mcp');
+            const origText = btn.textContent;
+            btn.textContent = 'Discovering...';
+            btn.disabled = true;
+            try {
+                const res = await fetch(`${BASE_URL}/v1/mcp/refresh-tools`, { method: 'POST' });
+                const data = await res.json();
+                if (data.discovered > 0) {
+                    btn.textContent = `Found ${data.discovered} new`;
+                } else {
+                    btn.textContent = 'All cached';
+                }
+                await loadMcpServersList();
+                setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+            } catch (e) {
+                btn.textContent = 'Error';
+                setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000);
+                console.error('Refresh MCP tools failed:', e);
             }
         }
 

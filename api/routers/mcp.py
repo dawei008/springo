@@ -98,6 +98,25 @@ async def refresh_server(server_name: str) -> ServerResponse:
         return ServerResponse(success=False, error=str(e))
 
 
+@router.post("/mcp/refresh-tools")
+async def refresh_tools() -> Dict[str, Any]:
+    """Discover tools for newly added MCP servers that aren't in the cache yet."""
+    try:
+        from ..services.mcp_client import get_external_mcp_manager
+        manager = get_external_mcp_manager()
+        results = manager.discover_uncached_tools()
+        discovered = sum(1 for r in results.values() if "tools" in r)
+        return {
+            "success": True,
+            "discovered": discovered,
+            "total_servers": len(results),
+            "results": results,
+        }
+    except Exception as e:
+        logger.error(f"Refresh MCP tools error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/mcp/tools")
 async def list_mcp_tools() -> Dict[str, Any]:
     """列出所有外部 MCP 工具"""

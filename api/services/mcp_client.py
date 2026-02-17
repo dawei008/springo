@@ -354,6 +354,7 @@ class ExternalMCPManager:
                 "status": config.get("status", "configured"),
                 "running": name in self.servers,
                 "tools": len(self.servers[name].tools) if name in self.servers else 0,
+                "cached_tools": len(self._tools_cache.get(name, [])),
                 "error": config.get("error"),
             })
         return result
@@ -563,6 +564,56 @@ class ExternalMCPManager:
             self.servers[server_name].stop()
             del self.servers[server_name]
         return self.ensure_server_started(server_name)
+
+    def discover_uncached_tools(self) -> Dict[str, Any]:
+        """Start uncached servers to discover their tools, then cache and register them.
+
+        Returns dict with results per server: {"server_name": {"tools": N} | {"error": "..."}}
+        """
+        if not self._config_loaded:
+            self.load_config(lazy=True)
+
+        uncached = [
+            name for name, cfg in self.server_configs.items()
+            if cfg.get("enabled", True) and cfg.get("status") != "disabled"
+            and name not in self._tools_cache
+        ]
+
+        if not uncached:
+            return {}
+
+        results = {}
+
+        def discover_one(server_name: str):
+            cfg = self.server_configs[server_name]
+            try:
+                server = MCPServerConnection(
+                    name=server_name,
+                    command=cfg.get("command"),
+                    args=cfg.get("args", []),
+                    env=cfg.get("env", {}),
+                )
+                if server.start():
+                    tool_defs = server.get_tool_definitions()
+                    if tool_defs:
+                        self.cache_server_tools(server_name, tool_defs)
+                        self._register_server_tools_deferred(server_name, server)
+                    # Keep server running (it's now available for calls)
+                    self.servers[server_name] = server
+                    self.server_configs[server_name]["status"] = "running"
+                    return (server_name, {"tools": len(server.tools)})
+                return (server_name, {"error": "Failed to start"})
+            except Exception as e:
+                return (server_name, {"error": str(e)})
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(uncached))) as executor:
+            futures = {executor.submit(discover_one, name): name for name in uncached}
+            for future in concurrent.futures.as_completed(futures):
+                name, result = future.result()
+                results[name] = result
+
+        logger.info(f"Discovered tools for {len(results)} uncached servers: {results}")
+        return results
 
 
 # Singleton

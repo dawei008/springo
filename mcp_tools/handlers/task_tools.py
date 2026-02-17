@@ -3,9 +3,12 @@ Task Management Tools
 Todo tracking, user questions, skills, and tool search
 """
 
+import logging
 from typing import Any, Dict, List
 
 from ..session import get_session_state, set_pending_question
+
+logger = logging.getLogger(__name__)
 
 # Skill loader import
 try:
@@ -270,11 +273,72 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
                 "message": f"Found {len(results)} tools but auto-activation failed. Use select:<tool_name> to try manually."
             }
 
-        # No results found
+        # No results found — try to discover tools from uncached servers matching the query
         if not results:
-            # List available servers as hint
             configured = manager.get_configured_servers()
             enabled = [s['name'] for s in configured if s.get('enabled', True)]
+
+            # Check if query matches a configured server that has no cached tools
+            matching_servers = [
+                s['name'] for s in configured
+                if s.get('enabled', True) and query_lower in s['name'].lower()
+                and s.get('cached_tools', 0) == 0 and not s.get('running')
+            ]
+
+            if matching_servers:
+                # Auto-discover: start server, cache tools, register deferred, search again
+                for server_name in matching_servers:
+                    try:
+                        if manager.ensure_server_started(server_name):
+                            logger.info(f"tool_search auto-discovered server: {server_name}")
+                    except Exception as e:
+                        logger.warning(f"tool_search failed to auto-discover {server_name}: {e}")
+
+                # Re-search now that new tools are registered
+                new_deferred = registry.get_deferred_tools()
+                scored_retry = []
+                for tool in new_deferred:
+                    name = tool.get("name", "").lower()
+                    desc = tool.get("description", "").lower()
+                    score = 0
+                    if query_lower in name:
+                        score += 10
+                    for word in query_lower.split():
+                        if word in name:
+                            score += 5
+                        if word in desc:
+                            score += 2
+                    if score > 0:
+                        scored_retry.append((score, tool))
+                scored_retry.sort(key=lambda x: x[0], reverse=True)
+                results = [t[1] for t in scored_retry[:max_results]]
+
+                if results and auto_activate:
+                    best_match = results[0]
+                    tool_name = best_match.get("name")
+                    result = activate_tool_with_server(tool_name)
+                    if result.get("success"):
+                        return {
+                            "success": True,
+                            "action": "auto_discovered_and_activated",
+                            "tool_name": tool_name,
+                            "tool": result.get("tool"),
+                            "search_results": results,
+                            "discovered_servers": matching_servers,
+                            "message": f"Auto-discovered server '{matching_servers[0]}' and activated '{tool_name}'. Ready to use."
+                        }
+
+                if results:
+                    return {
+                        "success": True,
+                        "action": "auto_discovered",
+                        "query": query,
+                        "results": results,
+                        "count": len(results),
+                        "discovered_servers": matching_servers,
+                        "message": f"Auto-discovered {len(results)} tools from server(s): {', '.join(matching_servers)}. Use select:<tool_name> to activate."
+                    }
+
             return {
                 "success": True,
                 "action": "search",

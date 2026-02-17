@@ -574,7 +574,10 @@
 
                         <div class="settings-section-header">
                             <h3>MCP Servers</h3>
-                            <button onclick="toggleMcpAddForm()">+ Add</button>
+                            <div style="display:flex;gap:6px;">
+                                <button onclick="refreshMcpTools()" id="btn-refresh-mcp" title="Discover tools for newly added servers">Refresh Tools</button>
+                                <button onclick="toggleMcpAddForm()">+ Add</button>
+                            </div>
                         </div>
                         <div class="settings-list" id="mcp-servers-list">
                             <div class="settings-list-empty">Loading MCP servers...</div>
