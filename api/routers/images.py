@@ -32,7 +32,9 @@ EXT_TO_MEDIA_TYPE = {
     'jpg': 'image/jpeg',
     'jpeg': 'image/jpeg',
     'gif': 'image/gif',
-    'webp': 'image/webp'
+    'webp': 'image/webp',
+    'svg': 'image/svg+xml',
+    'bmp': 'image/bmp',
 }
 
 
@@ -72,8 +74,47 @@ class ImageSearchResponse(BaseModel):
 
 # ============ Endpoints ============
 
-# NOTE: GET /images/search must be declared BEFORE GET /images/{session_id}/{image_filename}
-# to avoid "search" being matched as a session_id path parameter.
+# NOTE: GET /images/search and /images/file must be declared BEFORE
+# GET /images/{session_id}/{image_filename} to avoid path param conflicts.
+
+@router.get("/images/file")
+async def get_local_file_image(
+    path: str = Query(..., description="Absolute path to image file"),
+):
+    """
+    Serve a local image file by absolute path.
+    Used by tool visual rendering to display images saved by MCP tools.
+    Only serves files with recognized image extensions.
+    """
+    try:
+        # Resolve to real path to prevent symlink traversal
+        real_path = os.path.realpath(path)
+
+        # Must be an absolute path
+        if not os.path.isabs(real_path):
+            raise HTTPException(status_code=400, detail="Absolute path required")
+
+        # Must exist
+        if not os.path.isfile(real_path):
+            raise HTTPException(status_code=404, detail="File not found")
+
+        # Must have a recognized image extension
+        ext = real_path.rsplit('.', 1)[-1].lower() if '.' in real_path else ''
+        media_type = EXT_TO_MEDIA_TYPE.get(ext)
+        if not media_type:
+            raise HTTPException(status_code=400, detail=f"Unsupported image extension: .{ext}")
+
+        with open(real_path, 'rb') as f:
+            data = f.read()
+
+        return Response(content=data, media_type=media_type)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Local file image error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/images/search")
 async def search_images_get(

@@ -2733,6 +2733,10 @@
 
             // Post-render: load any inline image placeholders
             loadInlineImages(container);
+            // Post-render: activate HTML artifact iframes
+            activateArtifacts(container);
+            // Post-render: replay visual content from historical tool calls
+            replayToolVisualContent(messages, container);
         }
 
         // Make file paths clickable in HTML (applied AFTER markdown parsing)
@@ -2897,13 +2901,139 @@
             }
         });
 
+        // ==================== HTML Artifact Sandbox ====================
+        // Detects full HTML documents in model output and renders them in sandboxed iframes.
+        // Supports: HTML in ```html code fences, or raw <!DOCTYPE html> / <html> blocks.
+        // The model can include any CDN scripts (mermaid, chart.js, katex, etc.) in the HTML.
+
+        const _artifactStore = {};
+        let _artifactCounter = 0;
+
+        /**
+         * Extract HTML artifacts from text BEFORE markdown parsing.
+         * Replaces full HTML documents with placeholder divs that get activated as iframes post-render.
+         */
+        function extractHtmlArtifacts(text) {
+            if (!text || typeof text !== 'string') return text;
+
+            // Pattern 1: ```html ... ``` code fence containing a full HTML document
+            text = text.replace(/```html\s*\n([\s\S]*?)\n```/g, (match, code) => {
+                if (!isFullHtmlDocument(code)) return match; // Not a full doc, keep as code block
+                return createArtifactPlaceholder(code.trim());
+            });
+
+            // Pattern 2: Raw <!DOCTYPE html> ... </html> or <html> ... </html> (not in code fence)
+            text = text.replace(/(<!DOCTYPE\s+html[^>]*>[\s\S]*?<\/html>)/gi, (match) => {
+                return createArtifactPlaceholder(match.trim());
+            });
+            // Also catch <html>...</html> without doctype
+            if (!text.includes('artifact-container')) {
+                text = text.replace(/(<html[\s>][\s\S]*?<\/html>)/gi, (match) => {
+                    return createArtifactPlaceholder(match.trim());
+                });
+            }
+
+            return text;
+        }
+
+        function isFullHtmlDocument(code) {
+            const lower = code.trim().toLowerCase();
+            return (lower.includes('<!doctype html') || lower.includes('<html')) &&
+                   lower.includes('</html>');
+        }
+
+        // Dedup: reuse existing ID if same HTML was already stored (streaming re-renders)
+        function createArtifactPlaceholder(htmlSource) {
+            // Check if this exact HTML already has an ID
+            let id = Object.keys(_artifactStore).find(k => _artifactStore[k] === htmlSource);
+            if (!id) {
+                id = `artifact-${++_artifactCounter}`;
+                _artifactStore[id] = htmlSource;
+            }
+
+            // Extract <title> for display
+            const titleMatch = htmlSource.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            const title = titleMatch ? titleMatch[1].trim() : 'HTML Artifact';
+
+            // Return a placeholder div (markdown-safe, will survive marked.parse as raw HTML)
+            return `\n\n<div class="artifact-container" data-artifact-id="${id}">` +
+                `<div class="artifact-header">` +
+                `<span class="artifact-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><polyline points="13 2 13 9 20 9"/></svg></span>` +
+                `<span class="artifact-title">${escapeHTML(title)}</span>` +
+                `<button class="artifact-open-btn" onclick="window.openArtifactInNewWindow('${id}')" title="Open in new window">` +
+                `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>` +
+                `</button>` +
+                `</div>` +
+                `<div class="artifact-iframe-wrapper"><iframe class="artifact-iframe" data-artifact-id="${id}" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe></div>` +
+                `</div>\n\n`;
+        }
+
+        /**
+         * Post-render: inject srcdoc into artifact iframes.
+         * Call this after innerHTML is set on a container.
+         */
+        function activateArtifacts(container) {
+            if (!container) return;
+            container.querySelectorAll('iframe.artifact-iframe').forEach(iframe => {
+                const id = iframe.getAttribute('data-artifact-id');
+                if (!id || !_artifactStore[id]) return;
+                if (iframe.getAttribute('srcdoc')) return; // Already activated
+
+                iframe.srcdoc = _artifactStore[id];
+
+                // Auto-resize iframe to fit content
+                iframe.onload = () => {
+                    try {
+                        const doc = iframe.contentDocument || iframe.contentWindow?.document;
+                        if (doc) {
+                            const resizeObserver = new ResizeObserver(() => {
+                                const h = doc.documentElement.scrollHeight;
+                                if (h > 0) iframe.style.height = Math.min(h + 20, 800) + 'px';
+                            });
+                            resizeObserver.observe(doc.documentElement);
+                            // Initial size
+                            const h = doc.documentElement.scrollHeight;
+                            if (h > 0) iframe.style.height = Math.min(h + 20, 800) + 'px';
+                        }
+                    } catch (e) {
+                        // Cross-origin iframes can't be measured; use default height
+                        iframe.style.height = '500px';
+                    }
+                };
+            });
+        }
+
+        // Open artifact in a new detached window
+        window.openArtifactInNewWindow = function(artifactId) {
+            const html = _artifactStore[artifactId];
+            if (!html) return;
+
+            // Extract title for window
+            const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            const title = titleMatch ? titleMatch[1].trim() : 'Artifact';
+
+            // Use Electron API if available (window.open is blocked by setWindowOpenHandler)
+            if (window.electronAPI?.openArtifactWindow) {
+                window.electronAPI.openArtifactWindow(html, title);
+            } else {
+                const win = window.open('', '_blank', 'width=1024,height=768');
+                if (win) {
+                    win.document.open();
+                    win.document.write(html);
+                    win.document.close();
+                }
+            }
+        };
+
         function formatContent(content) {
             if (!content) return '';
 
             // Helper to parse markdown and make file paths clickable
-            // Order: marked.parse → linkifyFilePaths (on rendered HTML)
+            // Order: extract artifacts → marked.parse → linkifyFilePaths (on rendered HTML)
             const parseAndLinkify = (text) => {
                 if (!text || !text.trim()) return '';
+                // 0. Extract HTML artifacts before markdown parsing
+                text = extractHtmlArtifacts(text);
                 // 1. Parse markdown (this also handles URLs)
                 const parsed = marked.parse(text);
                 // 2. Linkify file paths in the rendered HTML
@@ -3314,6 +3444,10 @@
                             // Update inline panel immediately to show completion
                             if (currentConversationId === convId) {
                                 updateInlineChatToolPanel(toolUses);
+                                // Auto-render visual content from tool results
+                                if (matchingTool && !matchingTool.result?.error) {
+                                    injectToolVisualContent(matchingTool);
+                                }
                             }
 
                             break;
@@ -4206,6 +4340,314 @@
             return ''; // Return empty, container handles rendering
         }
 
+        /**
+         * Build an Excalidraw preview as inline SVG (no CDN dependencies).
+         * Converts Excalidraw JSON elements to SVG shapes.
+         */
+        function buildExcalidrawPreview(elementsJson) {
+            try {
+                let elements = typeof elementsJson === 'string' ? JSON.parse(elementsJson) : elementsJson;
+                if (!Array.isArray(elements)) return '';
+                const renderable = elements.filter(el => el.type && !['cameraUpdate'].includes(el.type));
+                if (renderable.length === 0) return '';
+
+                // Calculate bounding box
+                let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (const el of renderable) {
+                    const x = el.x || 0, y = el.y || 0;
+                    const w = el.width || (el.text ? el.text.length * (el.fontSize || 16) * 0.6 : 0);
+                    const h = el.height || (el.text ? (el.text.split('\n').length) * (el.fontSize || 16) * 1.3 : 0);
+                    minX = Math.min(minX, x);
+                    minY = Math.min(minY, y);
+                    maxX = Math.max(maxX, x + w);
+                    maxY = Math.max(maxY, y + h);
+                    // For arrows/lines, check points
+                    if (el.points) {
+                        for (const p of el.points) {
+                            minX = Math.min(minX, x + (p[0] || 0));
+                            minY = Math.min(minY, y + (p[1] || 0));
+                            maxX = Math.max(maxX, x + (p[0] || 0));
+                            maxY = Math.max(maxY, y + (p[1] || 0));
+                        }
+                    }
+                }
+
+                const pad = 30;
+                minX -= pad; minY -= pad; maxX += pad; maxY += pad;
+                const vw = maxX - minX, vh = maxY - minY;
+
+                // Render elements to SVG
+                const svgParts = [];
+                for (const el of renderable) {
+                    const stroke = el.strokeColor || '#1e1e1e';
+                    const fill = el.backgroundColor && el.backgroundColor !== 'transparent' ? el.backgroundColor : 'none';
+                    const sw = el.strokeWidth || 1;
+                    const opacity = (el.opacity != null ? el.opacity / 100 : 1);
+                    const x = el.x || 0, y = el.y || 0;
+
+                    switch (el.type) {
+                        case 'rectangle': {
+                            const w = el.width || 0, h = el.height || 0;
+                            const rx = el.roundness ? Math.min(w, h) * 0.1 : 0;
+                            svgParts.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${rx}" ` +
+                                `stroke="${escapeHTML(stroke)}" fill="${escapeHTML(fill)}" stroke-width="${sw}" opacity="${opacity}"/>`);
+                            break;
+                        }
+                        case 'diamond': {
+                            const w = el.width || 0, h = el.height || 0;
+                            const cx = x + w/2, cy = y + h/2;
+                            const pts = `${cx},${y} ${x+w},${cy} ${cx},${y+h} ${x},${cy}`;
+                            svgParts.push(`<polygon points="${pts}" stroke="${escapeHTML(stroke)}" fill="${escapeHTML(fill)}" ` +
+                                `stroke-width="${sw}" opacity="${opacity}"/>`);
+                            break;
+                        }
+                        case 'ellipse': {
+                            const rx = (el.width || 0) / 2, ry = (el.height || 0) / 2;
+                            svgParts.push(`<ellipse cx="${x + rx}" cy="${y + ry}" rx="${rx}" ry="${ry}" ` +
+                                `stroke="${escapeHTML(stroke)}" fill="${escapeHTML(fill)}" stroke-width="${sw}" opacity="${opacity}"/>`);
+                            break;
+                        }
+                        case 'text': {
+                            const fs = el.fontSize || 16;
+                            const lines = (el.text || '').split('\n');
+                            const anchor = el.textAlign === 'center' ? 'middle' : el.textAlign === 'right' ? 'end' : 'start';
+                            const tx = el.textAlign === 'center' ? x + (el.width || 0) / 2 : x;
+                            for (let li = 0; li < lines.length; li++) {
+                                const ty = y + fs * 0.85 + li * fs * 1.3;
+                                svgParts.push(`<text x="${tx}" y="${ty}" font-size="${fs}" fill="${escapeHTML(stroke)}" ` +
+                                    `font-family="'Segoe UI', system-ui, sans-serif" text-anchor="${anchor}" opacity="${opacity}">` +
+                                    `${escapeHTML(lines[li])}</text>`);
+                            }
+                            break;
+                        }
+                        case 'arrow':
+                        case 'line': {
+                            if (el.points && el.points.length >= 2) {
+                                const pts = el.points.map(p => `${x + (p[0]||0)},${y + (p[1]||0)}`).join(' ');
+                                const markerId = el.type === 'arrow' ? `arrow-${el.id || Math.random().toString(36).slice(2)}` : '';
+                                if (markerId) {
+                                    svgParts.push(`<defs><marker id="${markerId}" viewBox="0 0 10 10" refX="9" refY="5" ` +
+                                        `markerWidth="6" markerHeight="6" orient="auto-start-reverse">` +
+                                        `<path d="M 0 0 L 10 5 L 0 10 z" fill="${escapeHTML(stroke)}"/></marker></defs>`);
+                                }
+                                svgParts.push(`<polyline points="${pts}" stroke="${escapeHTML(stroke)}" fill="none" ` +
+                                    `stroke-width="${sw}" opacity="${opacity}"` +
+                                    (markerId ? ` marker-end="url(#${markerId})"` : '') + `/>` );
+                            }
+                            break;
+                        }
+                        case 'freedraw': {
+                            if (el.points && el.points.length >= 2) {
+                                let d = `M ${x + el.points[0][0]} ${y + el.points[0][1]}`;
+                                for (let i = 1; i < el.points.length; i++) {
+                                    d += ` L ${x + el.points[i][0]} ${y + el.points[i][1]}`;
+                                }
+                                svgParts.push(`<path d="${d}" stroke="${escapeHTML(stroke)}" fill="none" ` +
+                                    `stroke-width="${sw}" opacity="${opacity}" stroke-linecap="round"/>`);
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                const svgContent = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${minX} ${minY} ${vw} ${vh}" ` +
+                    `style="max-width:100%;height:auto;background:#fff;border-radius:8px;">` +
+                    svgParts.join('\n') + `</svg>`;
+
+                // Wrap in a visual content div instead of iframe (no CDN needed)
+                return `<div class="tool-visual-content tool-visual-svg" style="padding:12px;background:#fff;">` +
+                    `<div class="tool-visual-header">` +
+                    `<span class="tool-visual-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5"/></svg></span>` +
+                    `<span class="tool-visual-label">Excalidraw Diagram</span>` +
+                    `</div>` + svgContent + `</div>`;
+            } catch (e) {
+                console.warn('Failed to build Excalidraw preview:', e);
+                return '';
+            }
+        }
+
+        /**
+         * Replay visual content from historical tool calls when loading a session.
+         * Scans messages for tool_use/tool_result pairs and injects visual content.
+         */
+        function replayToolVisualContent(messages, container) {
+            if (!messages || !container) return;
+
+            // Collect tool_use blocks and their results
+            const toolUseMap = {}; // id -> { name, input }
+            const toolResults = {}; // tool_use_id -> result content
+
+            for (const msg of messages) {
+                const content = msg.content;
+                if (!Array.isArray(content)) continue;
+                for (const block of content) {
+                    if (!block || typeof block !== 'object') continue;
+                    if (block.type === 'tool_use') {
+                        toolUseMap[block.id] = { name: block.name, input: block.input || {} };
+                    } else if (block.type === 'tool_result') {
+                        const resultContent = block.content;
+                        // Extract text from result
+                        let resultText = '';
+                        if (typeof resultContent === 'string') {
+                            resultText = resultContent;
+                        } else if (typeof resultContent === 'object' && resultContent !== null) {
+                            // Could be { content: [{type: "text", text: "..."}] } or plain object
+                            const inner = resultContent.content || resultContent;
+                            if (Array.isArray(inner)) {
+                                resultText = inner.map(c => (c && c.text) || '').join('\n');
+                            } else if (typeof inner === 'string') {
+                                resultText = inner;
+                            } else {
+                                resultText = JSON.stringify(inner);
+                            }
+                        }
+                        toolResults[block.tool_use_id] = resultText;
+                    }
+                }
+            }
+
+            // Inject visual content for each completed tool call
+            for (const [id, info] of Object.entries(toolUseMap)) {
+                const result = toolResults[id];
+                if (result === undefined) continue; // No result yet
+
+                // Build a tool-use-like object for injectToolVisualContent
+                const tu = {
+                    id: id,
+                    name: info.name,
+                    input: typeof info.input === 'string' ? (() => { try { return JSON.parse(info.input); } catch { return info.input; } })() : info.input,
+                    result: result,
+                    status: 'complete'
+                };
+
+                injectToolVisualContent(tu);
+            }
+        }
+
+        /**
+         * Universal tool visual content renderer.
+         * Detects visual content in tool results (or inputs) and renders inline.
+         * Handles: image file paths, image URLs, base64 images, SVG, excalidraw elements.
+         */
+        function injectToolVisualContent(tu) {
+            const chatContent = document.getElementById('chat-content');
+            if (!chatContent) return;
+
+            // 1. Excalidraw create_view: render from input elements
+            if (tu.name === 'excalidraw__create_view' && tu.input?.elements) {
+                const html = buildExcalidrawPreview(tu.input.elements);
+                if (html) {
+                    injectVisualElement(chatContent, html, `excalidraw-${tu.id}`);
+                }
+                return;
+            }
+
+            // 2. Extract visual content from tool result
+            const resultStr = typeof tu.result === 'string' ? tu.result : JSON.stringify(tu.result || '');
+
+            // 2a. Image URLs: https://...png/jpg/etc (check before file paths since URLs also contain /)
+            const imageUrlRegex = /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp)(?:\?[^\s"'`]*)?)/gi;
+            const imageUrls = resultStr.match(imageUrlRegex);
+            if (imageUrls) {
+                for (const url of [...new Set(imageUrls)]) {
+                    const urlDedupKey = `url-${tu.id}-${url.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 80)}`;
+                    const imgHtml = `<div class="tool-visual-content" data-visual-id="${urlDedupKey}">
+                        <img src="${escapeHTML(url)}" class="tool-visual-inline-image" alt="Tool output"
+                             onclick="window.openImagePreview(this.src)" onerror="this.parentElement.style.display='none'">
+                    </div>`;
+                    injectVisualElement(chatContent, imgHtml, urlDedupKey);
+                }
+                return;
+            }
+
+            // 2b. Image file paths: /path/to/file.png (local absolute paths only)
+            const imagePathRegex = /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi;
+            const imagePaths = resultStr.match(imagePathRegex);
+            if (imagePaths) {
+                for (const imgPath of [...new Set(imagePaths)]) {
+                    const cleanPath = imgPath.replace(/["\\']+$/g, '').trim();
+                    const dedupKey = `img-${tu.id}-${cleanPath.replace(/[^a-zA-Z0-9]/g, '_')}`;
+                    const imgHtml = `<div class="tool-visual-content" data-visual-id="${dedupKey}">
+                        <div class="tool-visual-header">
+                            <span class="tool-visual-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></span>
+                            <span class="tool-visual-label">${escapeHTML(cleanPath.split('/').pop())}</span>
+                            <a class="tool-visual-open" href="#" onclick="window.electronAPI?.openPath('${escapeHTML(cleanPath)}');return false;" title="Open file">Open</a>
+                        </div>
+                        <div class="tool-visual-image" data-src="${escapeHTML(cleanPath)}"></div>
+                    </div>`;
+                    injectVisualElement(chatContent, imgHtml, dedupKey);
+                }
+                // Load the images via backend
+                setTimeout(() => loadToolVisualImages(chatContent), 100);
+                return;
+            }
+
+            // 2c. Base64 image data in result
+            const base64Regex = /data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/;
+            const base64Match = resultStr.match(base64Regex);
+            if (base64Match) {
+                const imgHtml = `<div class="tool-visual-content" data-visual-id="b64-${tu.id}">
+                    <img src="${base64Match[0]}" class="tool-visual-inline-image" alt="Tool output"
+                         onclick="window.openImagePreview(this.src)">
+                </div>`;
+                injectVisualElement(chatContent, imgHtml, `b64-${tu.id}`);
+                return;
+            }
+
+            // 2d. SVG content in result
+            if (resultStr.includes('<svg') && resultStr.includes('</svg>')) {
+                const svgMatch = resultStr.match(/<svg[\s\S]*?<\/svg>/i);
+                if (svgMatch) {
+                    const svgHtml = `<div class="tool-visual-content tool-visual-svg" data-visual-id="svg-${tu.id}">
+                        ${svgMatch[0]}
+                    </div>`;
+                    injectVisualElement(chatContent, svgHtml, `svg-${tu.id}`);
+                    return;
+                }
+            }
+        }
+
+        /**
+         * Insert a visual element into chat content, with dedup.
+         */
+        function injectVisualElement(chatContent, html, dedupKey) {
+            if (chatContent.querySelector(`[data-visual-id="${dedupKey}"]`)) return;
+            const wrapper = document.createElement('div');
+            wrapper.innerHTML = html;
+            const el = wrapper.firstElementChild;
+            if (el) {
+                el.setAttribute('data-visual-id', dedupKey);
+                chatContent.appendChild(el);
+                activateArtifacts(chatContent);
+                scrollToBottom();
+            }
+        }
+
+        /**
+         * Load images from local file paths via backend API for tool visual content.
+         */
+        async function loadToolVisualImages(container) {
+            const imageDivs = container.querySelectorAll('.tool-visual-image[data-src]');
+            for (const div of imageDivs) {
+                if (div.querySelector('img')) continue; // Already loaded
+                const filePath = div.getAttribute('data-src');
+                if (!filePath) continue;
+                try {
+                    const res = await fetch(`${BASE_URL}/v1/images/file?path=${encodeURIComponent(filePath)}`);
+                    if (res.ok) {
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        div.innerHTML = `<img src="${url}" class="tool-visual-inline-image" alt="${escapeHTML(filePath.split('/').pop())}"
+                                              onclick="window.openImagePreview(this.src)">`;
+                    } else {
+                        div.innerHTML = `<span class="tool-visual-error">Image not found</span>`;
+                    }
+                } catch (e) {
+                    div.innerHTML = `<span class="tool-visual-error">Failed to load image</span>`;
+                }
+            }
+        }
+
         // Format tool calls for display in chat messages (fixed height, scrollable)
         function formatToolCallsForChat(toolUses) {
             if (!toolUses || toolUses.length === 0) return '';
@@ -4270,6 +4712,12 @@
                         </div>`;
                 }
 
+                // Excalidraw preview: render diagram inline when create_view succeeds
+                let excalidrawPreview = '';
+                if (tu.name === 'excalidraw__create_view' && hasResult && !hasError && tu.input?.elements) {
+                    excalidrawPreview = buildExcalidrawPreview(tu.input.elements);
+                }
+
                 return `
                     <div class="chat-tool-item ${hasError ? 'error' : hasResult ? 'success' : 'running'}">
                         <div class="chat-tool-header">
@@ -4284,6 +4732,7 @@
                             ${outputHtml}
                         </div>
                     </div>
+                    ${excalidrawPreview}
                 `;
             }).join('');
 
@@ -5485,6 +5934,8 @@ Be concise and helpful in your responses.`;
                 });
                 // Load inline images from file paths
                 loadInlineImages(lastMessageEl);
+                // Activate HTML artifact iframes
+                activateArtifacts(lastMessageEl);
                 // Auto-scroll to bottom as content updates
                 scrollToBottom();
             }

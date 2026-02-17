@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readFileBase64: (path) => ipcRenderer.invoke('read-file-base64', path),
     // Open URL in default browser (Chrome new tab)
     openExternal: (url) => ipcRenderer.invoke('open-external', url),
+    // Open HTML artifact in a new Electron window
+    openArtifactWindow: (html, title) => ipcRenderer.invoke('open-artifact-window', html, title),
     // Disk cache API (persists across macOS restarts)
     cache: {
         get: (key) => ipcRenderer.invoke('cache-get', key),

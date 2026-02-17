@@ -467,6 +467,35 @@ ipcMain.handle('open-external', async (event, url) => {
     }
 });
 
+// Open HTML artifact in a new window
+ipcMain.handle('open-artifact-window', async (event, html, title) => {
+    try {
+        const win = new BrowserWindow({
+            width: 1024,
+            height: 768,
+            title: title || 'Artifact',
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true
+            }
+        });
+        // Write HTML to a temp file and load it
+        const tmpDir = path.join(os.tmpdir(), 'springo-artifacts');
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpFile = path.join(tmpDir, `artifact-${Date.now()}.html`);
+        fs.writeFileSync(tmpFile, html, 'utf8');
+        win.loadFile(tmpFile);
+        // Clean up temp file when window closes
+        win.on('closed', () => {
+            try { fs.unlinkSync(tmpFile); } catch (e) { /* ignore */ }
+        });
+        return { success: true };
+    } catch (err) {
+        console.error('Failed to open artifact window:', err);
+        return { success: false, error: err.message };
+    }
+});
+
 // Disk cache IPC handlers (persists across macOS restarts)
 ipcMain.handle('cache-get', async (event, key) => {
     const cache = readCache();
