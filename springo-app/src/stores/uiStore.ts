@@ -18,6 +18,8 @@ export interface ActiveSkill {
   description: string;
 }
 
+export type RightPanelTab = 'tasks' | 'team' | 'schedules' | 'news';
+
 interface UIState {
   sidebarOpen: boolean;
   settingsOpen: boolean;
@@ -28,6 +30,8 @@ interface UIState {
   teamModeEnabled: boolean;
   activeTeamId: string | null;
   activeSkill: ActiveSkill | null;
+  rightPanelOpen: boolean;
+  rightPanelTab: RightPanelTab;
 
   // Actions
   toggleSidebar: () => void;
@@ -44,6 +48,9 @@ interface UIState {
   setActiveTeamId: (teamId: string | null) => void;
   setActiveSkill: (skill: ActiveSkill | null) => void;
   clearActiveSkill: () => void;
+  toggleRightPanel: () => void;
+  setRightPanelOpen: (open: boolean) => void;
+  setRightPanelTab: (tab: RightPanelTab) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -58,6 +65,8 @@ export const useUIStore = create<UIState>((set) => ({
   teamModeEnabled: false,
   activeTeamId: null,
   activeSkill: null,
+  rightPanelOpen: false,
+  rightPanelTab: 'tasks' as RightPanelTab,
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -101,4 +110,9 @@ export const useUIStore = create<UIState>((set) => ({
   setActiveSkill: (skill) => set({ activeSkill: skill }),
 
   clearActiveSkill: () => set({ activeSkill: null }),
+
+  toggleRightPanel: () =>
+    set((state) => ({ rightPanelOpen: !state.rightPanelOpen })),
+  setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
+  setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
 }));

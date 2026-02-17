@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import Message from './Message';
+import type { DisplayMessage } from './Message';
 import type { Message as MessageType, ContentBlock } from '@/types';
 
 /** Extract readable text from message content (string or ContentBlock[]). */
@@ -12,6 +13,8 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
         if (typeof c === 'string') return c;
         if (c.type === 'text') return c.text || '';
         if (c.type === 'image') return '[Image]';
+        if (c.type === 'tool_use') return '';
+        if (c.type === 'tool_result') return '';
         return '';
       })
       .filter(Boolean)
@@ -20,8 +23,11 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
   return '';
 }
 
-interface DisplayMessage extends MessageType {
-  mergedContent?: string;
+/** Check if a user message only contains tool_result blocks. */
+function isToolResultOnlyMessage(m: MessageType): boolean {
+  if (m.role !== 'user') return false;
+  if (!Array.isArray(m.content)) return false;
+  return (m.content as ContentBlock[]).some((c) => c.type === 'tool_result');
 }
 
 interface Props {
@@ -30,13 +36,11 @@ interface Props {
 
 export default function MessageList({ messages }: Props) {
   const displayMessages = useMemo(() => {
-    // Filter out internal messages
+    // Filter out internal messages for display
     const filtered = messages.filter((m, idx) => {
-      // Skip tool_result user messages
-      if (m.role === 'user' && Array.isArray(m.content)) {
-        return !(m.content as ContentBlock[]).some(
-          (c) => c.type === 'tool_result',
-        );
+      // Skip user messages that contain tool_result blocks
+      if (isToolResultOnlyMessage(m)) {
+        return false;
       }
       // Skip assistant messages that only have tool_use (no text),
       // but don't skip the last message (active streaming message)
@@ -49,7 +53,8 @@ export default function MessageList({ messages }: Props) {
       return true;
     });
 
-    // Merge consecutive assistant messages (but not delegation/task results)
+    // Merge consecutive assistant messages for display
+    // BUT don't merge delegation result messages - they should stay separate
     const result: DisplayMessage[] = [];
     for (const m of filtered) {
       const last = result[result.length - 1];
@@ -62,6 +67,7 @@ export default function MessageList({ messages }: Props) {
         !last.isTaskResult;
 
       if (shouldMerge) {
+        // Merge with previous assistant message - extract text properly
         const prevContent =
           last.mergedContent ||
           extractTextContent(last.displayContent as string | undefined) ||
@@ -73,6 +79,7 @@ export default function MessageList({ messages }: Props) {
           last.mergedContent = prevContent + '\n\n' + currContent;
         }
       } else {
+        // Add new message (clone to avoid modifying original)
         result.push({ ...m });
       }
     }
@@ -81,10 +88,10 @@ export default function MessageList({ messages }: Props) {
   }, [messages]);
 
   return (
-    <div className="message-list">
+    <>
       {displayMessages.map((msg, i) => (
         <Message key={`${msg.timestamp || i}-${i}`} message={msg} />
       ))}
-    </div>
+    </>
   );
 }

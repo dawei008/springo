@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useState, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -7,6 +7,23 @@ import type { Components } from 'react-markdown';
 
 interface Props {
   content: string;
+}
+
+/**
+ * Extract plain text from React children tree (used for code copy button).
+ */
+function extractText(children: React.ReactNode): string {
+  if (typeof children === 'string') return children;
+  if (typeof children === 'number') return String(children);
+  if (!children) return '';
+  if (Array.isArray(children)) {
+    return children.map(extractText).join('');
+  }
+  if (isValidElement(children)) {
+    const props = children.props as Record<string, unknown>;
+    return extractText(props.children as React.ReactNode);
+  }
+  return '';
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -29,17 +46,11 @@ function CopyButton({ text }: { text: string }) {
 export default function Markdown({ content }: Props) {
   const components: Components = {
     pre({ children, ...props }) {
-      // Extract code text for the copy button
-      let codeText = '';
-      if (children && typeof children === 'object' && 'props' in (children as React.ReactElement)) {
-        const codeEl = children as React.ReactElement<{ children?: React.ReactNode }>;
-        if (typeof codeEl.props.children === 'string') {
-          codeText = codeEl.props.children;
-        }
-      }
+      // Extract code text from children for the copy button
+      const codeText = extractText(children);
 
       return (
-        <pre {...props} className="code-block-wrapper">
+        <pre {...props}>
           {children}
           {codeText && <CopyButton text={codeText} />}
         </pre>
