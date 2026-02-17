@@ -76,6 +76,17 @@ export default function SettingsModal() {
 
   const backdropRef = useRef<HTMLDivElement>(null)
 
+  // Close on Escape key
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        closeSettings()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
   // --- Token limit calculation ---
   const selectedModel = models.find((m: ModelInfo) => m.id === localModel)
   const maxOutputTokens = selectedModel
@@ -171,6 +182,38 @@ export default function SettingsModal() {
         })
       }
     }
+    // Save AWS credentials to backend if entered
+    if (awsAccessKey && awsSecretKey) {
+      fetch(`${BASE_URL}/v1/config/aws`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          access_key_id: awsAccessKey,
+          secret_access_key: awsSecretKey,
+          region: awsRegion,
+        }),
+      }).catch(() => {})
+    }
+    // Save DeepSeek key to backend if entered
+    if (deepseekApiKey) {
+      fetch(`${BASE_URL}/v1/config/vendor-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vendor: 'deepseek', api_key: deepseekApiKey }),
+      }).catch(() => {})
+    }
+    // Save MiniMax key to backend if entered
+    if (minimaxApiKey) {
+      fetch(`${BASE_URL}/v1/config/vendor-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ vendor: 'minimax', api_key: minimaxApiKey }),
+      }).catch(() => {})
+    }
+    // Save memory settings to backend
+    saveMemorySettings()
+    // Save Feishu settings to backend
+    saveFeishuSettings()
     setSettingsOpen(false)
   }
 
@@ -467,7 +510,7 @@ export default function SettingsModal() {
   }
 
   return (
-    <div className="modal-overlay" id="settings-modal" ref={backdropRef} onClick={handleOverlayClick}>
+    <div className="modal-overlay active" id="settings-modal" ref={backdropRef} onClick={handleOverlayClick}>
       <div className="modal">
         <div className="modal-header">
           <h2>Settings</h2>

@@ -3,6 +3,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
+import { api } from '@/services/api';
 import type { Attachment, Skill } from '@/types';
 
 const BASE_URL = 'http://127.0.0.1:8081';
@@ -52,7 +53,9 @@ export default function MessageInput() {
   const activeSkill = useUIStore((s) => s.activeSkill);
   const clearActiveSkill = useUIStore((s) => s.clearActiveSkill);
   const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
-  const setTeamModeEnabled = useUIStore((s) => s.setTeamModeEnabled);
+  const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
+  const cycleTeamMode = useUIStore((s) => s.cycleTeamMode);
+  const activeTeamId = useUIStore((s) => s.activeTeamId);
 
   // Load available skills on mount
   useEffect(() => {
@@ -208,6 +211,30 @@ export default function MessageInput() {
   const handleSend = useCallback(async () => {
     const content = text.trim();
     if (!content && attachments.length === 0) return;
+
+    // If an active team is running, send to team lead instead of new request
+    if (activeTeamId && isStreaming && content) {
+      setText('');
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+      // Add user message to chat display
+      const convId = currentSessionId;
+      if (convId) {
+        useChatStore.getState().addMessage(convId, {
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+        });
+      }
+      try {
+        await api.teams.message(activeTeamId, { content, sender: 'user' });
+      } catch (e) {
+        useUIStore.getState().showToast('Failed to send message to team', 'error');
+      }
+      return;
+    }
+
     if (isStreaming) return;
 
     let convId = currentSessionId;
@@ -250,6 +277,7 @@ export default function MessageInput() {
     settings,
     activeSkill,
     clearActiveSkill,
+    activeTeamId,
   ]);
 
   const handleStop = useCallback(() => {
@@ -416,8 +444,8 @@ export default function MessageInput() {
   }, []);
 
   const toggleTeamMode = useCallback(() => {
-    setTeamModeEnabled(!teamModeEnabled);
-  }, [teamModeEnabled, setTeamModeEnabled]);
+    cycleTeamMode();
+  }, [cycleTeamMode]);
 
   // Toggle context breakdown popup
   const toggleContextBreakdown = useCallback(
@@ -459,7 +487,7 @@ export default function MessageInput() {
     ? getFilteredSkillItems(text.substring(1).toLowerCase())
     : [];
 
-  const canSend = (text.trim() || attachments.length > 0) && !isStreaming;
+  const canSend = (text.trim() || attachments.length > 0) && (!isStreaming || !!activeTeamId);
 
   // Determine context indicator class
   const contextIndicatorClass =
@@ -564,7 +592,11 @@ export default function MessageInput() {
             placeholder={
               activeSkill
                 ? `Using /${activeSkill.name} skill - Enter your request...`
-                : 'Message Springo... (/ for skills)'
+                : teamCollaborativeMode
+                  ? 'Team Collaborative Mode - agents work together...'
+                  : teamModeEnabled
+                    ? 'Team Mode - multi-agent collaboration...'
+                    : 'Message Springo... (/ for skills)'
             }
             rows={1}
             value={text}
@@ -576,9 +608,15 @@ export default function MessageInput() {
 
           <button
             id="team-toggle"
-            className={`team-toggle-btn${teamModeEnabled ? ' active' : ''}`}
+            className={`team-toggle-btn${teamModeEnabled ? ' active' : ''}${teamCollaborativeMode ? ' collab' : ''}`}
             onClick={toggleTeamMode}
-            title="Team Mode - multi-agent collaboration"
+            title={
+              teamCollaborativeMode
+                ? 'Collaborative Mode (click to disable)'
+                : teamModeEnabled
+                  ? 'Classic Team Mode (click for collaborative)'
+                  : 'Team Mode - multi-agent collaboration'
+            }
           >
             <svg
               width="18"
@@ -601,7 +639,7 @@ export default function MessageInput() {
             id="send-btn"
             onClick={handleSend}
             disabled={!canSend}
-            style={{ display: isStreaming ? 'none' : undefined }}
+            style={{ display: (isStreaming && !activeTeamId) ? 'none' : 'flex' }}
           >
             <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M5 12l5-5 5 5" />
@@ -612,7 +650,7 @@ export default function MessageInput() {
             id="stop-btn"
             onClick={handleStop}
             title="Stop (Esc)"
-            style={{ display: isStreaming ? undefined : 'none' }}
+            style={{ display: (isStreaming && !activeTeamId) ? undefined : 'none' }}
           >
             <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="6" width="12" height="12" rx="2" />

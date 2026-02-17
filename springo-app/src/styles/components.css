@@ -3837,6 +3837,14 @@
             overflow: hidden;
         }
 
+        .chat-tool-container.collapsed .chat-tool-list {
+            display: none;
+        }
+
+        .chat-tool-container.collapsed .chat-tool-header-bar {
+            border-bottom: none;
+        }
+
         .chat-tool-header-bar {
             display: flex;
             align-items: center;
@@ -3847,6 +3855,7 @@
             font-size: 12px;
             font-weight: 500;
             color: var(--text-secondary);
+            cursor: pointer;
         }
 
         .chat-tool-header-bar svg {
@@ -3970,6 +3979,11 @@
         .chat-tool-code.error {
             background: #7F1D1D;
             color: #FCA5A5;
+        }
+
+        .tool-status .item-elapsed {
+            font-size: 10px;
+            opacity: 0.8;
         }
 
         /* Terminal Output in Tool Results */

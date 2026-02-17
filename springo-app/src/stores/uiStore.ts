@@ -20,6 +20,31 @@ export interface ActiveSkill {
 
 export type RightPanelTab = 'tasks' | 'team' | 'schedules' | 'news';
 
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+export interface AskUserData {
+  question: string;
+  options: AskUserOption[];
+  allowCustom: boolean;
+  resolve: (answer: string) => void;
+}
+
+export interface PlanData {
+  summary: string;
+  steps: string[];
+  files: string[];
+}
+
+export interface TodoItem {
+  id: string;
+  subject: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  description?: string;
+}
+
 interface UIState {
   sidebarOpen: boolean;
   settingsOpen: boolean;
@@ -28,10 +53,15 @@ interface UIState {
   toast: Toast | null;
   imagePreview: string | null;
   teamModeEnabled: boolean;
+  teamCollaborativeMode: boolean;
   activeTeamId: string | null;
   activeSkill: ActiveSkill | null;
   rightPanelOpen: boolean;
   rightPanelTab: RightPanelTab;
+  askUserData: AskUserData | null;
+  planModeActive: boolean;
+  planApprovalData: PlanData | null;
+  todos: TodoItem[];
 
   // Actions
   toggleSidebar: () => void;
@@ -45,12 +75,20 @@ interface UIState {
   dismissToast: () => void;
   setImagePreview: (url: string | null) => void;
   setTeamModeEnabled: (enabled: boolean) => void;
+  setTeamCollaborativeMode: (enabled: boolean) => void;
+  cycleTeamMode: () => void;
   setActiveTeamId: (teamId: string | null) => void;
   setActiveSkill: (skill: ActiveSkill | null) => void;
   clearActiveSkill: () => void;
   toggleRightPanel: () => void;
   setRightPanelOpen: (open: boolean) => void;
   setRightPanelTab: (tab: RightPanelTab) => void;
+  showAskUser: (data: AskUserData) => void;
+  hideAskUser: () => void;
+  setPlanModeActive: (active: boolean) => void;
+  showPlanApproval: (plan: PlanData) => void;
+  hidePlanApproval: () => void;
+  setTodos: (todos: TodoItem[]) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -63,10 +101,15 @@ export const useUIStore = create<UIState>((set) => ({
   toast: null,
   imagePreview: null,
   teamModeEnabled: false,
+  teamCollaborativeMode: false,
   activeTeamId: null,
   activeSkill: null,
   rightPanelOpen: false,
   rightPanelTab: 'tasks' as RightPanelTab,
+  askUserData: null,
+  planModeActive: false,
+  planApprovalData: null,
+  todos: [],
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -105,6 +148,22 @@ export const useUIStore = create<UIState>((set) => ({
 
   setTeamModeEnabled: (enabled) => set({ teamModeEnabled: enabled }),
 
+  setTeamCollaborativeMode: (enabled) => set({ teamCollaborativeMode: enabled }),
+
+  cycleTeamMode: () =>
+    set((state) => {
+      if (!state.teamModeEnabled) {
+        // off -> classic (active, not collab)
+        return { teamModeEnabled: true, teamCollaborativeMode: false };
+      } else if (!state.teamCollaborativeMode) {
+        // classic -> collaborative (active + collab)
+        return { teamModeEnabled: true, teamCollaborativeMode: true };
+      } else {
+        // collaborative -> off
+        return { teamModeEnabled: false, teamCollaborativeMode: false };
+      }
+    }),
+
   setActiveTeamId: (teamId) => set({ activeTeamId: teamId }),
 
   setActiveSkill: (skill) => set({ activeSkill: skill }),
@@ -115,4 +174,11 @@ export const useUIStore = create<UIState>((set) => ({
     set((state) => ({ rightPanelOpen: !state.rightPanelOpen })),
   setRightPanelOpen: (open) => set({ rightPanelOpen: open }),
   setRightPanelTab: (tab) => set({ rightPanelTab: tab }),
+
+  showAskUser: (data) => set({ askUserData: data }),
+  hideAskUser: () => set({ askUserData: null }),
+  setPlanModeActive: (active) => set({ planModeActive: active }),
+  showPlanApproval: (plan) => set({ planApprovalData: plan }),
+  hidePlanApproval: () => set({ planApprovalData: null, planModeActive: false }),
+  setTodos: (todos) => set({ todos }),
 }));

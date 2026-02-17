@@ -98,10 +98,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   createSession: (title?: string) => {
-    const id = Date.now().toString();
+    // Use unique ID with random suffix to avoid collisions (matches legacy)
+    const id =
+      Date.now().toString() +
+      '-' +
+      Math.random().toString(36).substring(2, 11);
     const session: Conversation = {
       id,
-      title: title || 'Untitled',
+      title: title || 'New Chat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       status: 'idle',
@@ -136,10 +140,32 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
     set((state) => {
       const sessions = state.sessions.filter((s) => s.id !== id);
-      const currentSessionId =
-        state.currentSessionId === id
-          ? sessions[0]?.id ?? null
-          : state.currentSessionId;
+      let currentSessionId = state.currentSessionId;
+
+      if (state.currentSessionId === id) {
+        if (sessions.length > 0) {
+          currentSessionId = sessions[0].id;
+        } else {
+          // Legacy behavior: create a new session when deleting the last one
+          const newId =
+            Date.now().toString() +
+            '-' +
+            Math.random().toString(36).substring(2, 11);
+          const newSession: Conversation = {
+            id: newId,
+            title: 'New Chat',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            status: 'idle',
+            workingDir: '',
+            isCustomTitle: false,
+            messages: [],
+          };
+          sessions.push(newSession);
+          currentSessionId = newId;
+        }
+      }
+
       return { sessions, currentSessionId };
     });
   },

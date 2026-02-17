@@ -128,6 +128,16 @@ export const useSettingsStore = create<SettingsState>()(
             defaultWorkingFolder,
           });
         }
+        // Sync to backend (same as legacy updateServerWorkingDir)
+        if (dir) {
+          fetch(`${BASE_URL}/v1/config/working-dir`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ working_dir: dir }),
+          }).catch((e) =>
+            console.warn('[Settings] Failed to sync working dir:', e),
+          );
+        }
       },
 
       migrateSettings: () => {

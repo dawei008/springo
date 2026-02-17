@@ -1,6 +1,7 @@
 import { useCallback, useState, isValidElement } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import { useUIStore } from '@/stores/uiStore';
 import type { Components } from 'react-markdown';
@@ -104,7 +105,7 @@ export default function Markdown({ content }: Props) {
 
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
       rehypePlugins={[rehypeHighlight]}
       components={components}
     >

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import Header from './Header';
 import ChatArea from '@/components/Chat/ChatArea';
 import MessageInput from '@/components/Chat/MessageInput';
@@ -23,8 +23,34 @@ function StatusBar() {
   const workingFolders = useSettingsStore((s) => s.workingFolders);
   const setWorkingDir = useSettingsStore((s) => s.setWorkingDir);
 
-  // Derive status from session + streaming state
-  const status = isStreaming ? 'running' : session?.status || 'idle';
+  // Health polling state
+  const [serverHealthy, setServerHealthy] = useState(false);
+  useEffect(() => {
+    let mounted = true;
+    const checkHealth = async () => {
+      try {
+        const res = await fetch('http://127.0.0.1:8081/health');
+        const data = await res.json();
+        if (mounted) setServerHealthy(data.status === 'healthy');
+      } catch {
+        if (mounted) setServerHealthy(false);
+      }
+    };
+    checkHealth();
+    // Fast checks during startup (3s), then slow (30s)
+    const fastInterval = setInterval(() => {
+      if (!serverHealthy) checkHealth();
+    }, 3000);
+    const slowInterval = setInterval(checkHealth, 30000);
+    return () => {
+      mounted = false;
+      clearInterval(fastInterval);
+      clearInterval(slowInterval);
+    };
+  }, [serverHealthy]);
+
+  // Derive status from health + session + streaming state
+  const status = !serverHealthy ? 'error' : isStreaming ? 'running' : session?.status || 'idle';
 
   // The display directory: prefer session's workingDir, fall back to global
   const displayDir = session?.workingDir || workingDir || '';
@@ -33,7 +59,7 @@ function StatusBar() {
     idle: '\u25cf Ready',
     running: '\u25d0 Running...',
     completed: '\u2713 Completed',
-    error: '\u2715 Error',
+    error: !serverHealthy ? '\u25d0 Connecting...' : '\u2715 Error',
     compacting: '\u25d0 Compacting...',
   };
 
@@ -41,7 +67,7 @@ function StatusBar() {
     idle: 'status-connected',
     running: 'status-running',
     completed: 'status-completed',
-    error: 'status-error',
+    error: !serverHealthy ? 'status-connecting' : 'status-error',
     compacting: 'status-running',
   };
 

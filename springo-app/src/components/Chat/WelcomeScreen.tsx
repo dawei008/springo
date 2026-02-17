@@ -1,7 +1,3 @@
-import { useSessionStore } from '@/stores/sessionStore';
-import { useChatStore } from '@/stores/chatStore';
-import { useSettingsStore } from '@/stores/settingsStore';
-
 const prompts = [
   {
     title: 'Explain a concept',
@@ -26,22 +22,21 @@ const prompts = [
 ];
 
 export default function WelcomeScreen() {
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const createSession = useSessionStore((s) => s.createSession);
-  const sendMessage = useChatStore((s) => s.sendMessage);
-  const settings = useSettingsStore((s) => s.settings);
-
-  const handlePromptClick = async (text: string) => {
-    let convId = currentSessionId;
-    if (!convId) {
-      convId = createSession();
+  // Legacy behavior: setPrompt() inserts text into the input field and focuses it
+  const handlePromptClick = (text: string) => {
+    const input = document.getElementById('message-input') as HTMLTextAreaElement | null;
+    if (input) {
+      // Trigger React's onChange by using nativeInputValueSetter
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype,
+        'value',
+      )?.set;
+      if (nativeInputValueSetter) {
+        nativeInputValueSetter.call(input, text);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      input.focus();
     }
-    await sendMessage(convId, text, [], {
-      model: settings.model,
-      maxTokens: settings.maxTokens,
-      temperature: settings.temperature,
-      sessionId: convId,
-    });
   };
 
   return (

@@ -24,6 +24,7 @@ export default function Sidebar() {
   const switchSession = useSessionStore((s) => s.switchSession);
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const renameSession = useSessionStore((s) => s.renameSession);
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen);
 
   // ─── Settings store (workspace) ───
   const workingDir = useSettingsStore((s) => s.workingDir);
@@ -169,8 +170,8 @@ export default function Sidebar() {
     (folder: string, e: React.MouseEvent) => {
       // Prevent double-click from triggering single-click
       if (e.detail > 1) return;
-      // In the legacy app, single-click opens file browser.
-      // For now, select the folder as working dir.
+      // Legacy opens file browser panel on single-click; React has no file
+      // browser yet, so selecting as working dir is the interim equivalent.
       setWorkingDir(folder);
     },
     [setWorkingDir],
@@ -200,7 +201,7 @@ export default function Sidebar() {
   const totalCount = sessions.length;
 
   return (
-    <div className="sidebar">
+    <div className={`sidebar${sidebarOpen ? '' : ' collapsed'}`}>
       {/* Sidebar header: dog SVG logo + "Springo" h1 */}
       <div className="sidebar-header">
         <svg width="24" height="24" viewBox="0 0 100 100" fill="none" stroke="currentColor" style={{ color: 'var(--accent)' }} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">

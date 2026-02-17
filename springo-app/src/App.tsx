@@ -6,6 +6,9 @@ import Sidebar from '@/components/Layout/Sidebar'
 import MainContent from '@/components/Layout/MainContent'
 import SettingsModal from '@/components/Settings/SettingsModal'
 import ImagePreview from '@/components/common/ImagePreview'
+import AskUserModal from '@/components/common/AskUserModal'
+import PlanApprovalModal, { PlanModeIndicator } from '@/components/common/PlanModeModal'
+import TodoPanel from '@/components/common/TodoPanel'
 import { useUIStore } from '@/stores/uiStore'
 import Toast from '@/components/common/Toast'
 
@@ -17,6 +20,8 @@ export default function App() {
   const settingsOpen = useUIStore((s) => s.settingsOpen)
   const toast = useUIStore((s) => s.toast)
   const imagePreview = useUIStore((s) => s.imagePreview)
+  const askUserData = useUIStore((s) => s.askUserData)
+  const planApprovalData = useUIStore((s) => s.planApprovalData)
 
   useEffect(() => {
     loadSettings()
@@ -57,8 +62,12 @@ export default function App() {
     <>
       <Sidebar />
       <MainContent />
+      <PlanModeIndicator />
+      <TodoPanel />
       {settingsOpen && <SettingsModal />}
       {imagePreview && <ImagePreview />}
+      {askUserData && <AskUserModal />}
+      {planApprovalData && <PlanApprovalModal />}
       {toast && <Toast />}
     </>
   )

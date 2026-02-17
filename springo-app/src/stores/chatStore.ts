@@ -8,6 +8,9 @@ import type {
   ConvRuntime,
   ToolUse,
 } from '@/types';
+import { processStreamingResponse } from '@/services/sse';
+import { api } from '@/services/api';
+import { useUIStore } from '@/stores/uiStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
@@ -17,20 +20,6 @@ const MEMORY_CONFIG = {
   GC_INTERVAL_MS: 5 * 60 * 1000,
   MIN_IDLE_TIME_MS: 3 * 60 * 1000,
 };
-
-/** SSE event types from the streaming response */
-type SSEEvent =
-  | 'message_start'
-  | 'content_block_start'
-  | 'content_block_delta'
-  | 'content_block_stop'
-  | 'message_stop'
-  | 'tool_execution_start'
-  | 'tool_execution_complete'
-  | 'tool_result'
-  | 'iteration_complete'
-  | 'error'
-  | 'ping';
 
 interface ChatState {
   runtimes: Record<string, ConvRuntime>;
@@ -317,52 +306,122 @@ export const useChatStore = create<ChatState>((set, get) => ({
         temperature,
         system: options.systemPrompt || '',
         messages: apiMessages,
-        stream: true,
-        compact_model: options.compactModel || '',
         session_id: options.sessionId || convId,
-        extended_context: options.enable1mContext !== false,
+        compact_model: options.compactModel || '',
       };
 
-      const reqHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (model.startsWith('claude-')) {
-        reqHeaders['anthropic-version'] = '2023-06-01';
-      }
-
-      const fetchController = new AbortController();
-      const timeoutId = setTimeout(() => fetchController.abort(), 900000);
-
-      // Link external abort
-      abortController.signal.addEventListener('abort', () =>
-        fetchController.abort(),
-      );
-
-      const response = await fetch(`${BASE_URL}/v1/messages-auto`, {
-        method: 'POST',
-        headers: reqHeaders,
-        body: JSON.stringify(requestBody),
-        signal: fetchController.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || `HTTP ${response.status}`);
-      }
+      // Use api.messages.sendAutoRaw for fetchWithRetry + proper error handling
+      const response = await api.messages.sendAutoRaw(requestBody, abortController.signal);
 
       // Remove thinking indicator
       const thinkingIdx = runtime.messages.findIndex((m) => m.isThinking);
       if (thinkingIdx >= 0) runtime.messages.splice(thinkingIdx, 1);
 
-      // Process SSE stream
-      await processSSEStream(
-        response,
-        convId,
-        options.onTextUpdate,
-        options.onComplete,
-      );
+      // Process SSE stream using the comprehensive parser from sse.ts
+      const store = useChatStore.getState();
+      await processStreamingResponse(response, convId, {
+        onTextUpdate: (text, toolUses, isFinal) => {
+          options.onTextUpdate?.(text, toolUses);
+          store.updateAssistantMessage(convId, text, toolUses, isFinal);
+        },
+        onToolUse: () => {
+          // Tool-use blocks are already accumulated by the parser and
+          // forwarded through onTextUpdate with the updated toolUses array
+        },
+        onToolExecutionStart: () => {
+          // Tools are added to the toolUses array by the parser
+          // and state is updated on next onTextUpdate call
+        },
+        onToolResult: (evt) => {
+          // The parser already updates toolUses[].result and status
+          // Trigger a re-render with current state
+          const { textContent, toolUses } = getCurrentStreamState();
+          store.updateAssistantMessage(convId, textContent, toolUses, false);
+        },
+        onHeartbeat: (evt) => {
+          // Update elapsed time on the tool — parser already does this
+          // Trigger a re-render to show the updated elapsed time
+          const { textContent, toolUses } = getCurrentStreamState();
+          store.updateAssistantMessage(convId, textContent, toolUses, false);
+        },
+        onToolExecutionComplete: () => {
+          // All tools done in this iteration
+        },
+        onSkillInjected: (skillName) => {
+          console.log(`[${convId}] Skill injected: ${skillName}`);
+        },
+        onContextCompact: () => {
+          // TODO: Show compacting status in UI
+          console.log(`[${convId}] Context compacting...`);
+        },
+        onContextCompactDone: () => {
+          console.log(`[${convId}] Context compaction complete`);
+        },
+        onContextCompactFailed: (evt) => {
+          console.warn(`[${convId}] Context compaction failed:`, evt);
+        },
+        onMessagesUpdated: (evt) => {
+          // Sync frontend messages after compaction
+          if (evt.messages) {
+            const rt = get().getRuntime(convId);
+            rt.messages = evt.messages as Message[];
+            set((state) => ({
+              runtimes: { ...state.runtimes, [convId]: { ...rt, messages: [...rt.messages] } },
+            }));
+          }
+        },
+        onTeamSpawned: (evt) => {
+          // Set active team in UI store
+          useUIStore.getState().setActiveTeamId(evt.team_id);
+          console.log(`[${convId}] Team spawned: ${evt.team_id}`);
+        },
+        onTeamPlanning: (teamId) => {
+          console.log(`[${convId}] Team planning: ${teamId}`);
+        },
+        onTeamSynthesisDelta: () => {
+          // Text already accumulated by parser via onTextUpdate
+        },
+        onTeamComplete: (evt) => {
+          console.log(`[${convId}] Team complete:`, evt.team_id);
+        },
+        onTeamError: (evt) => {
+          console.error(`[${convId}] Team error:`, evt);
+        },
+        onComplete: (text, toolUses) => {
+          store.updateAssistantMessage(convId, text, toolUses, true);
+          options.onComplete?.();
+        },
+        onError: (error) => {
+          console.error(`[${convId}] Stream error:`, error);
+        },
+      });
+
+      // Helper to get current stream state from the parser's accumulated data
+      // processStreamingResponse returns the final result, but during streaming
+      // the callbacks provide incremental updates. For re-renders triggered by
+      // tool_result/heartbeat, we read the latest state from the runtime.
+      function getCurrentStreamState() {
+        const rt = get().getRuntime(convId);
+        const lastMsg = rt.messages[rt.messages.length - 1];
+        let textContent = '';
+        const toolUses: ToolUse[] = [];
+        if (lastMsg && lastMsg.role === 'assistant') {
+          if (typeof lastMsg.displayContent === 'string') {
+            textContent = lastMsg.displayContent;
+          } else if (typeof lastMsg.content === 'string') {
+            textContent = lastMsg.content;
+          }
+          if (Array.isArray(lastMsg.content)) {
+            for (const block of lastMsg.content) {
+              if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'tool_use') {
+                const tb = block as ToolUseBlock;
+                toolUses.push({ id: tb.id, name: tb.name, input: tb.input || {} });
+              }
+            }
+          }
+        }
+        return { textContent, toolUses };
+      }
     } catch (e) {
       const error = e as Error;
       const isAbort = error.name === 'AbortError';
@@ -518,140 +577,3 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }));
 
-// ─── SSE Stream Processor (module-level helper) ───
-
-async function processSSEStream(
-  response: Response,
-  convId: string,
-  onTextUpdate?: (text: string, tools: ToolUse[]) => void,
-  onComplete?: () => void,
-) {
-  const reader = response.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  let textContent = '';
-  let toolUses: ToolUse[] = [];
-  let currentToolUse: Partial<ToolUse> | null = null;
-  let currentToolInput = '';
-
-  const store = useChatStore.getState();
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const dataStr = line.slice(6).trim();
-        if (dataStr === '[DONE]') continue;
-
-        let parsed: { type?: SSEEvent; event?: SSEEvent; delta?: Record<string, unknown>; content_block?: Record<string, unknown>; tools?: Array<Record<string, unknown>>; result?: unknown; tool_id?: string };
-        try {
-          parsed = JSON.parse(dataStr);
-        } catch {
-          continue;
-        }
-
-        const event = (parsed.type || parsed.event || '') as SSEEvent;
-
-        switch (event) {
-          case 'content_block_start': {
-            const block = parsed.content_block;
-            if (block && block.type === 'tool_use') {
-              currentToolUse = {
-                id: block.id as string,
-                name: block.name as string,
-                input: {},
-              };
-              currentToolInput = '';
-            }
-            break;
-          }
-
-          case 'content_block_delta': {
-            const delta = parsed.delta;
-            if (!delta) break;
-            if (delta.type === 'text_delta') {
-              textContent += delta.text as string;
-              onTextUpdate?.(textContent, toolUses);
-              store.updateAssistantMessage(convId, textContent, toolUses, false);
-            } else if (delta.type === 'input_json_delta' && currentToolUse) {
-              currentToolInput += delta.partial_json as string;
-            }
-            break;
-          }
-
-          case 'content_block_stop': {
-            if (currentToolUse) {
-              try {
-                currentToolUse.input = JSON.parse(currentToolInput || '{}');
-              } catch {
-                currentToolUse.input = {};
-              }
-              toolUses.push(currentToolUse as ToolUse);
-              currentToolUse = null;
-              currentToolInput = '';
-              onTextUpdate?.(textContent, toolUses);
-              store.updateAssistantMessage(convId, textContent, toolUses, false);
-            }
-            break;
-          }
-
-          case 'tool_execution_start': {
-            if (parsed.tools) {
-              for (const tool of parsed.tools) {
-                if (!toolUses.find((tu) => tu.id === tool.id)) {
-                  toolUses.push({
-                    id: tool.id as string,
-                    name: tool.name as string,
-                    input: (tool.input || {}) as Record<string, unknown>,
-                    status: 'running',
-                  });
-                }
-              }
-              onTextUpdate?.(textContent, toolUses);
-            }
-            break;
-          }
-
-          case 'tool_execution_complete':
-          case 'tool_result': {
-            if (parsed.tool_id && parsed.result !== undefined) {
-              const tu = toolUses.find((t) => t.id === parsed.tool_id);
-              if (tu) {
-                tu.result = parsed.result as Record<string, unknown> | null;
-                tu.status = 'complete';
-              }
-            }
-            break;
-          }
-
-          case 'message_stop': {
-            // Final update
-            store.updateAssistantMessage(convId, textContent, toolUses, true);
-            onComplete?.();
-            break;
-          }
-
-          case 'error': {
-            console.error(`[${convId}] SSE error event:`, parsed);
-            break;
-          }
-
-          default:
-            break;
-        }
-      }
-    }
-
-    // Ensure final state is set even if message_stop wasn't received
-    store.updateAssistantMessage(convId, textContent, toolUses, true);
-  } finally {
-    reader.releaseLock();
-  }
-}

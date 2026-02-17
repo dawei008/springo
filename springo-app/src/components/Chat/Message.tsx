@@ -1,5 +1,7 @@
 import { useMemo, useState, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
+import ArtifactRenderer, { ArtifactInline } from '@/components/Visual/ArtifactRenderer';
+import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import { useUIStore } from '@/stores/uiStore';
 import type { Message as MessageType, ContentBlock, ToolUseBlock } from '@/types';
 
@@ -138,7 +140,7 @@ function ToolCall({ tool }: { tool: ToolUseRuntime }) {
     statusText = 'Error';
     statusIcon = '\u2717'; // ✗
   } else if (hasResult) {
-    statusClass = 'complete';
+    statusClass = 'success';
     statusText = 'Done';
     statusIcon = '\u2713'; // ✓
   }
@@ -158,6 +160,7 @@ function ToolCall({ tool }: { tool: ToolUseRuntime }) {
         <span className="chat-tool-name">{tool.name}</span>
         <span className={`tool-status ${statusClass}`}>
           {statusIcon} {statusText}
+          {elapsedStr && <span className="item-elapsed"> ({elapsedStr})</span>}
         </span>
       </div>
       {!collapsed && (
@@ -176,6 +179,7 @@ function ToolCall({ tool }: { tool: ToolUseRuntime }) {
           )}
         </div>
       )}
+      {hasResult && !hasError && <ToolVisualContent toolUse={tool} />}
     </div>
   );
 }
@@ -327,7 +331,18 @@ export default function Message({ message }: Props) {
             <div key={idx} className="chat-image-placeholder">[Image loading...]</div>
           );
         })}
-        {textContent && <Markdown content={textContent} />}
+        {textContent && (
+          <ArtifactRenderer text={textContent}>
+            {(cleaned, artifacts) => (
+              <>
+                <Markdown content={cleaned} />
+                {artifacts.map((a) => (
+                  <ArtifactInline key={a.id} artifactId={a.id} />
+                ))}
+              </>
+            )}
+          </ArtifactRenderer>
+        )}
         {toolUses.length > 0 && <ToolContainer tools={toolUses} />}
       </div>
     </div>
