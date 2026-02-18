@@ -7,6 +7,9 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import type { RightPanelTab } from '@/stores/uiStore';
+import TeamPanel from '../RightPanel/TeamPanel';
+import NewsPanel from '../RightPanel/NewsPanel';
+import SchedulesPanel from '../RightPanel/SchedulesPanel';
 
 // ==================== StatusBar ====================
 
@@ -269,57 +272,7 @@ function RightPanel() {
           className={`right-panel-section${rightPanelTab === 'team' ? ' active' : ''}`}
           id="panel-team"
         >
-          <div className="team-split-panel" id="team-split-panel">
-            <div className="team-split-placeholder" id="team-split-placeholder">
-              <svg
-                width="32"
-                height="32"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                opacity="0.5"
-              >
-                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-                <circle cx="9" cy="7" r="4" />
-                <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-                <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-              </svg>
-              <span>No active team</span>
-              <span className="panel-placeholder-hint">
-                Enable Team Mode and send a request to see agent progress here
-              </span>
-            </div>
-            <div
-              className="team-split-content"
-              id="team-split-content"
-              style={{ display: 'none' }}
-            >
-              <div className="team-split-header" id="team-split-header">
-                <div className="team-split-status-row">
-                  <span className="team-split-status-badge" id="team-split-status-badge">
-                    idle
-                  </span>
-                  <span
-                    className="team-split-request-preview"
-                    id="team-split-request-preview"
-                  />
-                  <button
-                    id="team-stop-btn"
-                    className="team-stop-btn"
-                    style={{ display: 'none' }}
-                    title="Stop team execution"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
-                      <rect x="4" y="4" width="16" height="16" rx="2" />
-                    </svg>
-                    Stop
-                  </button>
-                </div>
-              </div>
-              <div className="team-split-agents" id="team-split-agents" />
-            </div>
-          </div>
+          <TeamPanel />
         </div>
 
         {/* Schedules section */}
@@ -327,26 +280,7 @@ function RightPanel() {
           className={`right-panel-section${rightPanelTab === 'schedules' ? ' active' : ''}`}
           id="panel-schedules"
         >
-          <div className="panel-schedules-list" id="panel-schedules-list">
-            <div className="panel-placeholder">
-              <svg
-                width="32"
-                height="32"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                opacity="0.5"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <polyline points="12 6 12 12 16 14" />
-              </svg>
-              <span>No scheduled tasks</span>
-              <span className="panel-placeholder-hint">
-                Ask Claude to create reminders or scheduled tasks
-              </span>
-            </div>
-          </div>
+          <SchedulesPanel />
         </div>
 
         {/* News section */}
@@ -354,42 +288,7 @@ function RightPanel() {
           className={`right-panel-section${rightPanelTab === 'news' ? ' active' : ''}`}
           id="panel-news"
         >
-          <div className="news-header">
-            <span className="news-title">For You</span>
-            <button className="news-refresh-btn" title="Refresh">
-              <svg viewBox="0 0 24 24" width="16" height="16">
-                <path
-                  d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 .79-.15 1.56-.44 2.25l1.52 1.52C19.68 14.62 20 13.35 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-.79.15-1.56.44-2.25L4.92 8.23C4.32 9.38 4 10.65 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"
-                  fill="currentColor"
-                />
-              </svg>
-            </button>
-          </div>
-          <div className="news-interests" id="news-interests">
-            <div className="news-interests-label">Your Interests</div>
-            <div className="news-interests-tags" id="news-interests-tags">
-              <span className="news-interest-hint">
-                Say &quot;&#25105;&#20851;&#27880;...&quot; in chat to add interests
-              </span>
-            </div>
-          </div>
-          <div className="news-updated" id="news-updated" />
-          <div id="panel-news-list">
-            <div className="panel-placeholder">
-              <svg
-                width="32"
-                height="32"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                opacity="0.5"
-              >
-                <path d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 12h10" />
-              </svg>
-              <span>Loading news...</span>
-            </div>
-          </div>
+          <NewsPanel />
         </div>
       </div>
     </div>

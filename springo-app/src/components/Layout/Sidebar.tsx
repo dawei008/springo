@@ -125,6 +125,8 @@ export default function Sidebar() {
 
   // ─── UI store ───
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
+  const themeMode = useUIStore((s) => s.themeMode);
+  const setThemeMode = useUIStore((s) => s.setThemeMode);
 
   // ─── Local state ───
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -386,9 +388,44 @@ export default function Sidebar() {
     }
   }, []);
 
+  const handleCycleTheme = useCallback(() => {
+    const next = themeMode === 'system' ? 'light' : themeMode === 'light' ? 'dark' : 'system';
+    setThemeMode(next);
+  }, [themeMode, setThemeMode]);
+
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
   }, [setSettingsOpen]);
+
+  // ─── Date-grouped sessions ───
+  const groupedSessions = useMemo(() => {
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const yesterdayStart = todayStart - 86400000;
+    const weekStart = todayStart - 6 * 86400000;
+
+    const groups: { label: string; sessions: typeof filteredSessions }[] = [
+      { label: 'Today', sessions: [] },
+      { label: 'Yesterday', sessions: [] },
+      { label: 'Last 7 days', sessions: [] },
+      { label: 'Older', sessions: [] },
+    ];
+
+    for (const session of filteredSessions) {
+      const ts = session.createdAt || 0;
+      if (ts >= todayStart) {
+        groups[0].sessions.push(session);
+      } else if (ts >= yesterdayStart) {
+        groups[1].sessions.push(session);
+      } else if (ts >= weekStart) {
+        groups[2].sessions.push(session);
+      } else {
+        groups[3].sessions.push(session);
+      }
+    }
+
+    return groups.filter((g) => g.sessions.length > 0);
+  }, [filteredSessions]);
 
   // ─── Derived state ───
 
@@ -518,75 +555,80 @@ export default function Sidebar() {
 
       {/* Conversations list */}
       <div className="conversations-list" id="conversations-list">
-        {filteredSessions.map((session) => {
-          const status = session.status || 'idle';
-          // Session number: position in full (unfiltered) list, newest = highest
-          const fullIndex = sessions.indexOf(session);
-          const sessionNumber = totalCount - fullIndex;
-          const isActive = session.id === currentSessionId;
-          const isRenaming = renamingId === session.id;
+        {groupedSessions.map((group) => (
+          <div key={group.label}>
+            <div className="session-date-group">{group.label}</div>
+            {group.sessions.map((session) => {
+              const status = session.status || 'idle';
+              // Session number: position in full (unfiltered) list, newest = highest
+              const fullIndex = sessions.indexOf(session);
+              const sessionNumber = totalCount - fullIndex;
+              const isActive = session.id === currentSessionId;
+              const isRenaming = renamingId === session.id;
 
-          return (
-            <div
-              key={session.id}
-              className={`conversation-item${isActive ? ' active' : ''}`}
-              onClick={() => handleSwitch(session.id)}
-              onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
-              data-id={session.id}
-            >
-              <div
-                className={`conversation-status ${status}`}
-                title={getStatusTitle(status)}
-              />
-              <span className="session-number">#{sessionNumber}</span>
-              {isRenaming ? (
-                <input
-                  ref={renameInputRef}
-                  type="text"
-                  className="rename-input"
-                  value={renameValue}
-                  onChange={(e) => setRenameValue(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      finishRename();
-                    } else if (e.key === 'Escape') {
-                      e.preventDefault();
-                      cancelRename();
-                    }
-                  }}
-                  onBlur={finishRename}
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <span
-                  className="title"
-                  onDoubleClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    startRename(session.id, session.title);
-                  }}
-                  title="Double-click to rename"
+              return (
+                <div
+                  key={session.id}
+                  className={`conversation-item${isActive ? ' active' : ''}`}
+                  onClick={() => handleSwitch(session.id)}
+                  onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
+                  data-id={session.id}
                 >
-                  {session.title}
-                </span>
-              )}
-              <DelegationBadges convId={session.id} />
-              <button
-                className="delete-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDelete(session.id);
-                }}
-                title="Delete session"
-              >
-                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M3 3l8 8M11 3l-8 8"/>
-                </svg>
-              </button>
-            </div>
-          );
-        })}
+                  <div
+                    className={`conversation-status ${status}`}
+                    title={getStatusTitle(status)}
+                  />
+                  <span className="session-number">#{sessionNumber}</span>
+                  {isRenaming ? (
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      className="rename-input"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          finishRename();
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelRename();
+                        }
+                      }}
+                      onBlur={finishRename}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    <span
+                      className="title"
+                      onDoubleClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        startRename(session.id, session.title);
+                      }}
+                      title="Double-click to rename"
+                    >
+                      {session.title}
+                    </span>
+                  )}
+                  <DelegationBadges convId={session.id} />
+                  <button
+                    className="delete-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete(session.id);
+                    }}
+                    title="Delete session"
+                  >
+                    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M3 3l8 8M11 3l-8 8"/>
+                    </svg>
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       {/* Conversation context menu (right-click) */}
@@ -598,8 +640,34 @@ export default function Sidebar() {
         onExport={handleContextExport}
       />
 
-      {/* Sidebar footer with Settings button */}
+      {/* Sidebar footer with Theme toggle + Settings button */}
       <div className="sidebar-footer">
+        <button className="settings-btn" onClick={handleCycleTheme} title={`Theme: ${themeMode}`}>
+          {themeMode === 'system' ? (
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+              <line x1="12" y1="17" x2="12" y2="21"/>
+            </svg>
+          ) : themeMode === 'light' ? (
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="5"/>
+              <line x1="12" y1="1" x2="12" y2="3"/>
+              <line x1="12" y1="21" x2="12" y2="23"/>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+              <line x1="1" y1="12" x2="3" y2="12"/>
+              <line x1="21" y1="12" x2="23" y2="12"/>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+            </svg>
+          ) : (
+            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
+            </svg>
+          )}
+          {themeMode === 'system' ? 'System' : themeMode === 'light' ? 'Light' : 'Dark'}
+        </button>
         <button className="settings-btn" onClick={handleOpenSettings}>
           <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="8" cy="8" r="3"/>

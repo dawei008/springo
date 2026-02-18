@@ -12,6 +12,7 @@ import { processStreamingResponse } from '@/services/sse';
 import { api } from '@/services/api';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useTeamStore } from '@/stores/teamStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
@@ -661,21 +662,56 @@ export const useChatStore = create<ChatState>((set, get) => ({
           }
         },
         onTeamSpawned: (evt) => {
-          // Set active team in UI store
           useUIStore.getState().setActiveTeamId(evt.team_id);
-          console.log(`[${convId}] Team spawned: ${evt.team_id}`);
+          useTeamStore.getState().setTeamSpawned(evt.team_id, evt.agents, evt.user_request);
+          // Auto-open right panel on Team tab
+          useUIStore.getState().setRightPanelOpen(true);
+          useUIStore.getState().setRightPanelTab('team');
         },
         onTeamPlanning: (teamId) => {
-          console.log(`[${convId}] Team planning: ${teamId}`);
+          useTeamStore.getState().setTeamPlanning(teamId);
+        },
+        onTeamTaskBoard: (evt) => {
+          useTeamStore.getState().updateTaskBoard(evt.team_id, evt.tasks);
+        },
+        onTeamAgentStart: (evt) => {
+          useTeamStore.getState().updateAgentStart(evt.team_id, evt.agent_id, evt.role, evt.task_title);
+        },
+        onTeamAgentProgress: (evt) => {
+          useTeamStore.getState().updateAgentProgress(evt.team_id, evt.agent_id, evt.status, evt.preview);
+        },
+        onTeamAgentDelta: (evt) => {
+          useTeamStore.getState().appendAgentDelta(evt.team_id, evt.agent_id, evt.delta);
+        },
+        onTeamAgentTool: (evt) => {
+          useTeamStore.getState().updateAgentTool(evt.team_id, evt.agent_id, evt.tool_name, evt.status);
+        },
+        onTeamAgentComplete: (evt) => {
+          useTeamStore.getState().updateAgentComplete(evt.team_id, evt.agent_id, evt.role, evt.findings);
+        },
+        onTeamAgentError: (evt) => {
+          useTeamStore.getState().updateAgentError(evt.team_id, evt.agent_id, evt.error);
         },
         onTeamSynthesisDelta: () => {
           // Text already accumulated by parser via onTextUpdate
         },
+        onTeamSynthesizing: (evt) => {
+          useTeamStore.getState().setTeamSynthesizing(evt.team_id);
+        },
         onTeamComplete: (evt) => {
-          console.log(`[${convId}] Team complete:`, evt.team_id);
+          useTeamStore.getState().setTeamComplete(evt.team_id, evt.result);
         },
         onTeamError: (evt) => {
-          console.error(`[${convId}] Team error:`, evt);
+          useTeamStore.getState().setTeamError(evt.team_id, evt.error);
+        },
+        onTeamTaskCreated: (evt) => {
+          useTeamStore.getState().updateTaskCreated(evt.team_id, evt.task_id, evt.title, evt.owner);
+        },
+        onTeamTaskUpdated: (evt) => {
+          useTeamStore.getState().updateTaskUpdated(evt.team_id, evt.task_id, evt.status, evt.owner, evt.title);
+        },
+        onTeamTaskUnblocked: (evt) => {
+          useTeamStore.getState().updateTaskUnblocked(evt.team_id, evt.task_id, evt.owner, evt.title);
         },
         onComplete: (text, toolUses) => {
           // Detect interrupted stream: tools were executed but no final text response

@@ -62,6 +62,7 @@ interface UIState {
   planModeActive: boolean;
   planApprovalData: PlanData | null;
   todos: TodoItem[];
+  themeMode: 'light' | 'dark' | 'system';
   fileBrowserOpen: boolean;
   fileBrowserPath: string;
 
@@ -91,6 +92,7 @@ interface UIState {
   showPlanApproval: (plan: PlanData) => void;
   hidePlanApproval: () => void;
   setTodos: (todos: TodoItem[]) => void;
+  setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
   openFileBrowser: (path: string) => void;
   closeFileBrowser: () => void;
 }
@@ -114,6 +116,7 @@ export const useUIStore = create<UIState>((set) => ({
   planModeActive: false,
   planApprovalData: null,
   todos: [],
+  themeMode: (localStorage.getItem('springo-theme') as 'light' | 'dark' | 'system') || 'system',
   fileBrowserOpen: false,
   fileBrowserPath: '',
 
@@ -187,6 +190,10 @@ export const useUIStore = create<UIState>((set) => ({
   showPlanApproval: (plan) => set({ planApprovalData: plan }),
   hidePlanApproval: () => set({ planApprovalData: null, planModeActive: false }),
   setTodos: (todos) => set({ todos }),
+  setThemeMode: (mode) => {
+    localStorage.setItem('springo-theme', mode);
+    set({ themeMode: mode });
+  },
   openFileBrowser: (path) => set({ fileBrowserOpen: true, fileBrowserPath: path }),
   closeFileBrowser: () => set({ fileBrowserOpen: false, fileBrowserPath: '' }),
 }));

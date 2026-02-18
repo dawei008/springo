@@ -34,9 +34,14 @@ export default function App() {
   }, [loadSettings, loadModels, loadWorkingDir, loadSessions])
 
   // Set theme on body
+  const themeMode = useUIStore((s) => s.themeMode)
   useEffect(() => {
-    document.body.setAttribute('data-theme', 'light')
-  }, [])
+    if (themeMode === 'system') {
+      document.body.removeAttribute('data-theme')
+    } else {
+      document.body.setAttribute('data-theme', themeMode)
+    }
+  }, [themeMode])
 
   // Register Electron menu callbacks
   useEffect(() => {
