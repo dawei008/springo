@@ -377,10 +377,13 @@ async def resume_team(team_id: str, http_request: Request):
 
 
 @router.post("/teams/{team_id}/shutdown")
-async def shutdown_team(team_id: str):
+async def shutdown_team(team_id: str, force: bool = True):
     """
-    Gracefully shut down a collaborative team.
-    Sends shutdown requests to all active agents.
+    Shut down a collaborative team.
+
+    By default (force=True), immediately cancels all agent asyncio tasks.
+    With force=False, sends graceful shutdown_request messages to agents
+    (agents may ignore these — use force=True for reliable shutdown).
     """
     try:
         manager = get_team_manager()
@@ -388,10 +391,19 @@ async def shutdown_team(team_id: str):
         if not team:
             raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
 
+        if force:
+            # Force cancel — immediately kills all agent tasks
+            manager.cancel_team(team_id, status="complete")
+            return JSONResponse(content={
+                "status": "force_cancelled",
+                "team_id": team_id,
+            })
+
+        # Graceful shutdown — send shutdown_request messages
         if team.execution_mode != "collaborative":
             raise HTTPException(
                 status_code=400,
-                detail={"error": "Shutdown endpoint only available for collaborative teams"},
+                detail={"error": "Graceful shutdown only available for collaborative teams"},
             )
 
         bus = manager.get_message_bus(team_id)

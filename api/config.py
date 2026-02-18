@@ -86,15 +86,15 @@ class Settings(BaseSettings):
 
     # Agent Teams — Collaborative mode limits
     team_agent_wall_clock_timeout: int = Field(
-        default=604800, description="Max wall-clock seconds per agent (default 7d)")
+        default=1800, description="Max wall-clock seconds per agent (default 30min)")
     team_agent_max_messages: int = Field(
-        default=5000, description="Max messages an agent can process before stopping")
+        default=100, description="Max messages an agent can process before stopping")
     team_agent_max_tool_iterations: int = Field(
         default=30, description="Max tool iterations per message turn for team agents")
     team_collab_max_runtime: int = Field(
-        default=604800, description="Max wall-clock seconds for collaborative team execution (default 7d)")
+        default=3600, description="Max wall-clock seconds for collaborative team execution (default 1h)")
     team_idle_timeout: int = Field(
-        default=600, description="Seconds of idle before agent self-terminates (10 min)")
+        default=120, description="Seconds of idle before agent self-terminates (2 min)")
     team_max_concurrent_teams: int = Field(
         default=5, description="Max simultaneously active teams")
     team_completed_cleanup_secs: int = Field(

@@ -266,6 +266,23 @@ async def run_agent_loop(
                 agent.completed_at = datetime.now().isoformat()
                 return
 
+            # Auto-exit for workers: if all assigned tasks are completed,
+            # the worker should stop — like Claude Code where agents finish
+            # their task and return, rather than lingering for peer messages.
+            if not team_tools_only:  # workers only, not team lead
+                my_tasks = [
+                    t for t in task_manager.list_tasks()
+                    if t.owner == agent_name
+                ]
+                if my_tasks and all(t.status in ("completed", "error") for t in my_tasks):
+                    logger.info(
+                        f"[AgentLoop:{agent_name}] All assigned tasks completed — auto-exiting"
+                    )
+                    await message_bus.notify_shutdown(agent_name)
+                    agent.status = "complete"
+                    agent.completed_at = datetime.now().isoformat()
+                    return
+
             # Context management: summarize if messages grow too large
             if len(messages) > 30:
                 messages = _compact_messages(messages)
@@ -644,6 +661,24 @@ async def _execute_team_tool(
             )
             return {"error": "recipient is required for direct messages"}
 
+        # Block worker-to-worker messages.  Workers can only message
+        # team-lead or user.  This prevents O(n²) peer chatter storms
+        # that waste millions of tokens on coordination overhead.
+        _allowed_recipients = {"team-lead", "user", ""}
+        is_worker = agent_name != "team-lead"
+        if is_worker and msg_type == "message" and recipient not in _allowed_recipients:
+            logger.info(
+                f"[{agent_name}] Blocked peer message to '{recipient}' — "
+                f"workers can only message team-lead"
+            )
+            return {
+                "error": (
+                    f"Workers cannot message other workers directly. "
+                    f"Send your message to 'team-lead' instead, who will "
+                    f"relay it if needed."
+                ),
+            }
+
         msg = AgentMessage(
             type=msg_type,
             sender=agent_name,
@@ -651,6 +686,15 @@ async def _execute_team_tool(
             content=content,
             summary=summary,
         )
+
+        # Block worker broadcasts — only team-lead can broadcast
+        if msg_type == "broadcast" and is_worker:
+            logger.info(
+                f"[{agent_name}] Blocked broadcast — only team-lead can broadcast"
+            )
+            return {
+                "error": "Only team-lead can broadcast. Send your message to team-lead instead.",
+            }
 
         if msg_type == "broadcast":
             await message_bus.broadcast(msg)
@@ -961,6 +1005,20 @@ async def _execute_team_tool(
             "This is a hard requirement."
         )
 
+        _focus_section = (
+            "\n\n## Critical Rules\n"
+            "- Focus ONLY on your assigned task(s). Do not discuss, coordinate, "
+            "or make small talk with other workers.\n"
+            "- NEVER use send_message to contact other workers. You can ONLY "
+            "message team-lead.\n"
+            "- Do NOT broadcast messages. Only team-lead broadcasts.\n"
+            "- Do NOT introduce yourself or greet anyone. Start working immediately.\n"
+            "- After completing your task and reporting to team-lead, STOP. "
+            "Do not send further messages or wait for responses.\n"
+            "- If you need information that another worker might have, ask team-lead "
+            "to relay it — do not contact the worker directly.\n"
+        )
+
         base_system_prompt = (
             "You are a worker agent. Complete the task(s) assigned to you thoroughly.\n"
             "When done:\n"
@@ -970,6 +1028,7 @@ async def _execute_team_tool(
             "list their FULL absolute paths in your summary to team-lead.\n"
             "If you need clarification from the user, use ask_user.\n"
             "Do NOT use emojis in any output or messages."
+            + _focus_section
             + _shutdown_section
         )
         if plan_mode:
@@ -990,6 +1049,7 @@ async def _execute_team_tool(
                 "list their FULL absolute paths in your summary to team-lead.\n"
                 "If you need clarification from the user, use ask_user.\n"
                 "Do NOT use emojis in any output or messages."
+                + _focus_section
                 + _shutdown_section
             )
 
@@ -1155,23 +1215,21 @@ async def _load_team_tools() -> List[Dict[str, Any]]:
 def _build_team_context_prompt(agent_name: str, team: Team) -> str:
     """Build additional system prompt with team context information.
 
-    Uses descriptive style (like Claude Code's team prompts) rather than
-    prescriptive tool restrictions.  Behavior is guided by role description
-    and structural tool scoping, not "NEVER use X" rules.
+    Team lead gets full agent list for coordination.
+    Workers only see team-lead — they should not know about or contact
+    other workers directly.  This structural choice prevents O(n²)
+    peer messaging storms.
     """
-    other_agents = [a for a in team.agents if a.name != agent_name]
-    agent_list = ", ".join(a.name or a.agent_id for a in other_agents) if other_agents else "none yet"
     is_lead = agent_name == "team-lead"
 
-    base = (
-        f"\n\n## Team Context\n"
-        f"You are '{agent_name}' in team '{team.team_id}'.\n"
-        f"Team request: {team.user_request}\n"
-        f"Other agents: {agent_list}\n\n"
-    )
-
     if is_lead:
-        base += (
+        other_agents = [a for a in team.agents if a.name != agent_name]
+        agent_list = ", ".join(a.name or a.agent_id for a in other_agents) if other_agents else "none yet"
+        base = (
+            f"\n\n## Team Context\n"
+            f"You are '{agent_name}' (team lead) in team '{team.team_id}'.\n"
+            f"Team request: {team.user_request}\n"
+            f"Workers: {agent_list}\n\n"
             "## Worker Clarification Relay\n"
             "When a worker sends you a message requesting user input:\n"
             "1. Call ask_user with the worker's question\n"
@@ -1180,13 +1238,18 @@ def _build_team_context_prompt(agent_name: str, team: Team) -> str:
             "Always relay — do not answer on behalf of the user.\n"
         )
     else:
-        base += (
+        base = (
+            f"\n\n## Team Context\n"
+            f"You are '{agent_name}' in team '{team.team_id}'.\n"
+            f"Team request: {team.user_request}\n"
+            f"Your coordinator: team-lead\n\n"
             "If you need user input or clarification, call ask_user — it routes "
             "through the team lead who relays the answer back. After calling "
             "ask_user, wait for the reply before proceeding.\n\n"
             "When you finish your task:\n"
             "1. Mark it completed with task_update\n"
             "2. Send a brief summary to team-lead with send_message\n"
+            "3. Then STOP — do not send further messages or wait for responses\n"
         )
 
     return base

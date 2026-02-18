@@ -274,17 +274,23 @@ class AgentTeamManager:
         results.sort(key=lambda t: (t["team_number"] is None, t["team_number"] or 0))
         return results
 
-    def cancel_team(self, team_id: str) -> None:
-        """Cancel all running agent tasks for a team (e.g., on client disconnect)."""
+    def cancel_team(self, team_id: str, status: str = "error") -> None:
+        """Cancel all running agent tasks for a team.
+
+        Args:
+            team_id: The team to cancel
+            status: Terminal status to set — "error" for unexpected disconnects,
+                    "complete" for user-initiated shutdowns
+        """
         tasks = self._running_tasks.pop(team_id, [])
         for task in tasks:
             if not task.done():
                 task.cancel()
         team = self._teams.get(team_id)
         if team and team.status not in ("complete", "error"):
-            team.status = "error"
+            team.status = status
             team.completed_at = datetime.now().isoformat()
-        logger.info(f"Team {team_id} cancelled ({len(tasks)} tasks)")
+        logger.info(f"Team {team_id} cancelled ({len(tasks)} tasks, status={status})")
 
     def _register_tasks(self, team_id: str, tasks: List[asyncio.Task]) -> None:
         """Register running agent tasks for cleanup on disconnect."""
