@@ -7,10 +7,41 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
-import type { RightPanelTab } from '@/stores/uiStore';
+import type { RightPanelTab, TodoItem } from '@/stores/uiStore';
 import TeamPanel from '../RightPanel/TeamPanel';
 import NewsPanel from '../RightPanel/NewsPanel';
 import SchedulesPanel from '../RightPanel/SchedulesPanel';
+
+// ==================== RightPanel Todo List ====================
+
+function RightPanelTodoList({ todos }: { todos: TodoItem[] }) {
+  const completedCount = todos.filter((t) => t.status === 'completed').length;
+
+  return (
+    <div className="panel-todo-list">
+      <div className="panel-todo-header">
+        <span className="panel-todo-progress">{completedCount}/{todos.length}</span>
+      </div>
+      {todos.map((todo) => {
+        let statusIcon = '\u25CB'; // pending
+        let statusClass = 'pending';
+        if (todo.status === 'in_progress') {
+          statusIcon = '\u25D4'; // in progress
+          statusClass = 'in-progress';
+        } else if (todo.status === 'completed') {
+          statusIcon = '\u2713'; // done
+          statusClass = 'completed';
+        }
+        return (
+          <div key={todo.id} className={`panel-todo-item ${statusClass}`}>
+            <span className="panel-todo-icon">{statusIcon}</span>
+            <span className="panel-todo-subject">{todo.subject}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // ==================== StatusBar ====================
 
@@ -166,6 +197,7 @@ function RightPanel() {
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen);
   const rightPanelTab = useUIStore((s) => s.rightPanelTab);
   const setRightPanelTab = useUIStore((s) => s.setRightPanelTab);
+  const todos = useUIStore((s) => s.todos);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
@@ -251,20 +283,24 @@ function RightPanel() {
           id="panel-tasks"
         >
           <div className="panel-tasks-list" id="panel-tasks-list">
-            <div className="panel-placeholder">
-              <svg
-                width="32"
-                height="32"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                opacity="0.5"
-              >
-                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-              </svg>
-              <span>No background tasks</span>
-            </div>
+            {todos.length === 0 ? (
+              <div className="panel-placeholder">
+                <svg
+                  width="32"
+                  height="32"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  opacity="0.5"
+                >
+                  <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+                </svg>
+                <span>No background tasks</span>
+              </div>
+            ) : (
+              <RightPanelTodoList todos={todos} />
+            )}
           </div>
         </div>
 
@@ -314,8 +350,11 @@ export default function MainContent() {
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [toggleRightPanel]);
 
-  // Restore team panel when switching sessions
+  // Restore team panel and clear stale UI state when switching sessions
   useEffect(() => {
+    // Clear inline task panel from previous session
+    useUIStore.getState().setTodos([]);
+
     if (!currentSessionId) {
       useTeamStore.getState().resetTeam();
       return;

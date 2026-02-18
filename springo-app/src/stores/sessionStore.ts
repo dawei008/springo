@@ -3,6 +3,7 @@ import type {
   Conversation,
   ConversationStatus,
 } from '@/types';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
@@ -103,13 +104,16 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       Date.now().toString() +
       '-' +
       Math.random().toString(36).substring(2, 11);
+    // Use default working folder for new sessions
+    const settings = useSettingsStore.getState();
+    const defaultDir = settings.defaultWorkingFolder || settings.workingDir || '';
     const session: Conversation = {
       id,
       title: title || 'New Chat',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       status: 'idle',
-      workingDir: '',
+      workingDir: defaultDir,
       isCustomTitle: !!title,
       messages: [],
     };
@@ -118,6 +122,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: [session, ...state.sessions],
       currentSessionId: id,
     }));
+
+    // Sync working dir to backend so tools use the correct directory
+    if (defaultDir) {
+      useSettingsStore.getState().setWorkingDir(defaultDir);
+    }
 
     return id;
   },

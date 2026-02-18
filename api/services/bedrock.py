@@ -310,7 +310,9 @@ Parse natural language time expressions:
 | 每小时 | cron | 0 * * * * |
 | 30分钟后 | delay | 30 |
 | 1小时后 | delay | 60 |
-| 明天下午3点 | once | 2026-02-06T15:00:00 |
+| 明天下午3点 | once | (calculate from current time, e.g. YYYY-MM-DDT15:00:00) |
+
+IMPORTANT: For "once" type, always calculate the correct date from the current time injected in the user message. Never use hardcoded dates.
 
 Example usage:
 ```

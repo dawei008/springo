@@ -1,22 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-
-// ─── Schedule Task Interface ───
-
-interface ScheduleTask {
-  id: string;
-  name: string;
-  scheduleType: 'cron' | 'delay' | 'once';
-  scheduleValue: string;
-  enabled: boolean;
-  status: 'running' | 'completed' | 'failed' | 'skipped' | 'active';
-  nextRun?: string | number | null;
-  lastRun?: string | number | null;
-  executionCount: number;
-  maxExecutions?: number;
-  completedAt?: string | number | null;
-  num: number;
-  output?: string;
-}
+import { useState, useEffect, useRef, useMemo } from 'react';
+import { useScheduleStore } from '@/stores/scheduleStore';
+import type { ScheduleTask } from '@/stores/scheduleStore';
 
 // ─── Helper Functions ───
 
@@ -26,36 +10,30 @@ function describeCron(cron: string): string {
 
   const [minute, hour, dayOfMonth, , dayOfWeek] = parts;
 
-  // Every N minutes: */N * * * *
   if (minute.startsWith('*/') && hour === '*') {
     const n = minute.slice(2);
     return `Every ${n} minute${n === '1' ? '' : 's'}`;
   }
 
-  // Specific time patterns
   const hStr = hour !== '*' ? hour.padStart(2, '0') : null;
   const mStr = minute !== '*' ? minute.padStart(2, '0') : '00';
 
-  // Every hour at :MM
   if (hour === '*' && minute !== '*' && !minute.startsWith('*/')) {
     return `Every hour at :${mStr}`;
   }
 
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-  // Weekly: specific day of week
   if (dayOfWeek !== '*' && dayOfMonth === '*' && hStr) {
     const dayIdx = parseInt(dayOfWeek, 10);
     const dayName = dayNames[dayIdx] || dayOfWeek;
     return `Every ${dayName} at ${hStr}:${mStr}`;
   }
 
-  // Monthly: specific day of month
   if (dayOfMonth !== '*' && dayOfWeek === '*' && hStr) {
     return `Monthly on day ${dayOfMonth} at ${hStr}:${mStr}`;
   }
 
-  // Daily at HH:MM
   if (hStr && dayOfMonth === '*' && dayOfWeek === '*') {
     return `Daily at ${hStr}:${mStr}`;
   }
@@ -63,14 +41,11 @@ function describeCron(cron: string): string {
   return cron;
 }
 
-function formatNextRun(nextRun: string | number | null | undefined): string {
+function formatNextRun(nextRun: number | null | undefined): string {
   if (!nextRun) return '';
-  const target = new Date(nextRun);
-  const now = new Date();
-  const diffMs = target.getTime() - now.getTime();
+  const diffMs = nextRun - Date.now();
 
   if (diffMs < 0) return 'Overdue';
-
   const totalMinutes = Math.floor(diffMs / 60000);
   if (totalMinutes < 1) return 'In <1m';
   if (totalMinutes < 60) return `In ${totalMinutes}m`;
@@ -107,9 +82,9 @@ function formatScheduleDescription(task: ScheduleTask): string {
   }
 }
 
-function isToday(dateValue: string | number | null | undefined): boolean {
-  if (!dateValue) return false;
-  const d = new Date(dateValue);
+function isToday(timestamp: number | null | undefined): boolean {
+  if (!timestamp) return false;
+  const d = new Date(timestamp);
   const now = new Date();
   return (
     d.getFullYear() === now.getFullYear() &&
@@ -118,9 +93,9 @@ function isToday(dateValue: string | number | null | undefined): boolean {
   );
 }
 
-function formatTime(dateValue: string | number | null | undefined): string {
-  if (!dateValue) return '';
-  const d = new Date(dateValue);
+function formatTime(timestamp: number | null | undefined): string {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
   if (isNaN(d.getTime())) return '';
   return d.toLocaleString(undefined, {
     month: 'short',
@@ -133,7 +108,6 @@ function formatTime(dateValue: string | number | null | undefined): string {
 // ─── Status Icons (SVG) ───
 
 function StatusIcon({ status, enabled }: { status: string; enabled: boolean }) {
-  // Running: spinning circle
   if (status === 'running') {
     return (
       <svg className="schedule-status-icon spinning" width="14" height="14" viewBox="0 0 16 16" fill="none">
@@ -141,7 +115,6 @@ function StatusIcon({ status, enabled }: { status: string; enabled: boolean }) {
       </svg>
     );
   }
-  // Completed: checkmark
   if (status === 'completed') {
     return (
       <svg className="schedule-status-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--success)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -149,7 +122,6 @@ function StatusIcon({ status, enabled }: { status: string; enabled: boolean }) {
       </svg>
     );
   }
-  // Failed: X mark
   if (status === 'failed') {
     return (
       <svg className="schedule-status-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--error)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -157,7 +129,6 @@ function StatusIcon({ status, enabled }: { status: string; enabled: boolean }) {
       </svg>
     );
   }
-  // Skipped: dash
   if (status === 'skipped') {
     return (
       <svg className="schedule-status-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--text-tertiary)" strokeWidth="2" strokeLinecap="round">
@@ -165,7 +136,6 @@ function StatusIcon({ status, enabled }: { status: string; enabled: boolean }) {
       </svg>
     );
   }
-  // Active/enabled: clock
   if (enabled) {
     return (
       <svg className="schedule-status-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -174,7 +144,6 @@ function StatusIcon({ status, enabled }: { status: string; enabled: boolean }) {
       </svg>
     );
   }
-  // Disabled: calendar (dimmed)
   return (
     <svg className="schedule-status-icon" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <rect x="2" y="3" width="12" height="11" rx="1.5" />
@@ -211,7 +180,6 @@ function ScheduleItem({
   const isFinished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
   const scheduleDesc = formatScheduleDescription(task);
 
-  // Determine secondary text: next-run or completed-at
   let secondaryText = '';
   if (isFinished && task.completedAt) {
     secondaryText = formatTime(task.completedAt);
@@ -266,103 +234,38 @@ function ScheduleItem({
 // ─── Main Component ───
 
 export default function SchedulesPanel() {
-  const [tasks, setTasks] = useState<ScheduleTask[]>([]);
+  const tasksMap = useScheduleStore((s) => s.tasks);
+  const toggleTask = useScheduleStore((s) => s.toggleTask);
+  const deleteTask = useScheduleStore((s) => s.deleteTask);
+  const tasks = useMemo(
+    () => Object.values(tasksMap).sort((a, b) => a.num - b.num),
+    [tasksMap],
+  );
+
   const [olderCollapsed, setOlderCollapsed] = useState(true);
-  const [, setTick] = useState(0); // force re-render for relative times
+  const [, setTick] = useState(0);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Load tasks from Electron IPC
-  const loadTasks = useCallback(async () => {
-    try {
-      const result = await (window as any).electronAPI?.schedules?.getAll?.();
-      if (Array.isArray(result)) {
-        setTasks(result);
-      }
-    } catch (err) {
-      console.error('Failed to load schedules:', err);
-    }
-  }, []);
-
+  // Refresh relative times every 60s
   useEffect(() => {
-    // Check if electronAPI is available
-    if (!(window as any).electronAPI?.schedules?.getAll) return;
-
-    loadTasks();
-
-    // Refresh every 60 seconds for next-run times
-    intervalRef.current = setInterval(() => {
-      loadTasks();
-      setTick((t) => t + 1);
-    }, 60_000);
-
+    intervalRef.current = setInterval(() => setTick((t) => t + 1), 60_000);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [loadTasks]);
-
-  // Toggle enable/disable
-  const handleToggle = useCallback(async (taskId: string) => {
-    try {
-      await (window as any).electronAPI?.schedules?.toggle?.(taskId);
-      loadTasks();
-    } catch (err) {
-      console.error('Failed to toggle schedule:', err);
-    }
-  }, [loadTasks]);
-
-  // Delete task
-  const handleDelete = useCallback(async (taskId: string) => {
-    try {
-      await (window as any).electronAPI?.schedules?.delete?.(taskId);
-      setTasks((prev) => prev.filter((t) => t.id !== taskId));
-    } catch (err) {
-      console.error('Failed to delete schedule:', err);
-    }
   }, []);
 
-  // If electronAPI is not available, show placeholder
-  if (!(window as any).electronAPI?.schedules) {
-    return (
-      <div className="schedules-panel">
-        <div className="schedules-panel-header">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="8" cy="8" r="6" />
-            <path d="M8 4.5V8L10.5 9.5" />
-          </svg>
-          <span className="schedules-panel-title">Schedules</span>
-        </div>
-        <div className="schedules-panel-empty">
-          <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.5">
-            <circle cx="16" cy="16" r="12" />
-            <path d="M16 9V16L20 19" />
-          </svg>
-          <p>Schedule features require the desktop app.</p>
-        </div>
-      </div>
-    );
-  }
-
-  // Group tasks into "Today" and "Older"
-  const todayTasks: ScheduleTask[] = [];
-  const olderTasks: ScheduleTask[] = [];
-
-  for (const task of tasks) {
-    const relevantDate = task.completedAt || task.nextRun;
-    if (isToday(relevantDate as string | number | null | undefined)) {
-      todayTasks.push(task);
-    } else {
-      olderTasks.push(task);
-    }
-  }
+  const headerIcon = (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="8" cy="8" r="6" />
+      <path d="M8 4.5V8L10.5 9.5" />
+    </svg>
+  );
 
   if (tasks.length === 0) {
     return (
       <div className="schedules-panel">
         <div className="schedules-panel-header">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="8" cy="8" r="6" />
-            <path d="M8 4.5V8L10.5 9.5" />
-          </svg>
+          {headerIcon}
           <span className="schedules-panel-title">Schedules</span>
         </div>
         <div className="schedules-panel-empty">
@@ -376,19 +279,28 @@ export default function SchedulesPanel() {
     );
   }
 
+  // Group tasks into "Today" and "Older"
+  const todayTasks: ScheduleTask[] = [];
+  const olderTasks: ScheduleTask[] = [];
+
+  for (const task of tasks) {
+    const relevantDate = task.completedAt || task.nextRun;
+    if (isToday(relevantDate)) {
+      todayTasks.push(task);
+    } else {
+      olderTasks.push(task);
+    }
+  }
+
   return (
     <div className="schedules-panel">
       <div className="schedules-panel-header">
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="8" cy="8" r="6" />
-          <path d="M8 4.5V8L10.5 9.5" />
-        </svg>
+        {headerIcon}
         <span className="schedules-panel-title">Schedules</span>
         <span className="schedules-panel-badge">{tasks.length}</span>
       </div>
 
       <div className="schedules-panel-body">
-        {/* Today's tasks */}
         {todayTasks.length > 0 && (
           <div className="schedules-group">
             <div className="schedules-group-header">
@@ -399,14 +311,13 @@ export default function SchedulesPanel() {
               <ScheduleItem
                 key={task.id}
                 task={task}
-                onToggle={handleToggle}
-                onDelete={handleDelete}
+                onToggle={toggleTask}
+                onDelete={deleteTask}
               />
             ))}
           </div>
         )}
 
-        {/* Older tasks (collapsible) */}
         {olderTasks.length > 0 && (
           <div className={`schedules-group${olderCollapsed ? ' collapsed' : ''}`}>
             <div
@@ -433,8 +344,8 @@ export default function SchedulesPanel() {
               <ScheduleItem
                 key={task.id}
                 task={task}
-                onToggle={handleToggle}
-                onDelete={handleDelete}
+                onToggle={toggleTask}
+                onDelete={deleteTask}
               />
             ))}
           </div>

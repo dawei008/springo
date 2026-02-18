@@ -13,8 +13,34 @@ import { api } from '@/services/api';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useTeamStore } from '@/stores/teamStore';
+import { useScheduleStore } from '@/stores/scheduleStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
+
+// ---------------------------------------------------------------------------
+// Tool result UI handler — ported from legacy handleToolResultUI()
+// ---------------------------------------------------------------------------
+
+function handleToolResultUI(result: Record<string, unknown> | null | undefined) {
+  if (!result) return;
+
+  const ui = useUIStore.getState();
+
+  // Todo panel updates
+  if (result.ui_update === 'todo_panel' && result.todos) {
+    ui.setTodos(result.todos as import('@/stores/uiStore').TodoItem[]);
+    // Auto-open right panel to Tasks tab when todos arrive
+    ui.setRightPanelOpen(true);
+    ui.setRightPanelTab('tasks');
+  }
+
+  // Schedule panel: dispatch to schedule store and auto-open right panel
+  if (result.ui_update === 'schedules_panel') {
+    useScheduleStore.getState().handleToolResult(result);
+    ui.setRightPanelOpen(true);
+    ui.setRightPanelTab('schedules');
+  }
+}
 
 /**
  * Default system prompt — kept static for KV cache efficiency.
@@ -642,8 +668,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // Tools are added to the toolUses array by the parser
           // and state is updated on next onTextUpdate call
         },
-        onToolResult: () => {
-          // Parser updates toolUses[].result/status and calls onTextUpdate
+        onToolResult: (evt) => {
+          // Dispatch UI-triggering tool results (todo panel, schedules panel, etc.)
+          handleToolResultUI(evt.result);
         },
         onHeartbeat: () => {
           // Parser updates toolUses[].elapsed and calls onTextUpdate
@@ -952,7 +979,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
             },
             onToolUse: () => {},
             onToolExecutionStart: () => {},
-            onToolResult: () => {},
+            onToolResult: (evt) => {
+              handleToolResultUI(evt.result);
+            },
             onHeartbeat: () => {},
             onToolExecutionComplete: () => {},
             onTeamSpawned: (evt) => {
@@ -1210,4 +1239,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return controller;
   },
 }));
+
 

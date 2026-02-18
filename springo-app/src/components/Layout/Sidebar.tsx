@@ -125,8 +125,6 @@ export default function Sidebar() {
 
   // ─── UI store ───
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
-  const themeMode = useUIStore((s) => s.themeMode);
-  const setThemeMode = useUIStore((s) => s.setThemeMode);
 
   // ─── Local state ───
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -172,15 +170,56 @@ export default function Sidebar() {
             fetch(`http://127.0.0.1:8081/v1/sessions/${id}`)
               .then((res) => (res.ok ? res.json() : null))
               .then((data) => {
-                if (!data) return;
-                const meta = data.metadata || {};
-                const newTitle = meta.title || data.title;
+                let newTitle = '';
+                if (data) {
+                  const meta = data.metadata || {};
+                  newTitle = meta.title || data.title || '';
+                }
+                // Fallback: generate title from local messages (like legacy)
+                if (!newTitle || newTitle === 'New Chat' || newTitle === 'Untitled') {
+                  const runtime = useChatStore.getState().runtimes[id];
+                  if (runtime?.messages) {
+                    for (let i = runtime.messages.length - 1; i >= 0; i--) {
+                      const msg = runtime.messages[i];
+                      if (msg.role === 'user') {
+                        let text = '';
+                        if (typeof msg.content === 'string') {
+                          text = msg.content;
+                        } else if (Array.isArray(msg.content)) {
+                          const tb = msg.content.find((b: any) => b.type === 'text') as { text?: string } | undefined;
+                          text = tb?.text || '';
+                        }
+                        // Strip time prefix: [Current time: ...]
+                        text = text.replace(/^\[Current time:[^\]]*\]\s*/, '');
+                        // Strip skill wrapper
+                        const skillMatch = text.match(/^<skill\s+name="([^"]+)">[\s\S]*?<\/skill>\s*/);
+                        if (skillMatch) {
+                          const after = text.slice(skillMatch[0].length);
+                          const req = after.replace(/^User request:\s*/i, '').replace(/\s*Please follow the skill instructions above.*$/s, '').trim();
+                          text = req ? `/${skillMatch[1]} ${req}` : `/${skillMatch[1]}`;
+                        }
+                        if (text.trim()) {
+                          newTitle = text.trim().substring(0, 30);
+                          if (text.trim().length > 30) newTitle += '...';
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+
                 if (newTitle && newTitle !== 'New Chat' && newTitle !== 'Untitled') {
-                  useSessionStore.setState((state) => ({
-                    sessions: state.sessions.map((s) =>
-                      s.id === id ? { ...s, title: newTitle } : s,
+                  useSessionStore.setState((s) => ({
+                    sessions: s.sessions.map((sess) =>
+                      sess.id === id ? { ...sess, title: newTitle } : sess,
                     ),
                   }));
+                  // Also persist to backend
+                  fetch(`http://127.0.0.1:8081/v1/sessions/${id}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ metadata: { title: newTitle } }),
+                  }).catch(() => {});
                 }
               })
               .catch(() => {});
@@ -387,11 +426,6 @@ export default function Sidebar() {
       window.electronAPI.openFolder(folder);
     }
   }, []);
-
-  const handleCycleTheme = useCallback(() => {
-    const next = themeMode === 'system' ? 'light' : themeMode === 'light' ? 'dark' : 'system';
-    setThemeMode(next);
-  }, [themeMode, setThemeMode]);
 
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
@@ -640,34 +674,8 @@ export default function Sidebar() {
         onExport={handleContextExport}
       />
 
-      {/* Sidebar footer with Theme toggle + Settings button */}
+      {/* Sidebar footer */}
       <div className="sidebar-footer">
-        <button className="settings-btn" onClick={handleCycleTheme} title={`Theme: ${themeMode}`}>
-          {themeMode === 'system' ? (
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"/>
-              <line x1="8" y1="21" x2="16" y2="21"/>
-              <line x1="12" y1="17" x2="12" y2="21"/>
-            </svg>
-          ) : themeMode === 'light' ? (
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="5"/>
-              <line x1="12" y1="1" x2="12" y2="3"/>
-              <line x1="12" y1="21" x2="12" y2="23"/>
-              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
-              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-              <line x1="1" y1="12" x2="3" y2="12"/>
-              <line x1="21" y1="12" x2="23" y2="12"/>
-              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
-              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-            </svg>
-          ) : (
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-              <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/>
-            </svg>
-          )}
-          {themeMode === 'system' ? 'System' : themeMode === 'light' ? 'Light' : 'Dark'}
-        </button>
         <button className="settings-btn" onClick={handleOpenSettings}>
           <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
             <circle cx="8" cy="8" r="3"/>

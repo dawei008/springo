@@ -800,7 +800,40 @@ async def messages_auto_api(
             
             if final_response is None:
                 final_response = {"content": [], "stop_reason": "max_iterations", "usage": {"input_tokens": 0, "output_tokens": 0}}
-            
+
+            # Save final assistant response to messages and persist session
+            final_content = final_response.get("content", [])
+            if final_content:
+                final_assistant = []
+                for block in final_content:
+                    if block.get("type") == "text" and block.get("text"):
+                        final_assistant.append({"type": "text", "text": block["text"]})
+                if final_assistant:
+                    messages.append({"role": "assistant", "content": final_assistant})
+            if session_id:
+                try:
+                    store = get_session_store()
+                    title = ""
+                    # Generate title from first user message
+                    for m in messages:
+                        if m.get("role") == "user":
+                            c = m.get("content", "")
+                            if isinstance(c, str):
+                                title = c[:50]
+                            elif isinstance(c, list):
+                                for b in c:
+                                    if b.get("type") == "text":
+                                        title = b.get("text", "")[:50]
+                                        break
+                            break
+                    store.save_session_complete(session_id, messages, metadata={
+                        "title": title or "Scheduled Task",
+                        "iteration": iteration,
+                    })
+                    logger.info(f"Non-streaming session {session_id} saved with {len(messages)} messages")
+                except Exception as e:
+                    logger.error(f"Failed to save non-streaming session {session_id}: {e}")
+
             response = {
                 "id": f"msg_{uuid.uuid4().hex[:24]}",
                 "type": "message",

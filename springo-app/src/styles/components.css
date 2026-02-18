@@ -670,6 +670,63 @@
             height: 100%;
         }
 
+        /* Right Panel Todo List */
+        .panel-todo-list {
+            padding: 8px 0;
+        }
+
+        .panel-todo-header {
+            display: flex;
+            justify-content: flex-end;
+            padding: 4px 16px 8px;
+        }
+
+        .panel-todo-progress {
+            font-size: 11px;
+            color: var(--text-tertiary);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .panel-todo-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 6px 16px;
+            font-size: 12px;
+            line-height: 1.4;
+        }
+
+        .panel-todo-item:hover {
+            background: var(--hover-bg);
+        }
+
+        .panel-todo-icon {
+            flex-shrink: 0;
+            width: 16px;
+            text-align: center;
+            font-size: 13px;
+        }
+
+        .panel-todo-item.in-progress .panel-todo-icon { color: var(--accent); }
+        .panel-todo-item.completed .panel-todo-icon { color: var(--success); }
+        .panel-todo-item.pending .panel-todo-icon { color: var(--text-tertiary); }
+
+        .panel-todo-subject {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .panel-todo-item.completed .panel-todo-subject {
+            text-decoration: line-through;
+            opacity: 0.5;
+        }
+
+        .panel-todo-item.in-progress {
+            background: rgba(var(--accent-rgb, 59,130,246), 0.05);
+        }
+
         .panel-task-item {
             padding: 12px 16px;
             background: transparent;
@@ -2155,7 +2212,7 @@
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 12px;
-            max-width: 600px;
+            max-width: 640px;
             margin: 0 auto;
         }
 
@@ -2203,6 +2260,22 @@
             font-size: 12px;
             color: var(--text-tertiary);
             margin: 0;
+        }
+
+        .welcome-prompt-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+        }
+
+        .welcome-prompt-tag {
+            font-size: 10px;
+            color: var(--text-tertiary);
+            background: var(--bg-tertiary, rgba(128, 128, 128, 0.1));
+            padding: 1px 6px;
+            border-radius: 4px;
+            line-height: 1.6;
         }
 
         /* Input Area */

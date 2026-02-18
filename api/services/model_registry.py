@@ -103,6 +103,18 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "api_format": "anthropic",
         "beta_features": ["context-1m-2025-08-07"],
     },
+    "claude-sonnet-4-6": {
+        "vendor": "bedrock",
+        "bedrock_id": "us.anthropic.claude-sonnet-4-6",
+        "provider": "anthropic",
+        "display_name": "Claude Sonnet 4.6",
+        "context_window": 200000,
+        "max_output": 64000,
+        "supports_vision": True,
+        "supports_thinking": False,
+        "supports_tools": True,
+        "api_format": "anthropic",
+    },
     "claude-sonnet-4-5-20250929": {
         "vendor": "bedrock",
         "bedrock_id": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",

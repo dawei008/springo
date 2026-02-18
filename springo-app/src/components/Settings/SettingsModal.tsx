@@ -174,6 +174,8 @@ export default function SettingsModal() {
     })
     // Update default working dir
     if (localDefaultWorkdir.trim() && localDefaultWorkdir !== defaultWorkingFolder) {
+      // Update Zustand store so createSession() picks it up
+      useSettingsStore.setState({ defaultWorkingFolder: localDefaultWorkdir.trim() });
       if (window.electronAPI?.cache) {
         window.electronAPI.cache.set('workspace', {
           workingFolders,
