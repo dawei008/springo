@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useEffect, useRef } from 'react';
 import Message from './Message';
 import type { DisplayMessage } from './Message';
 import type { Message as MessageType, ContentBlock } from '@/types';
+import { useUIStore } from '@/stores/uiStore';
 
 /** Extract readable text from message content (string or ContentBlock[]). */
 function extractTextContent(content: string | ContentBlock[] | undefined): string {
@@ -32,9 +33,10 @@ function isToolResultOnlyMessage(m: MessageType): boolean {
 
 interface Props {
   messages: MessageType[];
+  isStreaming?: boolean;
 }
 
-export default function MessageList({ messages }: Props) {
+export default function MessageList({ messages, isStreaming = false }: Props) {
   const displayMessages = useMemo(() => {
     // Filter out internal messages for display
     const filtered = messages.filter((m, idx) => {
@@ -87,10 +89,35 @@ export default function MessageList({ messages }: Props) {
     return result;
   }, [messages]);
 
+  // Detect context compaction: message count drops significantly mid-session
+  const prevMsgCountRef = useRef(messages.length);
+  useEffect(() => {
+    const prev = prevMsgCountRef.current;
+    const curr = messages.length;
+    prevMsgCountRef.current = curr;
+    // If count dropped by 2+ messages and we had a meaningful history, it's compaction
+    if (prev > 3 && curr > 0 && curr < prev - 1) {
+      useUIStore.getState().showToast('Context compacted automatically', 'success', 4000);
+    }
+  }, [messages.length]);
+
+  // Find the last assistant message index — only it should show the tool panel
+  const lastAssistantIdx = (() => {
+    for (let i = displayMessages.length - 1; i >= 0; i--) {
+      if (displayMessages[i].role === 'assistant') return i;
+    }
+    return -1;
+  })();
+
   return (
     <>
       {displayMessages.map((msg, i) => (
-        <Message key={`${msg.timestamp || i}-${i}`} message={msg} />
+        <Message
+          key={`${msg.timestamp || i}-${i}`}
+          message={msg}
+          showToolPanel={i === lastAssistantIdx}
+          isStreaming={i === lastAssistantIdx ? isStreaming : false}
+        />
       ))}
     </>
   );

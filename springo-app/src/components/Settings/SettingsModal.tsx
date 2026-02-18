@@ -769,12 +769,19 @@ export default function SettingsModal() {
               </div>
               <div className="settings-list" id="skills-list">
                 {skills.length === 0 ? (
-                  <div className="settings-list-empty">Loading skills...</div>
+                  <div className="settings-list-empty">No skills found in skills/ directory</div>
                 ) : (
                   skills.map((skill) => (
                     <div key={skill.name} className="settings-list-item">
-                      <span className="item-name">{skill.name}</span>
-                      {skill.description && <span className="item-desc">{skill.description}</span>}
+                      <div className="item-icon">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                        </svg>
+                      </div>
+                      <div className="item-info">
+                        <div className="item-name">{skill.name}</div>
+                        <div className="item-desc">{skill.description || 'No description'}</div>
+                      </div>
                     </div>
                   ))
                 )}
@@ -792,28 +799,40 @@ export default function SettingsModal() {
               </div>
               <div className="settings-list" id="mcp-servers-list">
                 {mcpServers.length === 0 ? (
-                  <div className="settings-list-empty">Loading MCP servers...</div>
+                  <div className="settings-list-empty">No MCP servers configured</div>
                 ) : (
                   mcpServers.map((server) => {
+                    let statusClass = 'stopped'
                     let statusText = server.cached_tools > 0
                       ? `Ready (${server.cached_tools} tools)`
                       : 'No tools cached'
                     if (!server.enabled) {
+                      statusClass = 'disabled'
                       statusText = 'Disabled'
                     } else if (server.running) {
+                      statusClass = 'running'
                       statusText = `Running (${server.tools} tools)`
                     } else if (server.status === 'error') {
+                      statusClass = 'error'
                       statusText = 'Error'
                     }
                     return (
-                      <div key={server.name} className="settings-list-item">
-                        <span className="item-name">{server.name}</span>
-                        <span className="item-status">{statusText}</span>
-                        <button className="item-remove" onClick={() => removeMcpServer(server.name)} title="Remove">
-                          <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M2 2l10 10M12 2L2 12" />
+                      <div key={server.name} className={`settings-list-item${!server.enabled ? ' disabled' : ''}`}>
+                        <div className="item-icon">
+                          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                            <line x1="8" y1="21" x2="16" y2="21" />
+                            <line x1="12" y1="17" x2="12" y2="21" />
                           </svg>
-                        </button>
+                        </div>
+                        <div className="item-info">
+                          <div className="item-name">{server.name}</div>
+                          <div className="item-desc">{server.description || server.command || ''}</div>
+                        </div>
+                        <span className={`item-status ${statusClass}`}>{statusText}</span>
+                        <div className="item-actions">
+                          <button className="danger" onClick={() => removeMcpServer(server.name)}>Remove</button>
+                        </div>
                       </div>
                     )
                   })

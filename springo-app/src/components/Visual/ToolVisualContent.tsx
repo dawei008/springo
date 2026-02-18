@@ -1,19 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
 import { useUIStore } from '@/stores/uiStore'
 import { api } from '@/services/api'
-import ExcalidrawPreview from './ExcalidrawPreview'
 import type { ToolUse } from '@/types'
 
 interface ToolVisualContentProps {
   toolUse: ToolUse
-}
-
-/** Set of visual-ids already rendered (deduplication across re-renders). */
-const renderedVisuals = new Set<string>()
-
-/** Reset dedup set (call when switching sessions). */
-export function resetVisualDedup() {
-  renderedVisuals.clear()
 }
 
 function escapeHtml(str: string): string {
@@ -34,36 +25,20 @@ export default function ToolVisualContent({ toolUse }: ToolVisualContentProps) {
     ? toolUse.result
     : JSON.stringify(toolUse.result || '')
 
-  // --- Excalidraw ---
-  if (toolUse.name === 'excalidraw__create_view' && toolUse.input?.elements) {
-    const dedupKey = `excalidraw-${toolUse.id}`
-    if (renderedVisuals.has(dedupKey)) return null
-    renderedVisuals.add(dedupKey)
-    return (
-      <div className="tool-visual-content" data-visual-id={dedupKey}>
-        <ExcalidrawPreview elements={toolUse.input.elements as unknown[]} />
-      </div>
-    )
-  }
+  // --- Excalidraw is handled by ExcalidrawLinkCard in Message.tsx ---
 
   // --- Image URLs ---
   const imageUrlRegex = /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp)(?:\?[^\s"'`]*)?)/gi
   const imageUrls = resultStr.match(imageUrlRegex)
   if (imageUrls) {
     const unique = [...new Set(imageUrls)]
-    const visuals = unique.filter((url) => {
-      const key = `url-${toolUse.id}-${url.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 80)}`
-      if (renderedVisuals.has(key)) return false
-      renderedVisuals.add(key)
-      return true
-    })
-    if (visuals.length > 0) {
+    if (unique.length > 0) {
       return (
         <>
-          {visuals.map((url) => {
+          {unique.map((url) => {
             const key = `url-${toolUse.id}-${url.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 80)}`
             return (
-              <div key={key} className="tool-visual-content" data-visual-id={key}>
+              <div key={key} className="tool-visual-content">
                 <img
                   src={url}
                   className="tool-visual-inline-image"
@@ -108,20 +83,14 @@ export default function ToolVisualContent({ toolUse }: ToolVisualContentProps) {
 
   if (imagePaths) {
     const paths = [...new Set(imagePaths)].map((p) => p.replace(/["'\\]+$/g, '').trim())
-    const visuals = paths.filter((p) => {
-      const key = `img-${toolUse.id}-${p.replace(/[^a-zA-Z0-9]/g, '_')}`
-      if (renderedVisuals.has(key)) return false
-      renderedVisuals.add(key)
-      return true
-    })
-    if (visuals.length > 0) {
+    if (paths.length > 0) {
       return (
         <>
-          {visuals.map((filePath) => {
+          {paths.map((filePath) => {
             const key = `img-${toolUse.id}-${filePath.replace(/[^a-zA-Z0-9]/g, '_')}`
             const fileName = filePath.split('/').pop() || filePath
             return (
-              <div key={key} className="tool-visual-content" data-visual-id={key} ref={containerRef}>
+              <div key={key} className="tool-visual-content" ref={containerRef}>
                 <div className="tool-visual-header">
                   <span className="tool-visual-icon">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -169,37 +138,28 @@ export default function ToolVisualContent({ toolUse }: ToolVisualContentProps) {
   const base64Regex = /data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/
   const base64Match = resultStr.match(base64Regex)
   if (base64Match) {
-    const dedupKey = `b64-${toolUse.id}`
-    if (!renderedVisuals.has(dedupKey)) {
-      renderedVisuals.add(dedupKey)
-      return (
-        <div className="tool-visual-content" data-visual-id={dedupKey}>
-          <img
-            src={base64Match[0]}
-            className="tool-visual-inline-image"
-            alt="Tool output"
-            onClick={() => setImagePreview(base64Match[0])}
-          />
-        </div>
-      )
-    }
+    return (
+      <div className="tool-visual-content">
+        <img
+          src={base64Match[0]}
+          className="tool-visual-inline-image"
+          alt="Tool output"
+          onClick={() => setImagePreview(base64Match[0])}
+        />
+      </div>
+    )
   }
 
   // --- SVG content ---
   if (resultStr.includes('<svg') && resultStr.includes('</svg>')) {
     const svgMatch = resultStr.match(/<svg[\s\S]*?<\/svg>/i)
     if (svgMatch) {
-      const dedupKey = `svg-${toolUse.id}`
-      if (!renderedVisuals.has(dedupKey)) {
-        renderedVisuals.add(dedupKey)
-        return (
-          <div
-            className="tool-visual-content tool-visual-svg"
-            data-visual-id={dedupKey}
-            dangerouslySetInnerHTML={{ __html: svgMatch[0] }}
-          />
-        )
-      }
+      return (
+        <div
+          className="tool-visual-content tool-visual-svg"
+          dangerouslySetInnerHTML={{ __html: svgMatch[0] }}
+        />
+      )
     }
   }
 

@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
+import { useToolsStore } from '@/stores/toolsStore';
 import { api } from '@/services/api';
 import type { Attachment, Skill } from '@/types';
 
@@ -22,7 +23,6 @@ const BUILT_IN_COMMANDS = [
 export default function MessageInput() {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [skillPickerIndex, setSkillPickerIndex] = useState(0);
 
@@ -39,30 +39,51 @@ export default function MessageInput() {
   const [syncTitle, setSyncTitle] = useState('AgentCore Memory Sync Status');
   const lastKnownSyncCountRef = useRef(0);
 
+  const [showModelPicker, setShowModelPicker] = useState(false);
+  const modelPickerRef = useRef<HTMLDivElement>(null);
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const createSession = useSessionStore((s) => s.createSession);
-  const sendMessage = useChatStore((s) => s.sendMessage);
-  const stopTask = useChatStore((s) => s.stopTask);
   const isStreaming = useChatStore((s) =>
     currentSessionId ? s.isStreaming(currentSessionId) : false,
   );
   const settings = useSettingsStore((s) => s.settings);
   const activeSkill = useUIStore((s) => s.activeSkill);
-  const clearActiveSkill = useUIStore((s) => s.clearActiveSkill);
   const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
   const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
-  const cycleTeamMode = useUIStore((s) => s.cycleTeamMode);
   const activeTeamId = useUIStore((s) => s.activeTeamId);
 
-  // Load available skills on mount
+  // Model selector data
+  const models = useSettingsStore((s) => s.models);
+  const modelsByProvider = useSettingsStore((s) => s.modelsByProvider);
+  const currentModel = settings.model || useSettingsStore((s) => s.defaultModel);
+
+  // Compute display name for current model
+  const currentModelDisplayName = useMemo(() => {
+    const m = models.find((x) => x.id === currentModel);
+    if (m) return (m as unknown as Record<string, string>).display_name || m.name || m.id;
+    // Shorten the model ID for display
+    const short = currentModel.replace(/^(claude|anthropic|deepseek|minimax|kimi|qwen|glm)[.-]?/i, '');
+    return short || currentModel;
+  }, [models, currentModel]);
+
+  // Close model picker when clicking outside
   useEffect(() => {
-    fetch(`${BASE_URL}/v1/skills`)
-      .then((r) => r.json())
-      .then((data) => setSkills(data.skills || []))
-      .catch(() => {});
+    if (!showModelPicker) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+        setShowModelPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showModelPicker]);
+
+  const handleModelSelect = useCallback((modelId: string) => {
+    useSettingsStore.getState().saveSettings({ model: modelId });
+    setShowModelPicker(false);
   }, []);
 
   // Memory sync status polling
@@ -123,14 +144,17 @@ export default function MessageInput() {
 
   // Context indicator: refresh when session changes or streaming ends
   useEffect(() => {
-    const refreshContextStats = async () => {
-      if (!currentSessionId) {
-        setContextPercent(0);
-        setContextStatus('normal');
-        setContextTitle('Click for context breakdown');
-        return;
-      }
+    // Skip refresh while actively streaming — only refresh when it ends
+    if (isStreaming) return;
 
+    if (!currentSessionId) {
+      setContextPercent(0);
+      setContextStatus('normal');
+      setContextTitle('Click for context breakdown');
+      return;
+    }
+
+    const refreshContextStats = async () => {
       try {
         const response = await fetch(`${BASE_URL}/v1/context/stats`, {
           method: 'POST',
@@ -168,7 +192,7 @@ export default function MessageInput() {
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
 
-  // Build filtered items for skill picker
+  // Build filtered items for skill picker (includes built-in commands, skills, and MCP servers)
   const getFilteredSkillItems = useCallback(
     (query: string) => {
       const filteredBuiltIn = BUILT_IN_COMMANDS.filter(
@@ -176,14 +200,27 @@ export default function MessageInput() {
           c.name.toLowerCase().includes(query) ||
           c.description.toLowerCase().includes(query),
       );
-      const filteredSkills = skills.filter(
+      const currentSkills = useToolsStore.getState().skills;
+      const filteredSkills = currentSkills.filter(
         (s) =>
           s.name.toLowerCase().includes(query) ||
           s.description.toLowerCase().includes(query),
       );
-      return [...filteredBuiltIn, ...filteredSkills];
+      const mcpServers = useToolsStore.getState().mcpServers;
+      const filteredMcp = mcpServers
+        .filter(
+          (s) =>
+            s.name.toLowerCase().includes(query) ||
+            (s.description || '').toLowerCase().includes(query),
+        )
+        .map((s) => ({
+          name: s.name,
+          description: s.description || `MCP server (${s.tools || s.cached_tools || 0} tools)`,
+          isMcp: true as const,
+        }));
+      return [...filteredBuiltIn, ...filteredSkills, ...filteredMcp];
     },
-    [skills],
+    [],
   );
 
   const handleTextChange = useCallback(
@@ -239,7 +276,7 @@ export default function MessageInput() {
 
     let convId = currentSessionId;
     if (!convId) {
-      convId = createSession();
+      convId = useSessionStore.getState().createSession();
     }
 
     setText('');
@@ -255,40 +292,49 @@ export default function MessageInput() {
       path: a.path,
     }));
 
-    await sendMessage(convId, content, atts, {
-      model: settings.model,
-      maxTokens: settings.maxTokens,
-      temperature: settings.temperature,
-      systemPrompt: settings.systemPrompt,
-      compactModel: settings.compactModel,
+    const currentSettings = useSettingsStore.getState().settings;
+    await useChatStore.getState().sendMessage(convId, content, atts, {
+      model: currentSettings.model,
+      maxTokens: currentSettings.maxTokens,
+      temperature: currentSettings.temperature,
+      systemPrompt: currentSettings.systemPrompt,
+      compactModel: currentSettings.compactModel,
       sessionId: convId,
     });
 
-    if (activeSkill) {
-      clearActiveSkill();
+    if (useUIStore.getState().activeSkill) {
+      useUIStore.getState().clearActiveSkill();
     }
-  }, [
-    text,
-    attachments,
-    isStreaming,
-    currentSessionId,
-    createSession,
-    sendMessage,
-    settings,
-    activeSkill,
-    clearActiveSkill,
-    activeTeamId,
-  ]);
+  }, [text, attachments, isStreaming, currentSessionId, activeTeamId]);
 
   const handleStop = useCallback(() => {
     if (currentSessionId) {
-      stopTask(currentSessionId);
+      useChatStore.getState().stopTask(currentSessionId);
     }
-  }, [currentSessionId, stopTask]);
+  }, [currentSessionId]);
 
   const selectSkill = useCallback(
     (skill: Skill) => {
+      // Add as attachment chip (like file drag)
+      setAttachments((prev) => [
+        ...prev,
+        { type: 'skill', name: `/${skill.name}`, path: skill.name },
+      ]);
       useUIStore.getState().setActiveSkill({ name: skill.name, description: skill.description });
+      setText('');
+      setShowSkillPicker(false);
+      textareaRef.current?.focus();
+    },
+    [],
+  );
+
+  const selectMcpServer = useCallback(
+    (serverName: string) => {
+      // Add as attachment chip (like file drag)
+      setAttachments((prev) => [
+        ...prev,
+        { type: 'mcp_server', name: serverName, path: serverName },
+      ]);
       setText('');
       setShowSkillPicker(false);
       textareaRef.current?.focus();
@@ -325,6 +371,8 @@ export default function MessageInput() {
           if (item) {
             if ('isBuiltIn' in item && item.isBuiltIn) {
               selectBuiltInCommand(item.name);
+            } else if ('isMcp' in item && item.isMcp) {
+              selectMcpServer(item.name);
             } else {
               selectSkill(item as Skill);
             }
@@ -351,7 +399,7 @@ export default function MessageInput() {
         handleSend();
       }
     },
-    [showSkillPicker, text, getFilteredSkillItems, skillPickerIndex, selectBuiltInCommand, selectSkill, isStreaming, handleStop, handleSend],
+    [showSkillPicker, text, getFilteredSkillItems, skillPickerIndex, selectBuiltInCommand, selectSkill, selectMcpServer, isStreaming, handleStop, handleSend],
   );
 
   // Handle paste for images
@@ -433,6 +481,48 @@ export default function MessageInput() {
       e.preventDefault();
       e.stopPropagation();
       e.currentTarget.classList.remove('drag-over');
+
+      // Check for skill drop — add as attachment chip
+      const skillData = e.dataTransfer.getData('application/x-springo-skill');
+      if (skillData) {
+        try {
+          const skill = JSON.parse(skillData) as { name: string; description: string };
+          setAttachments((prev) => [
+            ...prev,
+            { type: 'skill', name: `/${skill.name}`, path: skill.name },
+          ]);
+          useUIStore.getState().setActiveSkill({ name: skill.name, description: skill.description });
+        } catch { /* ignore */ }
+        setTimeout(() => textareaRef.current?.focus(), 0);
+        return;
+      }
+
+      // Check for MCP server drop — add as attachment chip
+      const serverData = e.dataTransfer.getData('application/x-springo-mcp-server');
+      if (serverData) {
+        try {
+          const server = JSON.parse(serverData) as { name: string };
+          setAttachments((prev) => [
+            ...prev,
+            { type: 'mcp_server', name: server.name, path: server.name },
+          ]);
+        } catch { /* ignore */ }
+        setTimeout(() => textareaRef.current?.focus(), 0);
+        return;
+      }
+
+      // Check for file browser path drop
+      const filePath = e.dataTransfer.getData('application/x-springo-filepath');
+      if (filePath) {
+        const fileName = filePath.split('/').pop() || filePath;
+        setAttachments((prev) => [
+          ...prev,
+          { type: 'file_path', name: fileName, path: filePath },
+        ]);
+        return;
+      }
+
+      // Default: file drop
       const files = Array.from(e.dataTransfer.files);
       processFiles(files);
     },
@@ -444,8 +534,66 @@ export default function MessageInput() {
   }, []);
 
   const toggleTeamMode = useCallback(() => {
-    cycleTeamMode();
-  }, [cycleTeamMode]);
+    useUIStore.getState().cycleTeamMode();
+  }, []);
+
+  // Render context breakdown data into HTML (matching legacy renderContextBreakdown)
+  const renderContextBreakdown = useCallback((data: Record<string, unknown>) => {
+    const breakdown = data.breakdown as Record<string, { count: number; tokens: number; percent: number }>;
+    if (!breakdown) return '<div class="breakdown-empty">No breakdown data</div>';
+
+    const categories = [
+      { key: 'system_prompt', label: 'System Prompt', cssClass: 'system' },
+      { key: 'system_tools', label: 'System Tools', cssClass: 'tools' },
+      { key: 'skills', label: 'Skills', cssClass: 'skills' },
+      { key: 'memory_files', label: 'Memory Files', cssClass: 'memory' },
+      { key: 'user_text', label: 'User', cssClass: 'user' },
+      { key: 'assistant_text', label: 'Assistant', cssClass: 'assistant' },
+      { key: 'tool_use', label: 'Tool Use', cssClass: 'tool-use' },
+      { key: 'tool_result', label: 'Tool Result', cssClass: 'tool-result' },
+      { key: 'images', label: 'Images', cssClass: 'images' },
+    ];
+
+    let html = '';
+    for (const cat of categories) {
+      const catData = breakdown[cat.key];
+      if (!catData) continue;
+      if (catData.count > 0 || catData.tokens > 0) {
+        const tokensStr = catData.tokens >= 1000
+          ? `${(catData.tokens / 1000).toFixed(1)}k`
+          : String(catData.tokens);
+        html += `<div class="breakdown-row">
+          <span class="breakdown-label">${cat.label}</span>
+          <div class="breakdown-bar-container">
+            <div class="breakdown-bar ${cat.cssClass}" style="width: ${Math.min(catData.percent, 100)}%"></div>
+          </div>
+          <span class="breakdown-percent">${catData.percent.toFixed(1)}% (${tokensStr})</span>
+        </div>`;
+      }
+    }
+
+    const usedPercent = data.usage_percent as number;
+    const freePercent = Math.max(0, 100 - usedPercent);
+    const totalTokens = data.total_tokens as number;
+    const maxTokens = data.max_tokens as number;
+    const freeTokens = maxTokens - totalTokens;
+    const freeStr = freeTokens >= 1000 ? `${(freeTokens / 1000).toFixed(1)}k` : String(freeTokens);
+
+    html += `<div class="breakdown-row breakdown-free">
+      <span class="breakdown-label">Free Space</span>
+      <div class="breakdown-bar-container">
+        <div class="breakdown-bar free" style="width: ${freePercent}%"></div>
+      </div>
+      <span class="breakdown-percent">${freePercent.toFixed(1)}% (${freeStr})</span>
+    </div>`;
+
+    html += `<div class="breakdown-total">
+      <span class="breakdown-total-label">Total</span>
+      <span class="breakdown-total-value">${totalTokens.toLocaleString()} / ${maxTokens.toLocaleString()} (${usedPercent}%)</span>
+    </div>`;
+
+    return html;
+  }, []);
 
   // Toggle context breakdown popup
   const toggleContextBreakdown = useCallback(
@@ -454,24 +602,42 @@ export default function MessageInput() {
       setShowContextBreakdown((prev) => !prev);
 
       if (!showContextBreakdown && currentSessionId) {
-        // Fetch breakdown content
+        setContextBreakdownHtml('<div class="breakdown-loading">Loading...</div>');
+
+        // Get messages from chatStore for the request body (matching legacy)
+        const runtime = useChatStore.getState().runtimes[currentSessionId];
+        const messages = runtime?.messages?.map((msg) => {
+          try {
+            JSON.stringify(msg);
+            return msg;
+          } catch {
+            return { role: msg.role || 'user', content: '[Non-serializable content]' };
+          }
+        }) || [];
+
         fetch(`${BASE_URL}/v1/context/breakdown`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: currentSessionId }),
+          body: JSON.stringify({
+            messages,
+            system: '',
+            tools: [],
+            skills: [],
+            memory_files: [],
+            model: settings.model || '',
+            extended_context: settings.enable1mContext !== false,
+          }),
         })
           .then((r) => r.json())
           .then((data) => {
-            if (data.breakdown) {
-              setContextBreakdownHtml(data.breakdown);
-            }
+            setContextBreakdownHtml(renderContextBreakdown(data));
           })
           .catch(() => {
-            setContextBreakdownHtml('<div class="breakdown-empty">Failed to load breakdown</div>');
+            setContextBreakdownHtml('<div class="breakdown-error">Failed to load breakdown</div>');
           });
       }
     },
-    [showContextBreakdown, currentSessionId],
+    [showContextBreakdown, currentSessionId, settings.model, settings.enable1mContext, renderContextBreakdown],
   );
 
   // Close context breakdown when clicking outside
@@ -514,7 +680,7 @@ export default function MessageInput() {
           <span className="skill-desc">
             {activeSkill.description ? activeSkill.description.substring(0, 60) + '...' : ''}
           </span>
-          <button className="skill-clear" onClick={clearActiveSkill}>
+          <button className="skill-clear" onClick={() => useUIStore.getState().clearActiveSkill()}>
             &times;
           </button>
         </div>
@@ -530,6 +696,8 @@ export default function MessageInput() {
         <div className="attachments" id="attachments">
           {attachments.map((a, i) => {
             const isImage = a.type && a.type.startsWith('image/');
+            const isSkill = a.type === 'skill';
+            const isMcp = a.type === 'mcp_server';
             if (isImage && a.data) {
               return (
                 <div key={i} className="attachment image-attachment" title={a.name}>
@@ -541,6 +709,26 @@ export default function MessageInput() {
                   <span className="attachment-name">
                     {a.name.length > 20 ? a.name.slice(0, 17) + '...' : a.name}
                   </span>
+                  <span className="remove" onClick={() => removeAttachment(i)}>
+                    &times;
+                  </span>
+                </div>
+              );
+            } else if (isSkill) {
+              return (
+                <div key={i} className="attachment skill-attachment" title={a.path}>
+                  <span className="skill-slash" style={{ fontSize: '12px' }}>/</span>
+                  {a.name.replace(/^\//, '')}
+                  <span className="remove" onClick={() => { removeAttachment(i); useUIStore.getState().clearActiveSkill(); }}>
+                    &times;
+                  </span>
+                </div>
+              );
+            } else if (isMcp) {
+              return (
+                <div key={i} className="attachment mcp-attachment" title={a.path}>
+                  <span className="mcp-dot" />
+                  {a.name}
                   <span className="remove" onClick={() => removeAttachment(i)}>
                     &times;
                   </span>
@@ -650,7 +838,7 @@ export default function MessageInput() {
             id="stop-btn"
             onClick={handleStop}
             title="Stop (Esc)"
-            style={{ display: (isStreaming && !activeTeamId) ? undefined : 'none' }}
+            style={{ display: (isStreaming && !activeTeamId) ? 'flex' : 'none' }}
           >
             <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
               <rect x="6" y="6" width="12" height="12" rx="2" />
@@ -660,6 +848,50 @@ export default function MessageInput() {
 
         {/* Bottom status row */}
         <div className="bottom-status-row">
+          {/* Compact model selector */}
+          <div className="model-selector-compact" ref={modelPickerRef}>
+            <button
+              className="model-selector-btn"
+              onClick={() => setShowModelPicker((p) => !p)}
+              title={`Current model: ${currentModel}`}
+            >
+              <span className="model-selector-label">{currentModelDisplayName}</span>
+              <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor">
+                <path d="M2 4l3 3 3-3" stroke="currentColor" strokeWidth="1.2" fill="none" />
+              </svg>
+            </button>
+            {showModelPicker && (
+              <div className="model-picker-dropdown">
+                {Object.keys(modelsByProvider).length > 0 ? (
+                  Object.entries(modelsByProvider).map(([provider, providerModels]) => (
+                    <div key={provider} className="model-picker-group">
+                      <div className="model-picker-group-label">{provider}</div>
+                      {providerModels.map((m) => (
+                        <div
+                          key={m.id}
+                          className={`model-picker-item${m.id === currentModel ? ' active' : ''}`}
+                          onClick={() => handleModelSelect(m.id)}
+                        >
+                          {(m as unknown as Record<string, string>).display_name || m.name || m.id}
+                        </div>
+                      ))}
+                    </div>
+                  ))
+                ) : (
+                  models.map((m) => (
+                    <div
+                      key={m.id}
+                      className={`model-picker-item${m.id === currentModel ? ' active' : ''}`}
+                      onClick={() => handleModelSelect(m.id)}
+                    >
+                      {m.name || m.id}
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
           <div
             className={contextIndicatorClass}
             id="context-indicator"
@@ -704,18 +936,29 @@ export default function MessageInput() {
         <div className="skill-picker" id="skill-picker">
           {filteredSkillItems.map((item, idx) => {
             const isBuiltIn = 'isBuiltIn' in item && item.isBuiltIn;
+            const isMcp = 'isMcp' in item && item.isMcp;
             return (
               <div
-                key={item.name + (isBuiltIn ? '-builtin' : '')}
-                className={`skill-picker-item${isBuiltIn ? ' built-in' : ''}${idx === skillPickerIndex ? ' active' : ''}`}
+                key={item.name + (isBuiltIn ? '-builtin' : isMcp ? '-mcp' : '')}
+                className={`skill-picker-item${isBuiltIn ? ' built-in' : ''}${isMcp ? ' mcp-item' : ''}${idx === skillPickerIndex ? ' active' : ''}`}
                 onClick={() =>
-                  isBuiltIn ? selectBuiltInCommand(item.name) : selectSkill(item as Skill)
+                  isBuiltIn
+                    ? selectBuiltInCommand(item.name)
+                    : isMcp
+                      ? selectMcpServer(item.name)
+                      : selectSkill(item as Skill)
                 }
               >
                 <div className="skill-picker-name">
-                  /{item.name}
+                  {isMcp ? item.name : `/${item.name}`}
                   {isBuiltIn && (
-                    <span style={{ fontSize: '10px', color: 'var(--text-tertiary)' }}> (local)</span>
+                    <span className="skill-picker-type-badge skill-badge">cmd</span>
+                  )}
+                  {!isBuiltIn && !isMcp && (
+                    <span className="skill-picker-type-badge skill-badge">skill</span>
+                  )}
+                  {isMcp && (
+                    <span className="skill-picker-type-badge mcp-badge">mcp</span>
                   )}
                 </div>
                 <div className="skill-picker-desc">

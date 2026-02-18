@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import Markdown from '@/components/common/Markdown';
 import ArtifactRenderer, { ArtifactInline } from '@/components/Visual/ArtifactRenderer';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
@@ -124,99 +124,220 @@ interface ToolUseRuntime {
   elapsed?: number;
 }
 
-// ==================== ToolCall Component ====================
+// ==================== Tool Detail Modal ====================
 
-function ToolCall({ tool }: { tool: ToolUseRuntime }) {
-  const [collapsed, setCollapsed] = useState(true);
-
+function ToolDetailModal({ tool, onClose }: { tool: ToolUseRuntime; onClose: () => void }) {
   const hasResult = tool.result !== undefined && tool.result !== null;
   const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
-
-  let statusClass = 'running';
-  let statusText = 'Running';
-  let statusIcon = '\u21BB'; // ⟳
-  if (hasError) {
-    statusClass = 'error';
-    statusText = 'Error';
-    statusIcon = '\u2717'; // ✗
-  } else if (hasResult) {
-    statusClass = 'success';
-    statusText = 'Done';
-    statusIcon = '\u2713'; // ✓
-  }
 
   const inputStr = formatToolInput(tool.input || {});
   const outputStr = hasResult ? formatToolOutput(tool.result, hasError) : '';
 
-  const elapsedStr = tool.elapsed ? `${tool.elapsed}s` : '';
-
-  const handleToggle = useCallback(() => {
-    setCollapsed((prev) => !prev);
-  }, []);
-
   return (
-    <div className={`chat-tool-item ${statusClass}`} data-tool-id={tool.id}>
-      <div className="chat-tool-header" onClick={handleToggle}>
-        <span className="chat-tool-name">{tool.name}</span>
-        <span className={`tool-status ${statusClass}`}>
-          {statusIcon} {statusText}
-          {elapsedStr && <span className="item-elapsed"> ({elapsedStr})</span>}
-        </span>
-      </div>
-      {!collapsed && (
-        <div className="chat-tool-body">
-          <div className="chat-tool-section">
-            <div className="chat-tool-label">Input</div>
-            <pre className="chat-tool-code">{escapeHtml(inputStr)}</pre>
+    <div className="tool-detail-modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="tool-detail-content">
+        <div className="tool-detail-header">
+          <h3>
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+            </svg>
+            {tool.name}
+          </h3>
+          <button className="icon-btn" onClick={onClose}>
+            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M4 4l10 10M14 4L4 14" />
+            </svg>
+          </button>
+        </div>
+        <div className="tool-detail-body">
+          <div className="tool-detail-section">
+            <div className="tool-detail-section-label">Input</div>
+            <pre>{escapeHtml(inputStr)}</pre>
           </div>
-          {hasResult && (
-            <div className="chat-tool-section">
-              <div className="chat-tool-label">{hasError ? 'Error' : 'Output'}</div>
-              <pre className={`chat-tool-code${hasError ? ' error' : ''}`}>
-                {escapeHtml(outputStr)}
-              </pre>
+          {hasResult ? (
+            <div className="tool-detail-section">
+              <div className="tool-detail-section-label">{hasError ? 'Error' : 'Output'}</div>
+              <pre>{escapeHtml(outputStr)}</pre>
+            </div>
+          ) : (
+            <div className="tool-detail-section">
+              <div className="tool-detail-section-label">Status</div>
+              <p style={{ color: 'var(--text-secondary)' }}>Running...</p>
             </div>
           )}
         </div>
-      )}
-      {hasResult && !hasError && <ToolVisualContent toolUse={tool} />}
+      </div>
     </div>
   );
 }
 
-// ==================== ToolContainer Component ====================
+// ==================== ToolContainer Component (inline-chat-tool-panel style) ====================
 
-function ToolContainer({ tools }: { tools: ToolUseRuntime[] }) {
+function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]; isStreaming?: boolean }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [detailTool, setDetailTool] = useState<ToolUseRuntime | null>(null);
+  const prevToolCountRef = useRef(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   if (tools.length === 0) return null;
 
-  const completedCount = tools.filter((t) => t.result !== undefined && t.result !== null).length;
-  const allComplete = completedCount === tools.length;
+  // Determine completion by status field OR result presence
+  const isToolDone = (t: ToolUseRuntime) =>
+    t.status === 'complete' || t.status === 'error' ||
+    (t.result !== undefined && t.result !== null);
+  const completedCount = tools.filter(isToolDone).length;
+  const allComplete = completedCount === tools.length && tools.length > 0;
+  const totalCount = tools.length;
 
-  const handleToggle = useCallback(() => {
-    setCollapsed((prev) => !prev);
-  }, []);
+  // Auto-expand when new tools arrive while collapsed during streaming
+  useEffect(() => {
+    if (tools.length > prevToolCountRef.current && collapsed && isStreaming) {
+      setCollapsed(false);
+    }
+    prevToolCountRef.current = tools.length;
+  }, [tools.length, collapsed, isStreaming]);
+
+  // Auto-collapse only after streaming ends (matching legacy: collapseInlineChatToolPanel on isFinal)
+  useEffect(() => {
+    if (!isStreaming && allComplete && tools.length > 0) {
+      const timer = setTimeout(() => {
+        setCollapsed(true);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [isStreaming, allComplete, tools.length]);
+
+  // Auto-scroll to bottom when new tools arrive or status changes
+  useEffect(() => {
+    if (!collapsed && listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [tools.length, completedCount, collapsed]);
+
+  // Title: show total tool count (keeps incrementing as more tools are added)
+  const statusText = allComplete
+    ? `${totalCount} tools completed`
+    : `Running ${totalCount} tool${totalCount > 1 ? 's' : ''}...`;
 
   return (
-    <div className={`chat-tool-container${collapsed ? ' collapsed' : ''}`}>
-      <div className="chat-tool-header-bar" onClick={handleToggle}>
-        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
-        </svg>
-        <span>
-          {allComplete
-            ? `${completedCount} Tool${completedCount > 1 ? 's' : ''} Completed`
-            : `${tools.length} Tool${tools.length > 1 ? 's' : ''} Executed`}
-        </span>
-      </div>
-      {!collapsed && (
-        <div className="chat-tool-list">
-          {tools.map((tool) => (
-            <ToolCall key={tool.id} tool={tool} />
-          ))}
+    <>
+      <div className={`inline-chat-tool-panel${collapsed ? ' collapsed' : ''}`}>
+        <div className="inline-panel-header" onClick={() => setCollapsed((prev) => !prev)}>
+          <svg className="inline-panel-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+          </svg>
+          <span className="inline-panel-status">
+            {allComplete ? '\u2713 ' : ''}{statusText}
+          </span>
+          <svg className="inline-panel-toggle" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+          </svg>
         </div>
-      )}
+        <div className="inline-panel-list" ref={listRef}>
+          {tools.map((tool) => {
+            const hasError = tool.status === 'error' || !!(tool.result && (tool.result as Record<string, unknown>).error);
+            const done = isToolDone(tool);
+            let itemClass = 'running';
+            let statusIcon;
+            if (hasError) {
+              itemClass = 'error';
+              statusIcon = (
+                <svg className="item-status-icon error" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              );
+            } else if (done) {
+              itemClass = 'complete';
+              statusIcon = (
+                <svg className="item-status-icon success" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                </svg>
+              );
+            } else {
+              statusIcon = (
+                <svg className="item-status-icon running" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              );
+            }
+
+            const paramsStr = JSON.stringify(tool.input || {});
+            const truncatedParams = paramsStr.length > 60 ? paramsStr.substring(0, 60) + '...' : paramsStr;
+
+            const elapsedStr = tool.elapsed
+              ? (tool.elapsed >= 60 ? `${Math.floor(tool.elapsed / 60)}m ${tool.elapsed % 60}s` : `${tool.elapsed}s`)
+              : '';
+
+            return (
+              <div
+                key={tool.id}
+                className={`inline-panel-item ${itemClass}`}
+                data-tool-id={tool.id}
+                onClick={() => setDetailTool(tool)}
+              >
+                {statusIcon}
+                <span className="item-name">{tool.name}</span>
+                {elapsedStr && <span className="item-elapsed">{elapsedStr}</span>}
+                <span className="item-params">{truncatedParams}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {/* Tool detail modal */}
+      {detailTool && <ToolDetailModal tool={detailTool} onClose={() => setDetailTool(null)} />}
+    </>
+  );
+}
+
+// ==================== Excalidraw Link Card ====================
+
+function ExcalidrawLinkCard({ elements }: { elements: unknown }) {
+  const handleSave = () => {
+    // Build a standard .excalidraw file
+    const parsed = typeof elements === 'string' ? JSON.parse(elements as string) : elements;
+    const scene = {
+      type: 'excalidraw',
+      version: 2,
+      source: 'springo',
+      elements: Array.isArray(parsed) ? parsed : [],
+      appState: { viewBackgroundColor: '#ffffff' },
+    };
+    const blob = new Blob([JSON.stringify(scene, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'excalidraw-diagram.excalidraw';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="tool-visual-content" style={{ padding: '10px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--text-secondary)" strokeWidth="2">
+          <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
+        </svg>
+        <span style={{ flex: 1, color: 'var(--text-primary)', fontSize: 13 }}>
+          Excalidraw Diagram
+        </span>
+        <a
+          href="https://excalidraw.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="tool-visual-open"
+          title="Open excalidraw.com (import the saved .excalidraw file)"
+        >
+          excalidraw.com
+        </a>
+        <button
+          className="tool-visual-open"
+          onClick={handleSave}
+          title="Save as .excalidraw file (can be imported into excalidraw.com)"
+        >
+          Save .excalidraw
+        </button>
+      </div>
     </div>
   );
 }
@@ -231,9 +352,13 @@ export interface DisplayMessage extends MessageType {
 
 interface Props {
   message: DisplayMessage;
+  /** Only the latest assistant message should render the inline tool panel */
+  showToolPanel?: boolean;
+  /** Whether the session is currently streaming (for tool panel collapse logic) */
+  isStreaming?: boolean;
 }
 
-export default function Message({ message }: Props) {
+export default function Message({ message, showToolPanel = false, isStreaming = false }: Props) {
   const isDelegationResult = message.isDelegationResult || false;
   const isTaskResult = message.isTaskResult || false;
   const isThinking = message.isThinking || false;
@@ -262,11 +387,14 @@ export default function Message({ message }: Props) {
     );
   }, [message.mergedContent, message.displayContent, message.content]);
 
-  // Extract inline images from content blocks
+  // Extract inline images from content blocks (user messages only —
+  // assistant messages may contain image blocks from tool results synced
+  // from the backend; these should NOT be rendered inline in the chat)
   const imageBlocks = useMemo(() => {
+    if (message.role !== 'user') return [];
     if (!Array.isArray(message.content)) return [];
     return (message.content as ContentBlock[]).filter((c) => c.type === 'image');
-  }, [message.content]);
+  }, [message.role, message.content]);
 
   // Extract tool_use blocks from content for rendering tool calls
   const toolUses = useMemo((): ToolUseRuntime[] => {
@@ -343,7 +471,18 @@ export default function Message({ message }: Props) {
             )}
           </ArtifactRenderer>
         )}
-        {toolUses.length > 0 && <ToolContainer tools={toolUses} />}
+        {toolUses.length > 0 && showToolPanel && <ToolContainer tools={toolUses} isStreaming={isStreaming} />}
+        {/* Visual content from tools — always visible for all messages */}
+        {toolUses.map((tool) => {
+          // Excalidraw: show link card instead of inline rendering
+          if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
+            return <ExcalidrawLinkCard key={`vis-${tool.id}`} elements={tool.input.elements} />;
+          }
+          // Other visuals (images, SVG, base64) render from result
+          const hasResult = tool.result !== undefined && tool.result !== null;
+          const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
+          return hasResult && !hasError ? <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} /> : null;
+        })}
       </div>
     </div>
   );

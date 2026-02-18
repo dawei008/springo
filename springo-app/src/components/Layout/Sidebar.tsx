@@ -1,8 +1,9 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useUIStore } from '@/stores/uiStore';
+import ToolsPanel from './ToolsPanel';
 import type { ConversationStatus } from '@/types';
 
 function getStatusTitle(status: ConversationStatus): string {
@@ -14,6 +15,96 @@ function getStatusTitle(status: ConversationStatus): string {
     compacting: 'Compacting...',
   };
   return titles[status] || 'Ready';
+}
+
+// ─── Context Menu ───
+
+interface ContextMenuState {
+  visible: boolean;
+  x: number;
+  y: number;
+  sessionId: string;
+  sessionTitle: string;
+}
+
+function ConversationContextMenu({
+  menu,
+  onClose,
+  onRename,
+  onDelete,
+  onExport,
+}: {
+  menu: ContextMenuState;
+  onClose: () => void;
+  onRename: () => void;
+  onDelete: () => void;
+  onExport: () => void;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        onClose();
+      }
+    }
+    function handleEscape(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose();
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleEscape);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
+    };
+  }, [onClose]);
+
+  if (!menu.visible) return null;
+
+  // Adjust position to stay within viewport
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    top: menu.y,
+    left: menu.x,
+    zIndex: 1000,
+  };
+
+  return (
+    <div className="conv-context-menu" ref={menuRef} style={style}>
+      <div
+        className="conv-context-menu-item"
+        onClick={(e) => { e.stopPropagation(); onRename(); }}
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+          <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+        </svg>
+        Rename
+      </div>
+      <div
+        className="conv-context-menu-item"
+        onClick={(e) => { e.stopPropagation(); onExport(); }}
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+        Export
+      </div>
+      <div className="conv-context-menu-divider" />
+      <div
+        className="conv-context-menu-item delete"
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+        </svg>
+        Delete
+      </div>
+    </div>
+  );
 }
 
 export default function Sidebar() {
@@ -39,6 +130,64 @@ export default function Sidebar() {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    visible: false,
+    x: 0,
+    y: 0,
+    sessionId: '',
+    sessionTitle: '',
+  });
+
+  // ─── Session auto-title refresh ───
+  // Subscribe to chatStore runtimes to detect when streaming ends, then
+  // re-fetch the session title from the backend (which auto-generates titles).
+  const prevStreamingRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const unsub = useChatStore.subscribe((state) => {
+      const currentlyStreaming = new Set<string>();
+      for (const [id, runtime] of Object.entries(state.runtimes)) {
+        if (runtime.isStreaming) currentlyStreaming.add(id);
+      }
+
+      // Find sessions that just stopped streaming
+      const justFinished: string[] = [];
+      for (const id of prevStreamingRef.current) {
+        if (!currentlyStreaming.has(id)) {
+          justFinished.push(id);
+        }
+      }
+
+      prevStreamingRef.current = currentlyStreaming;
+
+      // For sessions that just finished streaming, re-fetch their title
+      for (const id of justFinished) {
+        const session = useSessionStore.getState().sessions.find((s) => s.id === id);
+        if (session && !session.isCustomTitle) {
+          // Small delay to let backend finish saving the session metadata
+          setTimeout(() => {
+            fetch(`http://127.0.0.1:8081/v1/sessions/${id}`)
+              .then((res) => (res.ok ? res.json() : null))
+              .then((data) => {
+                if (!data) return;
+                const meta = data.metadata || {};
+                const newTitle = meta.title || data.title;
+                if (newTitle && newTitle !== 'New Chat' && newTitle !== 'Untitled') {
+                  useSessionStore.setState((state) => ({
+                    sessions: state.sessions.map((s) =>
+                      s.id === id ? { ...s, title: newTitle } : s,
+                    ),
+                  }));
+                }
+              })
+              .catch(() => {});
+          }, 500);
+        }
+      }
+    });
+    return unsub;
+  }, []);
 
   useEffect(() => {
     if (renamingId && renameInputRef.current) {
@@ -46,6 +195,13 @@ export default function Sidebar() {
       renameInputRef.current.select();
     }
   }, [renamingId]);
+
+  // ─── Filtered sessions (search) ───
+  const filteredSessions = useMemo(() => {
+    if (!searchQuery.trim()) return sessions;
+    const q = searchQuery.toLowerCase().trim();
+    return sessions.filter((s) => s.title.toLowerCase().includes(q));
+  }, [sessions, searchQuery]);
 
   // ─── Handlers ───
 
@@ -62,17 +218,14 @@ export default function Sidebar() {
   );
 
   const handleDelete = useCallback(
-    (id: string, e: React.MouseEvent) => {
-      e.stopPropagation();
+    (id: string) => {
       deleteSession(id);
     },
     [deleteSession],
   );
 
   const startRename = useCallback(
-    (id: string, title: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      e.preventDefault();
+    (id: string, title: string) => {
       setRenamingId(id);
       setRenameValue(title);
     },
@@ -91,6 +244,57 @@ export default function Sidebar() {
     setRenamingId(null);
     setRenameValue('');
   }, []);
+
+  // Context menu handlers
+  const handleContextMenu = useCallback(
+    (id: string, title: string, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({
+        visible: true,
+        x: e.clientX,
+        y: e.clientY,
+        sessionId: id,
+        sessionTitle: title,
+      });
+    },
+    [],
+  );
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const handleContextRename = useCallback(() => {
+    startRename(contextMenu.sessionId, contextMenu.sessionTitle);
+    closeContextMenu();
+  }, [contextMenu, startRename, closeContextMenu]);
+
+  const handleContextDelete = useCallback(() => {
+    handleDelete(contextMenu.sessionId);
+    closeContextMenu();
+  }, [contextMenu, handleDelete, closeContextMenu]);
+
+  const handleContextExport = useCallback(async () => {
+    const id = contextMenu.sessionId;
+    closeContextMenu();
+    try {
+      const res = await fetch(`http://127.0.0.1:8081/v1/sessions/${id}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `session-${id}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+    }
+  }, [contextMenu, closeContextMenu]);
 
   const handleAddFolder = useCallback(async () => {
     if (window.electronAPI?.selectFolder) {
@@ -170,11 +374,10 @@ export default function Sidebar() {
     (folder: string, e: React.MouseEvent) => {
       // Prevent double-click from triggering single-click
       if (e.detail > 1) return;
-      // Legacy opens file browser panel on single-click; React has no file
-      // browser yet, so selecting as working dir is the interim equivalent.
-      setWorkingDir(folder);
+      // Open file browser panel (matches legacy behavior)
+      useUIStore.getState().openFileBrowser(folder);
     },
-    [setWorkingDir],
+    [],
   );
 
   const handleFolderDoubleClick = useCallback((folder: string) => {
@@ -277,6 +480,9 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* Skills & Tools panel */}
+      <ToolsPanel />
+
       {/* New Chat button */}
       <button className="new-chat-btn" onClick={handleNewChat}>
         <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
@@ -285,11 +491,38 @@ export default function Sidebar() {
         New Chat
       </button>
 
-      {/* Conversations list — flat, NO date grouping, NO search */}
+      {/* Conversation search */}
+      <div className="conversation-search">
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <circle cx="11" cy="11" r="8"/>
+          <path d="M21 21l-4.35-4.35"/>
+        </svg>
+        <input
+          type="text"
+          className="conversation-search-input"
+          placeholder="Search conversations..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        {searchQuery && (
+          <button
+            className="conversation-search-clear"
+            onClick={() => setSearchQuery('')}
+          >
+            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M2 2l8 8M10 2l-8 8"/>
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {/* Conversations list */}
       <div className="conversations-list" id="conversations-list">
-        {sessions.map((session, index) => {
+        {filteredSessions.map((session) => {
           const status = session.status || 'idle';
-          const sessionNumber = totalCount - index;
+          // Session number: position in full (unfiltered) list, newest = highest
+          const fullIndex = sessions.indexOf(session);
+          const sessionNumber = totalCount - fullIndex;
           const isActive = session.id === currentSessionId;
           const isRenaming = renamingId === session.id;
 
@@ -298,6 +531,7 @@ export default function Sidebar() {
               key={session.id}
               className={`conversation-item${isActive ? ' active' : ''}`}
               onClick={() => handleSwitch(session.id)}
+              onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
               data-id={session.id}
             >
               <div
@@ -327,7 +561,11 @@ export default function Sidebar() {
               ) : (
                 <span
                   className="title"
-                  onDoubleClick={(e) => startRename(session.id, session.title, e)}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    startRename(session.id, session.title);
+                  }}
                   title="Double-click to rename"
                 >
                   {session.title}
@@ -336,7 +574,10 @@ export default function Sidebar() {
               <DelegationBadges convId={session.id} />
               <button
                 className="delete-btn"
-                onClick={(e) => handleDelete(session.id, e)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDelete(session.id);
+                }}
                 title="Delete session"
               >
                 <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
@@ -347,6 +588,15 @@ export default function Sidebar() {
           );
         })}
       </div>
+
+      {/* Conversation context menu (right-click) */}
+      <ConversationContextMenu
+        menu={contextMenu}
+        onClose={closeContextMenu}
+        onRename={handleContextRename}
+        onDelete={handleContextDelete}
+        onExport={handleContextExport}
+      />
 
       {/* Sidebar footer with Settings button */}
       <div className="sidebar-footer">

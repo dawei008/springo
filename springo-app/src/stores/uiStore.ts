@@ -62,6 +62,8 @@ interface UIState {
   planModeActive: boolean;
   planApprovalData: PlanData | null;
   todos: TodoItem[];
+  fileBrowserOpen: boolean;
+  fileBrowserPath: string;
 
   // Actions
   toggleSidebar: () => void;
@@ -89,6 +91,8 @@ interface UIState {
   showPlanApproval: (plan: PlanData) => void;
   hidePlanApproval: () => void;
   setTodos: (todos: TodoItem[]) => void;
+  openFileBrowser: (path: string) => void;
+  closeFileBrowser: () => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -110,6 +114,8 @@ export const useUIStore = create<UIState>((set) => ({
   planModeActive: false,
   planApprovalData: null,
   todos: [],
+  fileBrowserOpen: false,
+  fileBrowserPath: '',
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -181,4 +187,6 @@ export const useUIStore = create<UIState>((set) => ({
   showPlanApproval: (plan) => set({ planApprovalData: plan }),
   hidePlanApproval: () => set({ planApprovalData: null, planModeActive: false }),
   setTodos: (todos) => set({ todos }),
+  openFileBrowser: (path) => set({ fileBrowserOpen: true, fileBrowserPath: path }),
+  closeFileBrowser: () => set({ fileBrowserOpen: false, fileBrowserPath: '' }),
 }));

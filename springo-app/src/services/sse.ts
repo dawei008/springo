@@ -34,7 +34,6 @@ import type {
   ContextCompactDoneEvent,
   ContextCompactFailedEvent,
   MessagesUpdatedEvent,
-  Message,
 } from '../types';
 import { CONFIG } from '../types';
 
@@ -275,6 +274,8 @@ export async function processStreamingResponse(
             }
           }
           callbacks.onToolExecutionStart?.(evt.tools);
+          // Push running tools to UI immediately
+          callbacks.onTextUpdate(textContent, toolUses, false);
           break;
         }
 
@@ -283,6 +284,8 @@ export async function processStreamingResponse(
           const executing = toolUses.find((tu) => tu.id === evt.id);
           if (executing) executing.status = 'running';
           callbacks.onToolExecuting?.(evt.id, evt.name);
+          // Push status update to UI
+          callbacks.onTextUpdate(textContent, toolUses, false);
           break;
         }
 
@@ -294,6 +297,8 @@ export async function processStreamingResponse(
             match.status = 'complete';
           }
           callbacks.onToolResult?.(evt);
+          // Push updated toolUses (with status/result) to the UI
+          callbacks.onTextUpdate(textContent, toolUses, false);
           break;
         }
 
@@ -302,6 +307,8 @@ export async function processStreamingResponse(
           const hbTool = toolUses.find((tu) => tu.id === evt.tool_id);
           if (hbTool) hbTool.elapsed = evt.elapsed_seconds;
           callbacks.onHeartbeat?.(evt);
+          // Push updated elapsed time to the UI
+          callbacks.onTextUpdate(textContent, toolUses, false);
           break;
         }
 

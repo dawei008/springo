@@ -11,8 +11,223 @@ import type {
 import { processStreamingResponse } from '@/services/sse';
 import { api } from '@/services/api';
 import { useUIStore } from '@/stores/uiStore';
+import { useSettingsStore } from '@/stores/settingsStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
+
+/**
+ * Default system prompt — kept static for KV cache efficiency.
+ * Dynamic time is injected into the first user message by the backend.
+ */
+const DEFAULT_SYSTEM_PROMPT = `You are Springo, a helpful AI assistant with access to various tools.
+
+## CRITICAL RULE - NO EMOJIS (STRICTLY ENFORCED)
+
+**ABSOLUTELY DO NOT use any emojis, emoticons, or unicode symbols in your responses.** This is a strict requirement:
+- NO emoji characters
+- NO unicode symbols
+- Use plain text only: "Done", "Error", "Success", "-", "->", "*"
+- This applies to ALL responses and ALL generated files
+
+IMPORTANT: When answering questions about current events, recent news, technical documentation, or anything that requires up-to-date information:
+1. ALWAYS use the available tools to search for information first
+2. DO NOT make up or guess answers - use tools to verify facts
+3. If you're unsure about something, use a search tool to find accurate information
+
+**CRITICAL - Time-sensitive searches:**
+When user asks for "latest"/"recent"/"newest" content:
+
+RULES (MUST follow ALL):
+1. Use ENGLISH keywords only (never Chinese)
+2. Use freshness="pw" on EVERY search call - including follow-up searches for details
+3. Include the current year in query to find recent content
+4. NEVER search for old content names like "Building Effective Agents" without freshness
+5. Trust the FIRST search results - don't second-guess by searching for older content
+
+Example workflow:
+- User: "anthropic latest agent blog"
+- Search 1: brave_web_search(query="Anthropic agent blog ${new Date().getFullYear()} latest", freshness="pw") [CORRECT]
+- If need details: brave_web_search(query="<title from result> details", freshness="pw") [CORRECT]
+- WRONG: brave_web_search(query="Building Effective Agents") [WRONG - finds OLD content]
+
+WITHOUT freshness="pw", search returns OLD but popular results instead of newest!
+
+Available MCP tool categories:
+- Web search: web-search__brave_web_search (USE freshness="pw" for latest content!)
+- News search: web-search__brave_news_search (for news articles)
+- Documentation: strands-agents, bedrock-agentcore, context7
+- File operations: read_file, write_file, glob, grep, etc.
+
+NOTE: All web searches use MCP servers. DO NOT use built-in web_search (removed).
+
+## Display Environment
+You are running inside a GUI desktop application (Electron), NOT a terminal.
+The chat window can render images inline. When you generate an image file (QR code, chart, diagram, screenshot, etc.):
+1. Save the file to disk (e.g. using write_file or a Python script)
+2. Mention the full file path in your response - the app will automatically detect image paths (.png, .jpg, .svg, .gif, .webp) and render them inline
+3. The user can click the image to view it full-screen
+Do NOT say "I cannot display images" - the GUI handles image rendering automatically.
+
+Be concise and helpful in your responses.`;
+
+// ---------------------------------------------------------------------------
+// Message sanitization — ported from legacy app.js
+// ---------------------------------------------------------------------------
+
+// Loose block shape used during sanitization (messages from the backend
+// may carry fields beyond the strict ContentBlock union).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyBlock = Record<string, any>;
+
+interface ApiMessage {
+  role: string;
+  content: string | ContentBlock[];
+}
+
+/**
+ * Remove orphaned tool_use / tool_result blocks that have no matching pair.
+ * The Anthropic API requires every tool_use to have a corresponding tool_result
+ * and vice-versa; sending orphans causes 400 errors.
+ */
+function sanitizeMessagesForAPI(messages: ApiMessage[]): ApiMessage[] {
+  // Quick check — skip when there are no tool blocks at all (fast path)
+  let hasToolBlocks = false;
+  for (const msg of messages) {
+    if (Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        const b = block as AnyBlock;
+        if (b.type === 'tool_use' || b.type === 'tool_result') {
+          hasToolBlocks = true;
+          break;
+        }
+      }
+      if (hasToolBlocks) break;
+    }
+  }
+  if (!hasToolBlocks) return messages;
+
+  // First pass: collect all tool_use IDs and tool_result IDs
+  const allToolUseIds = new Set<string>();
+  const allToolResultIds = new Set<string>();
+
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        const b = block as AnyBlock;
+        if (b.type === 'tool_use' && b.id) allToolUseIds.add(b.id);
+      }
+    } else if (msg.role === 'user' && Array.isArray(msg.content)) {
+      for (const block of msg.content) {
+        const b = block as AnyBlock;
+        if (b.type === 'tool_result' && b.tool_use_id) allToolResultIds.add(b.tool_use_id);
+      }
+    }
+  }
+
+  // Find orphaned tool_use IDs (tool_use without matching tool_result)
+  const orphanedToolUseIds = new Set<string>();
+  for (const id of allToolUseIds) {
+    if (!allToolResultIds.has(id)) {
+      orphanedToolUseIds.add(id);
+      console.warn(`[sanitize] Orphaned tool_use id: ${id}`);
+    }
+  }
+
+  // Second pass: build sanitized message list
+  const sanitized: ApiMessage[] = [];
+
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const filteredContent = msg.content.filter((block) => {
+        const b = block as AnyBlock;
+        if (b.type === 'tool_use' && b.id && orphanedToolUseIds.has(b.id)) {
+          console.warn(`[sanitize] Removing orphaned tool_use: ${b.id}`);
+          return false;
+        }
+        return true;
+      });
+
+      if (filteredContent.length > 0) {
+        const hasToolUse = filteredContent.some((b) => (b as AnyBlock).type === 'tool_use');
+        if (hasToolUse) {
+          sanitized.push({ role: msg.role, content: filteredContent });
+        } else {
+          // Only text blocks remain — flatten to string if single text block
+          const textOnly = filteredContent.filter((b) => (b as AnyBlock).type === 'text');
+          if (textOnly.length === filteredContent.length && textOnly.length === 1) {
+            sanitized.push({ role: msg.role, content: (textOnly[0] as TextBlock).text });
+          } else if (filteredContent.length > 0) {
+            sanitized.push({ role: msg.role, content: filteredContent });
+          }
+        }
+      }
+    } else if (msg.role === 'user' && Array.isArray(msg.content)) {
+      const hasToolResult = msg.content.some((c) => (c as AnyBlock).type === 'tool_result');
+      if (hasToolResult) {
+        const validResults = msg.content.filter((c) => {
+          const b = c as AnyBlock;
+          if (b.type !== 'tool_result') return true;
+          const isValid =
+            allToolUseIds.has(b.tool_use_id) && !orphanedToolUseIds.has(b.tool_use_id);
+          if (!isValid) {
+            console.warn(`[sanitize] Removing orphaned tool_result: ${b.tool_use_id}`);
+          }
+          return isValid;
+        });
+        if (validResults.length > 0) {
+          sanitized.push({ role: msg.role, content: validResults });
+        }
+      } else {
+        sanitized.push(msg);
+      }
+    } else {
+      sanitized.push(msg);
+    }
+  }
+
+  return sanitized;
+}
+
+/**
+ * Validate and clean messages loaded from a session (e.g. after restart).
+ * Removes thinking indicators, empty messages, and orphaned tool_results
+ * from interrupted conversations.
+ */
+function validateConversationMessages(messages: Message[]): Message[] {
+  if (!messages || !Array.isArray(messages)) return [];
+
+  // Remove thinking indicators and empty messages
+  let cleaned = messages.filter((m) => {
+    if (m.isThinking) return false;
+    if (!m.content) return false;
+    if (typeof m.content === 'string' && m.content.trim() === '') return false;
+    if (Array.isArray(m.content) && m.content.length === 0) return false;
+    return true;
+  });
+
+  // NOTE: Do NOT strip trailing tool_result messages. They have valid matching
+  // tool_use blocks in the previous assistant message. Stripping them creates
+  // orphaned tool_use blocks that get removed by sanitizeMessagesForAPI, losing
+  // all tool execution context. The API accepts conversations ending with a
+  // user message (tool_result IS a user message).
+
+  return cleaned;
+}
+
+/**
+ * Clean content blocks before sending to API:
+ * - Strip internal `_imageRef` field from image blocks
+ */
+function cleanContentForAPI(content: string | ContentBlock[]): string | ContentBlock[] {
+  if (!Array.isArray(content)) return content;
+  return content.map((block) => {
+    const b = block as AnyBlock;
+    if (b.type === 'image' && b._imageRef) {
+      return { type: 'image', source: b.source } as ImageBlock;
+    }
+    return block;
+  });
+}
 
 /** Memory management configuration */
 const MEMORY_CONFIG = {
@@ -172,6 +387,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
         lastMsg.content = apiContent;
         lastMsg.hasToolUse = toolUses.length > 0;
       }
+      // Always update runtime toolUses (with status/result) for live rendering
+      if (toolUses.length > 0) {
+        lastMsg.toolUses = [...toolUses];
+      }
     } else if (text || toolUses.length > 0 || isFinal) {
       // Remove thinking indicator
       const thinkingIdx = messages.findIndex((m) => m.isThinking);
@@ -182,6 +401,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         content: apiContent || text || '',
         displayContent,
         hasToolUse: toolUses.length > 0,
+        toolUses: toolUses.length > 0 ? [...toolUses] : undefined,
         timestamp: Date.now(),
       });
     }
@@ -206,7 +426,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const response = await fetch(`${BASE_URL}/v1/sessions/${convId}`);
       if (response.ok) {
         const data = await response.json();
-        const messages = (data.messages || []) as Message[];
+        const rawMessages = (data.messages || []) as Message[];
+        // Validate and clean messages (remove orphaned tool_results, etc.)
+        const messages = validateConversationMessages(rawMessages);
         const runtime = get().getRuntime(convId);
         set((state) => ({
           runtimes: {
@@ -232,8 +454,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const messageContent: ContentBlock[] = [];
     const fileAttachments: Array<{ name: string; type: string; path: string }> = [];
 
+    const mcpServerNames: string[] = [];
+
     for (const att of attachments) {
-      if (att.type.startsWith('image/')) {
+      if (att.type === 'skill' || att.type === 'mcp_server') {
+        // Skill/MCP attachments: inject as context hint, not file reference
+        if (att.type === 'mcp_server') {
+          mcpServerNames.push(att.path || att.name || '');
+        }
+        // Skills are handled via activeSkill in system prompt, no extra content needed
+        continue;
+      } else if (att.type.startsWith('image/')) {
         messageContent.push({
           type: 'image',
           source: { type: 'base64', media_type: att.type, data: att.data || '' },
@@ -247,8 +478,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }
 
-    // Build text content with file references
+    // Build text content with file references and MCP hints
     let textContent = content || '';
+    if (mcpServerNames.length > 0) {
+      const mcpHint = mcpServerNames.map((n) => `Use the ${n} MCP server to `).join('; ');
+      textContent = textContent ? `${mcpHint}\n\n${textContent}` : mcpHint;
+    }
     if (fileAttachments.length > 0) {
       const fileList = fileAttachments.map((f) => `- ${f.name} (${f.path})`).join('\n');
       textContent = `[Attached files - use read_file tool to access them]:\n${fileList}\n\n${textContent}`;
@@ -257,13 +492,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
       messageContent.push({ type: 'text', text: textContent } as TextBlock);
     }
 
-    // Add user message
+    // Handle explicit skill invocation: fetch instructions and wrap content
+    // (matches legacy: getSkillInstructions + content wrapping at app.js:4937-4944)
+    // IMPORTANT: skill instructions go into API content only, NOT the UI display message.
+    const activeSkill = useUIStore.getState().activeSkill;
+    let skillWrappedContent = '';
+    if (activeSkill && textContent) {
+      try {
+        const resp = await fetch(`${BASE_URL}/v1/skills/${activeSkill.name}/instructions`);
+        if (resp.ok) {
+          const data = await resp.json();
+          const instructions = data.instructions || data.content || '';
+          if (instructions) {
+            skillWrappedContent = `<skill name="${activeSkill.name}">\n${instructions}\n</skill>\n\nUser request: ${textContent}\n\nPlease follow the skill instructions above to complete this task.`;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to fetch skill instructions:', e);
+      }
+      // Clear active skill after use
+      useUIStore.getState().clearActiveSkill();
+    }
+
+    // Add user message (display version — shows original text, not skill-wrapped)
     const userMsg: Message = {
       role: 'user',
-      content: attachments.length > 0 ? messageContent : content,
+      content: messageContent.length > 0 ? messageContent : (textContent || content),
       timestamp: Date.now(),
     };
     runtime.messages.push(userMsg);
+
+    // If skill instructions were fetched, store the API-only version separately
+    // so sanitizeMessagesForAPI can use it instead of the display version
+    if (skillWrappedContent) {
+      (userMsg as Message & { _apiContent?: string })._apiContent = skillWrappedContent;
+    }
 
     // Mark streaming
     runtime.isStreaming = true;
@@ -285,8 +548,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const abortController = get().resetAbortController(convId);
 
     try {
-      // Prepare messages for API
-      const apiMessages = runtime.messages
+      // Prepare messages for API:
+      // 1. Filter out thinking indicators and empty messages
+      // 2. Strip internal fields (_imageRef) from content blocks
+      // 3. Sanitize tool_use/tool_result pairing (remove orphans)
+      const filteredMessages = runtime.messages
         .filter((m) => !m.isThinking)
         .filter((m) => {
           if (!m.content) return false;
@@ -294,9 +560,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           if (Array.isArray(m.content) && m.content.length === 0) return false;
           return true;
         })
-        .map((m) => ({ role: m.role, content: m.content }));
+        .map((m) => {
+          // Use _apiContent (skill-wrapped) if available, otherwise clean the display content
+          const apiContent = (m as Message & { _apiContent?: string })._apiContent;
+          return { role: m.role, content: apiContent || cleanContentForAPI(m.content) };
+        });
 
-      const model = options.model || 'claude-opus-4-6';
+      // Sanitize to ensure tool_result/tool_use pairing is valid
+      const apiMessages = sanitizeMessagesForAPI(filteredMessages);
+
+      const settingsState = useSettingsStore.getState();
+      const model = options.model || settingsState.getEffectiveModel();
       const maxTokens = options.maxTokens || 16384;
       const temperature = options.temperature ?? 0.7;
 
@@ -304,10 +578,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         model,
         max_tokens: maxTokens,
         temperature,
-        system: options.systemPrompt || '',
+        system: options.systemPrompt || DEFAULT_SYSTEM_PROMPT,
         messages: apiMessages,
         session_id: options.sessionId || convId,
-        compact_model: options.compactModel || '',
+        compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
+        extended_context: options.enable1mContext !== false,
       };
 
       // Use api.messages.sendAutoRaw for fetchWithRetry + proper error handling
@@ -319,10 +594,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       // Process SSE stream using the comprehensive parser from sse.ts
       const store = useChatStore.getState();
+
+      // Throttle UI updates to ~60fps via rAF to avoid re-render storm during streaming
+      let rafId: number | null = null;
+      let pendingText = '';
+      let pendingToolUses: ToolUse[] = [];
+      const flushPendingUpdate = () => {
+        rafId = null;
+        store.updateAssistantMessage(convId, pendingText, pendingToolUses, false);
+      };
+
       await processStreamingResponse(response, convId, {
         onTextUpdate: (text, toolUses, isFinal) => {
           options.onTextUpdate?.(text, toolUses);
-          store.updateAssistantMessage(convId, text, toolUses, isFinal);
+          if (isFinal) {
+            // Always flush immediately on final update
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+            store.updateAssistantMessage(convId, text, toolUses, true);
+          } else {
+            // Buffer intermediate updates, flush at next animation frame
+            pendingText = text;
+            pendingToolUses = toolUses;
+            if (rafId === null) {
+              rafId = requestAnimationFrame(flushPendingUpdate);
+            }
+          }
         },
         onToolUse: () => {
           // Tool-use blocks are already accumulated by the parser and
@@ -332,17 +628,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
           // Tools are added to the toolUses array by the parser
           // and state is updated on next onTextUpdate call
         },
-        onToolResult: (evt) => {
-          // The parser already updates toolUses[].result and status
-          // Trigger a re-render with current state
-          const { textContent, toolUses } = getCurrentStreamState();
-          store.updateAssistantMessage(convId, textContent, toolUses, false);
+        onToolResult: () => {
+          // Parser updates toolUses[].result/status and calls onTextUpdate
         },
-        onHeartbeat: (evt) => {
-          // Update elapsed time on the tool — parser already does this
-          // Trigger a re-render to show the updated elapsed time
-          const { textContent, toolUses } = getCurrentStreamState();
-          store.updateAssistantMessage(convId, textContent, toolUses, false);
+        onHeartbeat: () => {
+          // Parser updates toolUses[].elapsed and calls onTextUpdate
         },
         onToolExecutionComplete: () => {
           // All tools done in this iteration
@@ -388,51 +678,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
           console.error(`[${convId}] Team error:`, evt);
         },
         onComplete: (text, toolUses) => {
-          store.updateAssistantMessage(convId, text, toolUses, true);
-          options.onComplete?.();
+          // Detect interrupted stream: tools were executed but no final text response
+          const hasCompletedTools = toolUses.some((tu) => tu.result !== undefined);
+          if (hasCompletedTools && !text.trim()) {
+            console.warn(`[${convId}] Stream ended after tool execution without final response`);
+            store.updateAssistantMessage(
+              convId,
+              'Response was interrupted after tool execution. Please try again.',
+              toolUses,
+              true,
+            );
+          } else {
+            store.updateAssistantMessage(convId, text, toolUses, true);
+          }
         },
         onError: (error) => {
           console.error(`[${convId}] Stream error:`, error);
         },
       });
 
-      // Helper to get current stream state from the parser's accumulated data
-      // processStreamingResponse returns the final result, but during streaming
-      // the callbacks provide incremental updates. For re-renders triggered by
-      // tool_result/heartbeat, we read the latest state from the runtime.
-      function getCurrentStreamState() {
-        const rt = get().getRuntime(convId);
-        const lastMsg = rt.messages[rt.messages.length - 1];
-        let textContent = '';
-        const toolUses: ToolUse[] = [];
-        if (lastMsg && lastMsg.role === 'assistant') {
-          if (typeof lastMsg.displayContent === 'string') {
-            textContent = lastMsg.displayContent;
-          } else if (typeof lastMsg.content === 'string') {
-            textContent = lastMsg.content;
-          }
-          if (Array.isArray(lastMsg.content)) {
-            for (const block of lastMsg.content) {
-              if (typeof block === 'object' && block !== null && 'type' in block && block.type === 'tool_use') {
-                const tb = block as ToolUseBlock;
-                toolUses.push({ id: tb.id, name: tb.name, input: tb.input || {} });
-              }
-            }
-          }
-        }
-        return { textContent, toolUses };
-      }
     } catch (e) {
       const error = e as Error;
       const isAbort = error.name === 'AbortError';
 
+      // Always read the CURRENT runtime from the store (not the stale closure)
+      const currentRuntime = get().getRuntime(convId);
+
       // Remove thinking indicator if still present
-      const thinkingIdx = runtime.messages.findIndex((m) => m.isThinking);
-      if (thinkingIdx >= 0) runtime.messages.splice(thinkingIdx, 1);
+      const thinkingIdx = currentRuntime.messages.findIndex((m) => m.isThinking);
+      if (thinkingIdx >= 0) currentRuntime.messages.splice(thinkingIdx, 1);
 
       if (!isAbort) {
         // Add error message to conversation
-        runtime.messages.push({
+        currentRuntime.messages.push({
           role: 'assistant',
           content: `Error: ${error.message}`,
           timestamp: Date.now(),
@@ -441,13 +719,48 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
       options.onError?.(error);
     } finally {
-      runtime.isStreaming = false;
+      // Always read the CURRENT runtime from the store to avoid overwriting
+      // messages that were added by the SSE stream processor
+      const finalRuntime = get().getRuntime(convId);
+      finalRuntime.isStreaming = false;
       set((state) => ({
         runtimes: {
           ...state.runtimes,
-          [convId]: { ...runtime, isStreaming: false, messages: [...runtime.messages] },
+          [convId]: { ...finalRuntime, isStreaming: false, messages: [...finalRuntime.messages] },
         },
       }));
+
+      // CRITICAL: In AUTO mode, the backend saves the properly structured
+      // messages (separate per-iteration assistant/tool_result pairs + final
+      // assistant) via _auto_save_session.  Reload from backend to sync
+      // frontend state — without this, tool_result messages are missing and
+      // the next turn's sanitizer strips orphaned tool_use blocks, causing
+      // the model to lose all tool execution context.
+      const hasToolUse = finalRuntime.messages.some((m) => m.hasToolUse);
+      if (hasToolUse) {
+        try {
+          const resp = await fetch(`${BASE_URL}/v1/sessions/${convId}`);
+          if (resp.ok) {
+            const data = await resp.json();
+            const rawMessages = (data.messages || []) as Message[];
+            const synced = validateConversationMessages(rawMessages);
+            if (synced.length > 0) {
+              const rt = get().getRuntime(convId);
+              rt.messages = synced;
+              set((state) => ({
+                runtimes: {
+                  ...state.runtimes,
+                  [convId]: { ...rt, messages: [...synced] },
+                },
+              }));
+              console.log(`[${convId}] AUTO mode: synced ${synced.length} messages from backend`);
+            }
+          }
+        } catch (syncErr) {
+          console.warn(`[${convId}] AUTO mode: failed to sync from backend`, syncErr);
+        }
+      }
+
       options.onComplete?.();
     }
   },

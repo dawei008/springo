@@ -21,44 +21,33 @@ export default function ChatArea() {
     return runtimes[currentSessionId]?.messages ?? EMPTY_MESSAGES;
   }, [currentSessionId, runtimes]);
 
-  // Load messages when switching sessions
+  // Load messages when switching sessions (uses store.loadMessages which validates)
   useEffect(() => {
     if (currentSessionId) {
       const runtime = useChatStore.getState().runtimes[currentSessionId];
       if (!runtime || runtime.messages.length === 0) {
-        // Load from backend
-        const loadFromBackend = async () => {
-          try {
-            const res = await fetch(`http://127.0.0.1:8081/v1/sessions/${currentSessionId}`);
-            if (res.ok) {
-              const data = await res.json();
-              const loadedMessages = data.messages || [];
-              if (loadedMessages.length > 0) {
-                const { getRuntime } = useChatStore.getState();
-                const rt = getRuntime(currentSessionId);
-                rt.messages = loadedMessages;
-                // Trigger re-render
-                useChatStore.setState((s) => ({
-                  runtimes: { ...s.runtimes, [currentSessionId]: { ...rt } },
-                }));
-              }
-            }
-          } catch (e) {
-            console.error('Failed to load session messages:', e);
-          }
-        };
-        loadFromBackend();
+        useChatStore.getState().loadMessages(currentSessionId);
       }
     }
   }, [currentSessionId]);
+
+  // Track message count to force scroll on new user message
+  const prevMsgCountRef = useRef(0);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (containerRef.current) {
       const el = containerRef.current;
+      const msgCount = messages.length;
+      const prevCount = prevMsgCountRef.current;
+      prevMsgCountRef.current = msgCount;
+
+      // Force scroll when a new message is added (user just sent or assistant starts)
+      const newMessageAdded = msgCount > prevCount;
       const isNearBottom =
         el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-      if (isNearBottom) {
+
+      if (newMessageAdded || isNearBottom) {
         requestAnimationFrame(() => {
           el.scrollTop = el.scrollHeight;
         });
@@ -84,12 +73,17 @@ export default function ChatArea() {
     }
   }, []);
 
+  const isStreaming = useMemo(() => {
+    if (!currentSessionId) return false;
+    return runtimes[currentSessionId]?.isStreaming === true;
+  }, [currentSessionId, runtimes]);
+
   const hasMessages = messages.length > 0 && !messages.every((m) => m.isThinking);
 
   return (
     <div className="chat-container" ref={containerRef}>
       <div className="chat-content">
-        {hasMessages ? <MessageList messages={messages} /> : <WelcomeScreen />}
+        {hasMessages ? <MessageList messages={messages} isStreaming={isStreaming} /> : <WelcomeScreen />}
       </div>
       {toolPanelOpen && <ToolPanel />}
       {showScrollBtn && (
@@ -97,24 +91,6 @@ export default function ChatArea() {
           className="scroll-to-bottom-btn"
           onClick={scrollToBottom}
           title="Scroll to bottom"
-          style={{
-            position: 'absolute',
-            bottom: 16,
-            right: 24,
-            width: 36,
-            height: 36,
-            borderRadius: '50%',
-            border: '1px solid var(--border)',
-            background: 'var(--bg-primary)',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
-            zIndex: 10,
-            transition: 'opacity 0.2s',
-          }}
         >
           <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
             <path d="M7 13l5 5 5-5M7 6l5 5 5-5" />

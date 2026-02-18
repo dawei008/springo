@@ -70,6 +70,8 @@ export interface Message {
   isThinking?: boolean;
   /** Content merged from multiple streaming chunks */
   mergedContent?: string;
+  /** Runtime tool uses with live status/result (from SSE streaming) */
+  toolUses?: ToolUse[];
 }
 
 // ==================== Image References ====================

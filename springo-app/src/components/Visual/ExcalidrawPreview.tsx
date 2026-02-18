@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useCallback } from 'react'
 
 interface ExcalidrawElement {
   id?: string
@@ -189,21 +189,72 @@ export default function ExcalidrawPreview({ elements: rawElements, onOpen }: Exc
     }
   }, [rawElements])
 
-  if (!svgContent) return null
+  // Build standalone SVG string (reused by Open / Save SVG / Save PNG)
+  const fullSvgString = useMemo(() => {
+    if (!svgContent) return ''
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${svgContent.viewBox}" style="background:#fff;">${svgContent.parts}</svg>`
+  }, [svgContent])
 
-  function handleOpen() {
+  const handleOpen = useCallback(() => {
     if (onOpen) {
       onOpen()
     } else if (window.electronAPI?.openArtifactWindow) {
-      if (!svgContent) return
-      const fullSvg = `<!DOCTYPE html><html><head><title>Excalidraw Diagram</title></head><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff;">` +
-        `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${svgContent.viewBox}" style="max-width:100%;height:auto;">${svgContent.parts}</svg></body></html>`
-      window.electronAPI.openArtifactWindow(fullSvg, 'Excalidraw Diagram')
+      const html = `<!DOCTYPE html><html><head><title>Excalidraw Diagram</title></head>` +
+        `<body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#fff;">` +
+        `${fullSvgString}</body></html>`
+      window.electronAPI.openArtifactWindow(html, 'Excalidraw Diagram')
     }
-  }
+  }, [onOpen, fullSvgString])
+
+  const handleSaveSvg = useCallback(() => {
+    if (!fullSvgString) return
+    const blob = new Blob([fullSvgString], { type: 'image/svg+xml' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'excalidraw-diagram.svg'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [fullSvgString])
+
+  const handleSavePng = useCallback(() => {
+    if (!svgContent || !fullSvgString) return
+    const [, , vw, vh] = svgContent.viewBox.split(' ').map(Number)
+    const scale = 2
+    const width = Math.round(vw * scale)
+    const height = Math.round(vh * scale)
+
+    const img = new Image()
+    const svgBlob = new Blob([fullSvgString], { type: 'image/svg+xml;charset=utf-8' })
+    const svgUrl = URL.createObjectURL(svgBlob)
+
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')!
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, width, height)
+      ctx.drawImage(img, 0, 0, width, height)
+      URL.revokeObjectURL(svgUrl)
+
+      canvas.toBlob((blob) => {
+        if (!blob) return
+        const pngUrl = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = pngUrl
+        a.download = 'excalidraw-diagram.png'
+        a.click()
+        URL.revokeObjectURL(pngUrl)
+      }, 'image/png')
+    }
+    img.src = svgUrl
+  }, [svgContent, fullSvgString])
+
+  if (!svgContent) return null
 
   return (
-    <div className="tool-visual-content tool-visual-svg" style={{ padding: 12, background: '#fff' }}>
+    <div className="tool-visual-content" style={{ background: '#fff' }}>
       <div className="tool-visual-header">
         <span className="tool-visual-icon">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -211,16 +262,26 @@ export default function ExcalidrawPreview({ elements: rawElements, onOpen }: Exc
           </svg>
         </span>
         <span className="tool-visual-label">Excalidraw Diagram</span>
-        <button className="tool-visual-open" onClick={handleOpen} title="Open in new window">
-          Open
-        </button>
+        <span style={{ display: 'flex', gap: 8 }}>
+          <button className="tool-visual-open" onClick={handleOpen} title="Open in new window">
+            Open
+          </button>
+          <button className="tool-visual-open" onClick={handleSaveSvg} title="Save as SVG">
+            SVG
+          </button>
+          <button className="tool-visual-open" onClick={handleSavePng} title="Save as PNG (2x)">
+            PNG
+          </button>
+        </span>
       </div>
-      <svg
-        xmlns="http://www.w3.org/2000/svg"
-        viewBox={svgContent.viewBox}
-        style={{ maxWidth: '100%', height: 'auto', background: '#fff', borderRadius: 8 }}
-        dangerouslySetInnerHTML={{ __html: svgContent.parts }}
-      />
+      <div className="tool-visual-svg">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox={svgContent.viewBox}
+          style={{ maxWidth: '100%', height: 'auto', background: '#fff' }}
+          dangerouslySetInnerHTML={{ __html: svgContent.parts }}
+        />
+      </div>
     </div>
   )
 }
