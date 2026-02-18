@@ -6,6 +6,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
+import { useTeamStore } from '@/stores/teamStore';
 import type { RightPanelTab } from '@/stores/uiStore';
 import TeamPanel from '../RightPanel/TeamPanel';
 import NewsPanel from '../RightPanel/NewsPanel';
@@ -300,6 +301,7 @@ function RightPanel() {
 export default function MainContent() {
   // Keyboard shortcut: Cmd/Ctrl + / to toggle right panel
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel);
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -311,6 +313,27 @@ export default function MainContent() {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [toggleRightPanel]);
+
+  // Restore team panel when switching sessions
+  useEffect(() => {
+    if (!currentSessionId) {
+      useTeamStore.getState().resetTeam();
+      return;
+    }
+    const teamId = useUIStore.getState().getSessionTeam(currentSessionId);
+    if (teamId) {
+      // Load historical team data from backend API
+      useTeamStore.getState().loadTeamFromAPI(teamId).then((loaded) => {
+        if (loaded) {
+          useUIStore.getState().setActiveTeamId(teamId);
+        }
+      });
+    } else {
+      // No team for this session — reset
+      useTeamStore.getState().resetTeam();
+      useUIStore.getState().setActiveTeamId(null);
+    }
+  }, [currentSessionId]);
 
   return (
     <div className="main-content">

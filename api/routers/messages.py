@@ -249,6 +249,13 @@ async def messages_auto_api(
                                 if isinstance(content, str) and content:
                                     # Strip injected time prefix: [Current time: ...]\n\n
                                     clean = re.sub(r'^\[Current time:[^\]]*\]\s*', '', content)
+                                    # Strip skill-wrapped content: <skill name="xxx">...</skill>\n\nUser request: ...
+                                    skill_match = re.match(r'^<skill\s+name="([^"]+)">[\s\S]*?</skill>\s*', clean)
+                                    if skill_match:
+                                        after_skill = clean[skill_match.end():]
+                                        user_req = re.sub(r'^User request:\s*', '', after_skill, flags=re.IGNORECASE)
+                                        user_req = re.sub(r'\s*Please follow the skill instructions above.*$', '', user_req, flags=re.DOTALL).strip()
+                                        clean = f"/{skill_match.group(1)} {user_req}" if user_req else f"/{skill_match.group(1)}"
                                     if clean:
                                         title = clean[:30] + ("..." if len(clean) > 30 else "")
                                     break

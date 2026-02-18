@@ -1848,6 +1848,30 @@
             overflow-x: auto;
             margin: 12px 0;
             position: relative;
+            color: #c9d1d9;
+        }
+
+        .message-content pre code {
+            color: inherit;
+        }
+
+        /* Skill badge inline (for user messages with skill-wrapped content) */
+        .skill-badge-inline {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px 2px 6px;
+            margin-bottom: 6px;
+            background: var(--accent-bg, rgba(59, 130, 246, 0.1));
+            color: var(--accent, #3b82f6);
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+        .skill-icon-inline {
+            display: flex;
+            align-items: center;
         }
 
         .message-content code {
@@ -5953,10 +5977,6 @@
 
 /* ============ Collaborative Team Messages & Task Board ============ */
 
-.team-split-messages {
-    font-family: var(--font-mono, 'SF Mono', monospace);
-}
-
 .team-split-message {
     padding: 4px 8px;
     margin-bottom: 4px;
@@ -6299,9 +6319,103 @@
     min-height: 80px;
     display: flex;
     flex-direction: column;
-    padding: 0 14px;
+    padding: 0 14px 10px;
     gap: 6px;
     overflow: hidden;
+}
+
+.team-split-messages-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.team-split-messages {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-family: var(--font-mono, 'SF Mono', monospace);
+}
+
+.team-split-messages::-webkit-scrollbar {
+    width: 4px;
+}
+.team-split-messages::-webkit-scrollbar-track {
+    background: transparent;
+}
+.team-split-messages::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 2px;
+}
+
+.team-split-messages-empty {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    text-align: center;
+    padding: 16px 0;
+}
+
+/* Team Ask User Card */
+.team-ask-user-card {
+    border: 1px solid var(--accent-color, #7c3aed);
+    border-radius: 6px;
+    padding: 8px;
+    margin: 4px 0;
+    background: var(--bg-secondary, rgba(0,0,0,0.05));
+}
+
+.team-ask-user-header {
+    font-size: 11px;
+    color: var(--accent-color, #7c3aed);
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.team-ask-user-question {
+    font-size: 12px;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 4px 0;
+}
+
+.team-ask-user-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.team-ask-option {
+    padding: 4px 10px;
+    border: 1px solid var(--border-color, #ccc);
+    border-radius: 4px;
+    background: var(--bg-primary, #fff);
+    color: var(--text-color, #333);
+    cursor: pointer;
+    font-size: 12px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.team-ask-option:hover:not(:disabled) {
+    background: var(--accent-color, #7c3aed);
+    color: #fff;
+}
+
+.team-ask-option:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.team-ask-option.selected {
+    background: var(--accent-color, #7c3aed);
+    color: #fff;
+    opacity: 1;
 }
 
 .team-split-agent-card {
@@ -6481,7 +6595,44 @@
     color: var(--text-secondary);
 }
 
-/* ==================== Team Task Board ==================== */
+/* ==================== Chat Inline Task Board ==================== */
+
+.chat-task-board {
+    margin: 12px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    overflow: hidden;
+}
+.chat-task-board-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+.chat-task-board-header:hover {
+    background: var(--bg-hover);
+}
+.chat-task-board-toggle {
+    margin-left: auto;
+    transition: transform 0.15s ease;
+}
+.chat-task-board.collapsed .chat-task-board-toggle {
+    transform: rotate(-90deg);
+}
+.chat-task-board-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 8px 8px;
+}
+
+/* ==================== Team Task Board (right panel — legacy) ==================== */
 
 .team-task-board {
     border-top: 1px solid var(--border);

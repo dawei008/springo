@@ -65,6 +65,8 @@ interface UIState {
   themeMode: 'light' | 'dark' | 'system';
   fileBrowserOpen: boolean;
   fileBrowserPath: string;
+  /** Maps sessionId → teamId for sessions that had team executions */
+  sessionTeamMap: Record<string, string>;
 
   // Actions
   toggleSidebar: () => void;
@@ -95,11 +97,13 @@ interface UIState {
   setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
   openFileBrowser: (path: string) => void;
   closeFileBrowser: () => void;
+  setSessionTeam: (sessionId: string, teamId: string) => void;
+  getSessionTeam: (sessionId: string) => string | null;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
 
-export const useUIStore = create<UIState>((set) => ({
+export const useUIStore = create<UIState>((set, get) => ({
   sidebarOpen: true,
   settingsOpen: false,
   toolPanelOpen: false,
@@ -119,6 +123,13 @@ export const useUIStore = create<UIState>((set) => ({
   themeMode: (localStorage.getItem('springo-theme') as 'light' | 'dark' | 'system') || 'system',
   fileBrowserOpen: false,
   fileBrowserPath: '',
+  sessionTeamMap: (() => {
+    try {
+      return JSON.parse(localStorage.getItem('springo-session-teams') || '{}');
+    } catch {
+      return {};
+    }
+  })(),
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -196,4 +207,14 @@ export const useUIStore = create<UIState>((set) => ({
   },
   openFileBrowser: (path) => set({ fileBrowserOpen: true, fileBrowserPath: path }),
   closeFileBrowser: () => set({ fileBrowserOpen: false, fileBrowserPath: '' }),
+  setSessionTeam: (sessionId, teamId) => {
+    set((state) => {
+      const updated = { ...state.sessionTeamMap, [sessionId]: teamId };
+      try { localStorage.setItem('springo-session-teams', JSON.stringify(updated)); } catch { /* noop */ }
+      return { sessionTeamMap: updated };
+    });
+  },
+  getSessionTeam: (sessionId) => {
+    return get().sessionTeamMap[sessionId] || null;
+  },
 }));

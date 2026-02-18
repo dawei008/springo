@@ -72,6 +72,14 @@ export interface Message {
   mergedContent?: string;
   /** Runtime tool uses with live status/result (from SSE streaming) */
   toolUses?: ToolUse[];
+  /** Team ask_user question with clickable options */
+  askUser?: {
+    teamId: string;
+    agentName: string;
+    options: Array<{ label: string; description?: string }>;
+  };
+  /** Marks a team→user chat message (should not be overwritten by streaming updates) */
+  _teamChat?: boolean;
 }
 
 // ==================== Image References ====================
@@ -287,8 +295,10 @@ export interface TeamSpawnedEvent {
 }
 
 export interface TeamAgent {
-  name: string;
+  agent_id?: string;
+  name?: string;
   role: string;
+  purpose?: string;
 }
 
 export interface TeamPlanningEvent {
@@ -313,6 +323,7 @@ export interface TeamAgentStartEvent {
   agent_id: string;
   role: string;
   task_title: string;
+  agent_name?: string;
 }
 
 export interface TeamAgentProgressEvent {
@@ -393,6 +404,13 @@ export interface TeamAgentIdleEvent {
   peer_dm_summary?: string;
 }
 
+export interface TeamAskUserEvent {
+  team_id: string;
+  agent_name: string;
+  question: string;
+  options: Array<{ label: string; description?: string }>;
+}
+
 export interface TeamAgentShutdownEvent {
   team_id: string;
   agent_name: string;
@@ -456,6 +474,7 @@ export type SSEEventType =
   | 'team_error'
   | 'team_agent_message'
   | 'team_agent_broadcast'
+  | 'team_ask_user'
   | 'team_agent_idle'
   | 'team_agent_shutdown'
   | 'team_task_created'

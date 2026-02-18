@@ -66,7 +66,11 @@ export default function MessageList({ messages, isStreaming = false }: Props) {
         !m.isDelegationResult &&
         !last.isDelegationResult &&
         !m.isTaskResult &&
-        !last.isTaskResult;
+        !last.isTaskResult &&
+        !m.askUser &&
+        !last.askUser &&
+        !m._teamChat &&
+        !last._teamChat;
 
       if (shouldMerge) {
         // Merge with previous assistant message - extract text properly

@@ -276,6 +276,14 @@ interface ChatState {
       onError?: (error: Error) => void;
     },
   ) => Promise<void>;
+  sendTeamMessage: (
+    convId: string,
+    content: string,
+    options?: {
+      model?: string;
+      mode?: 'classic' | 'collaborative';
+    },
+  ) => Promise<void>;
   stopTask: (convId: string) => void;
 
   // Cleanup
@@ -337,9 +345,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   addMessage: (convId: string, message: Message) => {
     const runtime = get().getRuntime(convId);
     runtime.messages.push(message);
-    // Trigger reactivity
+    // Trigger reactivity — MUST create new array reference so useMemo([messages])
+    // in MessageList detects the change (push alone is invisible to reference checks)
     set((state) => ({
-      runtimes: { ...state.runtimes, [convId]: { ...runtime } },
+      runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: [...runtime.messages] } },
     }));
   },
 
@@ -379,7 +388,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Don't add empty messages during streaming
     if (!text && toolUses.length === 0 && !isFinal) return;
 
-    const lastMsg = messages[messages.length - 1];
+    // Find the last *streaming* assistant message (skip non-streaming ones like askUser or team→user)
+    let lastMsg = messages[messages.length - 1];
+    if (lastMsg && lastMsg.role === 'assistant' && (lastMsg.askUser || lastMsg._teamChat)) {
+      lastMsg = undefined as unknown as Message;
+    }
 
     if (lastMsg && lastMsg.role === 'assistant' && !lastMsg.isThinking) {
       // Update existing assistant message
@@ -664,6 +677,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
         onTeamSpawned: (evt) => {
           useUIStore.getState().setActiveTeamId(evt.team_id);
           useTeamStore.getState().setTeamSpawned(evt.team_id, evt.agents, evt.user_request);
+          // Persist session → team mapping for historical restoration
+          useUIStore.getState().setSessionTeam(convId, evt.team_id);
           // Auto-open right panel on Team tab
           useUIStore.getState().setRightPanelOpen(true);
           useUIStore.getState().setRightPanelTab('team');
@@ -675,7 +690,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           useTeamStore.getState().updateTaskBoard(evt.team_id, evt.tasks);
         },
         onTeamAgentStart: (evt) => {
-          useTeamStore.getState().updateAgentStart(evt.team_id, evt.agent_id, evt.role, evt.task_title);
+          useTeamStore.getState().updateAgentStart(evt.team_id, evt.agent_id, evt.role, evt.task_title, evt.agent_name);
         },
         onTeamAgentProgress: (evt) => {
           useTeamStore.getState().updateAgentProgress(evt.team_id, evt.agent_id, evt.status, evt.preview);
@@ -712,6 +727,39 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
         onTeamTaskUnblocked: (evt) => {
           useTeamStore.getState().updateTaskUnblocked(evt.team_id, evt.task_id, evt.owner, evt.title);
+        },
+        onTeamAgentMessage: (evt) => {
+          // Mirror team-lead → user messages to main chat as assistant messages (legacy parity)
+          // But skip if this duplicates an ask_user question already shown in main chat
+          if (evt.sender !== 'user' && evt.recipient === 'user' && evt.content) {
+            const pendingAsk = useTeamStore.getState().askUser;
+            if (!pendingAsk || pendingAsk.question !== evt.content) {
+              const store = useChatStore.getState();
+              store.addMessage(convId, { role: 'assistant', content: evt.content, timestamp: Date.now(), _teamChat: true });
+            }
+          }
+          useTeamStore.getState().appendMessage(evt.team_id, evt.sender, evt.recipient, evt.content, evt.summary);
+        },
+        onTeamAgentBroadcast: (evt) => {
+          useTeamStore.getState().appendMessage(evt.team_id, evt.sender, 'all', evt.content, evt.summary, true);
+        },
+        onTeamAskUser: (evt) => {
+          // Show ask_user question in main chat FIRST (before setAskUser, so dedup check works)
+          const store = useChatStore.getState();
+          store.addMessage(convId, {
+            role: 'assistant',
+            content: evt.question,
+            timestamp: Date.now(),
+            askUser: {
+              teamId: evt.team_id,
+              agentName: evt.agent_name,
+              options: evt.options || [],
+            },
+          });
+          useTeamStore.getState().setAskUser(evt.team_id, evt.agent_name, evt.question, evt.options || []);
+        },
+        onTeamAgentIdle: (evt) => {
+          useTeamStore.getState().updateAgentIdle(evt.team_id, evt.agent_name);
         },
         onComplete: (text, toolUses) => {
           // Detect interrupted stream: tools were executed but no final text response
@@ -798,6 +846,243 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
 
       options.onComplete?.();
+    }
+  },
+
+  // ─── Team Mode Send ───
+
+  sendTeamMessage: async (convId, content, options = {}) => {
+    const runtime = get().getRuntime(convId);
+
+    // Add user message to display
+    runtime.messages.push({ role: 'user', content, timestamp: Date.now() });
+
+    // Add thinking indicator
+    runtime.messages.push({ role: 'assistant', content: '', isThinking: true });
+    runtime.isStreaming = true;
+    set((state) => ({
+      runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: [...runtime.messages] } },
+    }));
+
+    const abortController = get().resetAbortController(convId);
+
+    try {
+      const settingsState = useSettingsStore.getState();
+      const model = options.model || settingsState.getEffectiveModel();
+      const mode = options.mode || 'collaborative';
+
+      // Step 1: Spawn team
+      const spawnRes = await fetch(`${BASE_URL}/v1/teams/spawn`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_request: content,
+          mode,
+          model,
+          session_id: convId,
+        }),
+        signal: abortController.signal,
+      });
+
+      if (!spawnRes.ok) {
+        throw new Error(`Failed to spawn team: ${spawnRes.statusText}`);
+      }
+
+      const spawnData = await spawnRes.json();
+      const teamId = spawnData.team_id;
+
+      // Step 2: Execute team with SSE streaming (with reconnection)
+      let reconnectCount = 0;
+      let streamDone = false;
+      let hasExecuted = false;
+
+      while (!streamDone) {
+        let execRes: Response;
+        if (!hasExecuted) {
+          execRes = await fetch(`${BASE_URL}/v1/teams/${teamId}/execute`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ stream: true }),
+            signal: abortController.signal,
+          });
+          hasExecuted = true;
+        } else {
+          execRes = await fetch(`${BASE_URL}/v1/teams/${teamId}/events`, {
+            signal: abortController.signal,
+          });
+        }
+
+        if (!execRes.ok) {
+          if (execRes.status >= 400 && execRes.status < 500) break;
+          reconnectCount++;
+          if (reconnectCount > 50) break;
+          const delay = Math.min(1000 * Math.pow(2, reconnectCount - 1), 30000);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+
+        // Remove thinking indicator before SSE processing starts
+        const thinkingIdx = runtime.messages.findIndex((m) => m.isThinking);
+        if (thinkingIdx >= 0) runtime.messages.splice(thinkingIdx, 1);
+
+        const store = useChatStore.getState();
+
+        // Throttle UI updates
+        let rafId: number | null = null;
+        let pendingText = '';
+        let pendingToolUses: ToolUse[] = [];
+        const flushPendingUpdate = () => {
+          rafId = null;
+          store.updateAssistantMessage(convId, pendingText, pendingToolUses, false);
+        };
+
+        try {
+          await processStreamingResponse(execRes, convId, {
+            onTextUpdate: (text, toolUses, isFinal) => {
+              if (isFinal) {
+                if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+                store.updateAssistantMessage(convId, text, toolUses, true);
+              } else {
+                pendingText = text;
+                pendingToolUses = toolUses;
+                if (rafId === null) {
+                  rafId = requestAnimationFrame(flushPendingUpdate);
+                }
+              }
+            },
+            onToolUse: () => {},
+            onToolExecutionStart: () => {},
+            onToolResult: () => {},
+            onHeartbeat: () => {},
+            onToolExecutionComplete: () => {},
+            onTeamSpawned: (evt) => {
+              useUIStore.getState().setActiveTeamId(evt.team_id);
+              useTeamStore.getState().setTeamSpawned(evt.team_id, evt.agents, evt.user_request);
+              useUIStore.getState().setSessionTeam(convId, evt.team_id);
+              useUIStore.getState().setRightPanelOpen(true);
+              useUIStore.getState().setRightPanelTab('team');
+            },
+            onTeamPlanning: (tid) => {
+              useTeamStore.getState().setTeamPlanning(tid);
+            },
+            onTeamTaskBoard: (evt) => {
+              useTeamStore.getState().updateTaskBoard(evt.team_id, evt.tasks);
+            },
+            onTeamAgentStart: (evt) => {
+              useTeamStore.getState().updateAgentStart(evt.team_id, evt.agent_id, evt.role, evt.task_title, evt.agent_name);
+            },
+            onTeamAgentProgress: (evt) => {
+              useTeamStore.getState().updateAgentProgress(evt.team_id, evt.agent_id, evt.status, evt.preview);
+            },
+            onTeamAgentDelta: (evt) => {
+              useTeamStore.getState().appendAgentDelta(evt.team_id, evt.agent_id, evt.delta);
+            },
+            onTeamAgentTool: (evt) => {
+              useTeamStore.getState().updateAgentTool(evt.team_id, evt.agent_id, evt.tool_name, evt.status);
+            },
+            onTeamAgentComplete: (evt) => {
+              useTeamStore.getState().updateAgentComplete(evt.team_id, evt.agent_id, evt.role, evt.findings);
+            },
+            onTeamAgentError: (evt) => {
+              useTeamStore.getState().updateAgentError(evt.team_id, evt.agent_id, evt.error);
+            },
+            onTeamSynthesisDelta: () => {},
+            onTeamSynthesizing: (evt) => {
+              useTeamStore.getState().setTeamSynthesizing(evt.team_id);
+            },
+            onTeamComplete: (evt) => {
+              useTeamStore.getState().setTeamComplete(evt.team_id, evt.result);
+              streamDone = true;
+            },
+            onTeamError: (evt) => {
+              useTeamStore.getState().setTeamError(evt.team_id, evt.error);
+              streamDone = true;
+            },
+            onTeamTaskCreated: (evt) => {
+              useTeamStore.getState().updateTaskCreated(evt.team_id, evt.task_id, evt.title, evt.owner);
+            },
+            onTeamTaskUpdated: (evt) => {
+              useTeamStore.getState().updateTaskUpdated(evt.team_id, evt.task_id, evt.status, evt.owner, evt.title);
+            },
+            onTeamTaskUnblocked: (evt) => {
+              useTeamStore.getState().updateTaskUnblocked(evt.team_id, evt.task_id, evt.owner, evt.title);
+            },
+            onTeamAgentMessage: (evt) => {
+              // Mirror team-lead → user messages to main chat as assistant messages (legacy parity)
+              // But skip if this duplicates an ask_user question already shown in main chat
+              if (evt.sender !== 'user' && evt.recipient === 'user' && evt.content) {
+                const pendingAsk = useTeamStore.getState().askUser;
+                if (!pendingAsk || pendingAsk.question !== evt.content) {
+                  store.addMessage(convId, { role: 'assistant', content: evt.content, timestamp: Date.now(), _teamChat: true });
+                }
+              }
+              useTeamStore.getState().appendMessage(evt.team_id, evt.sender, evt.recipient, evt.content, evt.summary);
+            },
+            onTeamAgentBroadcast: (evt) => {
+              useTeamStore.getState().appendMessage(evt.team_id, evt.sender, 'all', evt.content, evt.summary, true);
+            },
+            onTeamAskUser: (evt) => {
+              // Show ask_user question in main chat FIRST (before setAskUser, so dedup check works)
+              store.addMessage(convId, {
+                role: 'assistant',
+                content: evt.question,
+                timestamp: Date.now(),
+                askUser: {
+                  teamId: evt.team_id,
+                  agentName: evt.agent_name,
+                  options: evt.options || [],
+                },
+              });
+              useTeamStore.getState().setAskUser(evt.team_id, evt.agent_name, evt.question, evt.options || []);
+            },
+            onTeamAgentIdle: (evt) => {
+              useTeamStore.getState().updateAgentIdle(evt.team_id, evt.agent_name);
+            },
+            onComplete: (text) => {
+              if (text) {
+                store.updateAssistantMessage(convId, text, [], true);
+              }
+              streamDone = true;
+            },
+            onError: (error) => {
+              console.error(`[${convId}] Team stream error:`, error);
+            },
+          });
+        } catch (streamErr) {
+          const err = streamErr as Error;
+          if (err.name === 'AbortError') throw streamErr;
+          // Stream disconnected — try reconnecting
+        }
+
+        if (!streamDone) {
+          reconnectCount++;
+          if (reconnectCount > 50) break;
+          const delay = Math.min(1000 * Math.pow(2, reconnectCount - 1), 30000);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
+    } catch (e) {
+      const error = e as Error;
+      const currentRuntime = get().getRuntime(convId);
+      const thinkingIdx = currentRuntime.messages.findIndex((m) => m.isThinking);
+      if (thinkingIdx >= 0) currentRuntime.messages.splice(thinkingIdx, 1);
+
+      if (error.name !== 'AbortError') {
+        currentRuntime.messages.push({
+          role: 'assistant',
+          content: `Team Error: ${error.message}`,
+          timestamp: Date.now(),
+        });
+      }
+    } finally {
+      const finalRuntime = get().getRuntime(convId);
+      finalRuntime.isStreaming = false;
+      set((state) => ({
+        runtimes: {
+          ...state.runtimes,
+          [convId]: { ...finalRuntime, isStreaming: false, messages: [...finalRuntime.messages] },
+        },
+      }));
     }
   },
 

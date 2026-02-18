@@ -165,42 +165,84 @@ async def stream_team_events(team_id: str, http_request: Request):
 
 @router.get("/teams/{team_id}")
 async def get_team(team_id: str):
-    """Get team status and details"""
+    """Get team status and details (also loads completed teams from disk)"""
     manager = get_team_manager()
     team = manager.get_team(team_id)
-    if not team:
+
+    if team:
+        return JSONResponse(content={
+            "team_id": team.team_id,
+            "status": team.status,
+            "user_request": team.user_request,
+            "created_at": team.created_at,
+            "completed_at": team.completed_at,
+            "agents": [
+                {
+                    "agent_id": a.agent_id,
+                    "role": a.role.name,
+                    "purpose": a.role.purpose,
+                    "status": a.status,
+                    "findings": a.findings[:200] if a.findings else "",
+                    "token_usage": a.token_usage,
+                }
+                for a in team.agents
+            ],
+            "task_board": [
+                {
+                    "task_id": t.task_id,
+                    "title": t.title,
+                    "description": t.description,
+                    "assigned_to": t.assigned_to,
+                    "status": t.status,
+                    "findings": t.findings[:200] if t.findings else "",
+                }
+                for t in team.task_board
+            ],
+            "total_tokens": team.total_tokens,
+            "final_result": team.final_result[:500] if team.final_result else "",
+        })
+
+    # Fallback: load completed/errored teams directly from disk
+    from ..services.team_store import TeamStore
+    store = TeamStore(team_id)
+    meta = store.load_team_meta()
+    if not meta:
         raise HTTPException(status_code=404, detail={"error": f"Team {team_id} not found"})
 
+    # Build response from disk metadata
+    agents_data = []
+    for ad in meta.get("agents", []):
+        checkpoint = store.load_agent_checkpoint(ad.get("name", ad.get("agent_id", "")))
+        agents_data.append({
+            "agent_id": ad.get("agent_id", ""),
+            "role": ad.get("role_name", "worker"),
+            "purpose": ad.get("role_purpose", ""),
+            "status": checkpoint.get("status", ad.get("status", "complete")) if checkpoint else "complete",
+            "findings": (checkpoint.get("findings", "") or "")[:200] if checkpoint else "",
+            "token_usage": ad.get("token_usage", {"input_tokens": 0, "output_tokens": 0}),
+        })
+
+    tasks_data = []
+    for t in store.load_tasks():
+        tasks_data.append({
+            "task_id": t.get("task_id", t.get("id", "")),
+            "title": t.get("title", ""),
+            "description": t.get("description", ""),
+            "assigned_to": t.get("assigned_to", ""),
+            "status": t.get("status", "completed"),
+            "findings": (t.get("findings", "") or "")[:200],
+        })
+
     return JSONResponse(content={
-        "team_id": team.team_id,
-        "status": team.status,
-        "user_request": team.user_request,
-        "created_at": team.created_at,
-        "completed_at": team.completed_at,
-        "agents": [
-            {
-                "agent_id": a.agent_id,
-                "role": a.role.name,
-                "purpose": a.role.purpose,
-                "status": a.status,
-                "findings": a.findings[:200] if a.findings else "",
-                "token_usage": a.token_usage,
-            }
-            for a in team.agents
-        ],
-        "task_board": [
-            {
-                "task_id": t.task_id,
-                "title": t.title,
-                "description": t.description,
-                "assigned_to": t.assigned_to,
-                "status": t.status,
-                "findings": t.findings[:200] if t.findings else "",
-            }
-            for t in team.task_board
-        ],
-        "total_tokens": team.total_tokens,
-        "final_result": team.final_result[:500] if team.final_result else "",
+        "team_id": team_id,
+        "status": meta.get("status", "complete"),
+        "user_request": meta.get("user_request", ""),
+        "created_at": meta.get("created_at", ""),
+        "completed_at": meta.get("completed_at"),
+        "agents": agents_data,
+        "task_board": tasks_data,
+        "total_tokens": meta.get("total_tokens", {"input_tokens": 0, "output_tokens": 0}),
+        "final_result": (meta.get("final_result", "") or "")[:500],
     })
 
 

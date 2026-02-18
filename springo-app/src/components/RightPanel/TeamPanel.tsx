@@ -1,5 +1,7 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
-import { useTeamStore, getRoleConfig, type AgentStatus, type StoreAgent, type StoreTask } from '@/stores/teamStore';
+import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
+import { useTeamStore, getRoleConfig, type AgentStatus, type StoreAgent, type StoreMessage } from '@/stores/teamStore';
+import { useChatStore } from '@/stores/chatStore';
+import { useSessionStore } from '@/stores/sessionStore';
 
 // ─── Role SVG Paths ───
 
@@ -42,9 +44,10 @@ function getStatusLabel(status: AgentStatus): string {
 
 const MAX_OUTPUT_LEN = 50_000;
 
-// ─── Agent Card ───
+// ─── Agent Card (collapsed by default, click header to expand) ───
 
 function AgentCard({ agent }: { agent: StoreAgent }) {
+  const [expanded, setExpanded] = useState(false);
   const outputRef = useRef<HTMLDivElement>(null);
   const roleConfig = getRoleConfig(agent.role);
   const badgeClass = getStatusBadgeClass(agent.status);
@@ -58,96 +61,132 @@ function AgentCard({ agent }: { agent: StoreAgent }) {
     return agent.output;
   }, [agent.output]);
 
-  // Auto-scroll output to bottom
+  // Auto-scroll output to bottom when expanded and active
   useEffect(() => {
-    if (outputRef.current && isActive) {
+    if (outputRef.current && expanded && isActive) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
-  }, [truncatedOutput, isActive]);
+  }, [truncatedOutput, isActive, expanded]);
 
   const outputClass = isTerminal
     ? `team-split-agent-output ${agent.status === 'complete' ? 'success' : 'error'}`
     : 'team-split-agent-output';
+
+  const displayName = agent.name && agent.name !== agent.role
+    ? `${roleConfig.label} (${agent.name})`
+    : roleConfig.label;
 
   return (
     <div
       className={`team-split-agent-card${isActive ? ' active' : ''}`}
       style={{ '--agent-color': roleConfig.color } as React.CSSProperties}
     >
-      <div className="team-split-agent-header">
+      <div
+        className="team-split-agent-header"
+        onClick={() => setExpanded((p) => !p)}
+        style={{ cursor: 'pointer' }}
+      >
+        <svg
+          className="team-agent-toggle"
+          width="10" height="10" viewBox="0 0 24 24"
+          fill="none" stroke="var(--text-tertiary)" strokeWidth="2"
+          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', flexShrink: 0 }}
+        >
+          <path d="M9 18l6-6-6-6" />
+        </svg>
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={roleConfig.color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d={getRoleIconPath(agent.role)} />
         </svg>
-        <span className="team-split-agent-role">{roleConfig.label}</span>
+        <span className="team-split-agent-role">{displayName}</span>
         <span className={`team-split-agent-badge ${badgeClass}`}>
           {getStatusLabel(agent.status)}
         </span>
       </div>
 
-      {agent.purpose && (
-        <div className="team-split-agent-task">{agent.purpose}</div>
+      {/* Collapsed: show purpose as one-liner */}
+      {!expanded && agent.purpose && (
+        <div className="team-split-agent-task" style={{ opacity: 0.6, fontSize: 11, marginBottom: 4 }}>{agent.purpose}</div>
       )}
 
-      {truncatedOutput && (
-        <div
-          ref={outputRef}
-          className={outputClass}
-          style={{ display: 'block' }}
-        >
-          {truncatedOutput}
-        </div>
-      )}
+      {/* Expanded: full content */}
+      {expanded && (
+        <>
+          {agent.purpose && (
+            <div className="team-split-agent-task">{agent.purpose}</div>
+          )}
 
-      {isTerminal && agent.findings && (
-        <div className={`team-agent-findings ${agent.status === 'complete' ? 'success' : 'error'}`}>
-          {agent.findings}
-        </div>
-      )}
+          {truncatedOutput && (
+            <div
+              ref={outputRef}
+              className={outputClass}
+              style={{ display: 'block' }}
+            >
+              {truncatedOutput}
+            </div>
+          )}
 
-      <div className="team-split-agent-resize" />
+          {isTerminal && agent.findings && (
+            <div className={`team-agent-findings ${agent.status === 'complete' ? 'success' : 'error'}`}>
+              {agent.findings}
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
 
-// ─── Task Item ───
+// ─── Message Item ───
 
-function TaskItem({ task }: { task: StoreTask }) {
-  const roleConfig = task.owner ? getRoleConfig(task.owner) : null;
-
-  // Map task status to dot class
-  let dotClass = 'pending';
-  if (task.status === 'in_progress') dotClass = 'in_progress';
-  else if (task.status === 'completed') dotClass = 'complete';
-  else if (task.status === 'error') dotClass = 'error';
-  else if (task.status === 'unblocked') dotClass = 'pending';
+function MessageItem({ msg }: { msg: StoreMessage }) {
+  const senderConfig = getRoleConfig(msg.sender);
+  const displayContent = msg.summary || msg.content;
+  const truncated = displayContent.length > 300
+    ? displayContent.slice(0, 300) + '...'
+    : displayContent;
 
   return (
-    <div className={`team-task-item ${task.status}`}>
-      <span className={`team-task-status-dot ${dotClass}`} />
-      <span className="team-task-id">#{task.id}</span>
-      <span className="team-task-title">{task.title}</span>
-      {task.owner && roleConfig && (
-        <span className="team-task-owner">{roleConfig.label}</span>
-      )}
-      <span className={`team-task-status ${task.status}`}>{task.status}</span>
-    </div>
-  );
-}
-
-// ─── Task Board ───
-
-function TaskBoard({ tasks }: { tasks: Record<string, StoreTask> }) {
-  const taskList = Object.values(tasks);
-  if (taskList.length === 0) return null;
-
-  return (
-    <div className="team-task-board">
-      <div className="team-task-board-title">Tasks</div>
-      <div className="team-task-board-list">
-        {taskList.map((task) => (
-          <TaskItem key={task.id} task={task} />
-        ))}
+    <div className={`team-split-message${msg.isBroadcast ? ' broadcast' : ''}`}>
+      <div className="team-msg-header">
+        <span style={{ color: senderConfig.color, fontWeight: 600 }}>{msg.sender}</span>
+        {msg.isBroadcast ? (
+          <span> -&gt; all</span>
+        ) : (
+          <span> -&gt; {msg.recipient}</span>
+        )}
       </div>
+      <div className="team-msg-content">{truncated}</div>
+    </div>
+  );
+}
+
+// ─── Team Messages Section ───
+
+function TeamMessages({ messages }: { messages: StoreMessage[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const prevCountRef = useRef(messages.length);
+
+  // Auto-scroll on new messages — always scroll to bottom
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+    prevCountRef.current = messages.length;
+  }, [messages.length]);
+
+  if (messages.length === 0) {
+    return (
+      <div className="team-split-messages-empty" style={{ padding: '12px 14px', fontSize: 11, opacity: 0.5 }}>
+        Waiting for inter-agent messages...
+      </div>
+    );
+  }
+
+  return (
+    <div className="team-split-messages" ref={scrollRef}>
+      {messages.map((msg) => (
+        <MessageItem key={msg.id} msg={msg} />
+      ))}
     </div>
   );
 }
@@ -159,18 +198,72 @@ export default function TeamPanel() {
   const teamStatus = useTeamStore((s) => s.teamStatus);
   const userRequest = useTeamStore((s) => s.userRequest);
   const agents = useTeamStore((s) => s.agents);
-  const tasks = useTeamStore((s) => s.tasks);
+  const messages = useTeamStore((s) => s.messages);
+
+  // Divider drag state — start with agents taking most space; auto-adjust when messages arrive
+  const [agentsFlex, setAgentsFlex] = useState(0.8);
+  const hasAutoAdjusted = useRef(false);
+  const dividerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleStop = useCallback(async () => {
     if (!activeTeamId) return;
+    const convId = useSessionStore.getState().currentSessionId;
+
+    // 1. Abort the SSE stream (stops the fetch in chatStore)
+    if (convId) {
+      useChatStore.getState().stopTask(convId);
+    }
+
+    // 2. Tell backend to shut down the team (best-effort)
     try {
-      await fetch(`http://127.0.0.1:8081/v1/teams/${activeTeamId}/stop`, {
+      await fetch(`http://127.0.0.1:8081/v1/teams/${activeTeamId}/shutdown`, {
         method: 'POST',
       });
-    } catch (err) {
-      console.error('Failed to stop team:', err);
+    } catch {
+      // Ignore — stream is already aborted
     }
+
+    // 3. Update team panel status
+    useTeamStore.getState().setTeamComplete(activeTeamId);
   }, [activeTeamId]);
+
+  // Divider drag handler
+  const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const container = containerRef.current;
+    if (!container) return;
+
+    const startY = e.clientY;
+    const containerRect = container.getBoundingClientRect();
+    const startFlex = agentsFlex;
+    const divider = dividerRef.current;
+    divider?.classList.add('dragging');
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const delta = ev.clientY - startY;
+      const totalHeight = containerRect.height;
+      const newFlex = Math.min(0.85, Math.max(0.15, startFlex + delta / totalHeight));
+      setAgentsFlex(newFlex);
+    };
+
+    const onMouseUp = () => {
+      divider?.classList.remove('dragging');
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [agentsFlex]);
+
+  // Auto-expand messages section when first messages arrive
+  useEffect(() => {
+    if (messages.length > 0 && !hasAutoAdjusted.current) {
+      hasAutoAdjusted.current = true;
+      setAgentsFlex(0.5);
+    }
+  }, [messages.length]);
 
   // No active team — show placeholder
   if (!activeTeamId) {
@@ -197,7 +290,7 @@ export default function TeamPanel() {
 
   return (
     <div className="team-split-panel">
-      <div className="team-split-content">
+      <div className="team-split-content" ref={containerRef}>
         {/* Header */}
         <div className="team-split-header">
           <div className="team-split-status-row">
@@ -221,18 +314,28 @@ export default function TeamPanel() {
         </div>
 
         {/* Agent Cards */}
-        <div className="team-split-agents full-height">
+        <div
+          className="team-split-agents"
+          style={{ flex: `${agentsFlex} 1 0`, maxHeight: 'none' }}
+        >
           {agentList.map((agent) => (
             <AgentCard key={agent.name} agent={agent} />
           ))}
         </div>
 
-        {/* Task Board */}
-        {Object.keys(tasks).length > 0 && (
-          <div style={{ padding: '0 14px 14px', flexShrink: 0 }}>
-            <TaskBoard tasks={tasks} />
-          </div>
-        )}
+        {/* Draggable divider + Messages section — always visible */}
+        <div
+          ref={dividerRef}
+          className="team-split-divider"
+          onMouseDown={handleDividerMouseDown}
+        />
+        <div
+          className="team-split-messages-section"
+          style={{ flex: `${1 - agentsFlex} 1 0` }}
+        >
+          <div className="team-split-messages-title">Team Communication</div>
+          <TeamMessages messages={messages} />
+        </div>
       </div>
     </div>
   );

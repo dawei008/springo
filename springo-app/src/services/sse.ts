@@ -25,6 +25,7 @@ import type {
   TeamErrorEvent,
   TeamAgentMessageEvent,
   TeamAgentBroadcastEvent,
+  TeamAskUserEvent,
   TeamAgentIdleEvent,
   TeamAgentShutdownEvent,
   TeamTaskCreatedEvent,
@@ -168,6 +169,7 @@ export interface StreamCallbacks {
   onTeamError?: (event: TeamErrorEvent) => void;
   onTeamAgentMessage?: (event: TeamAgentMessageEvent) => void;
   onTeamAgentBroadcast?: (event: TeamAgentBroadcastEvent) => void;
+  onTeamAskUser?: (event: TeamAskUserEvent) => void;
   onTeamAgentIdle?: (event: TeamAgentIdleEvent) => void;
   onTeamAgentShutdown?: (event: TeamAgentShutdownEvent) => void;
   onTeamTaskCreated?: (event: TeamTaskCreatedEvent) => void;
@@ -406,6 +408,10 @@ export async function processStreamingResponse(
 
         case 'team_agent_broadcast':
           callbacks.onTeamAgentBroadcast?.(data as TeamAgentBroadcastEvent);
+          break;
+
+        case 'team_ask_user':
+          callbacks.onTeamAskUser?.(data as TeamAskUserEvent);
           break;
 
         case 'team_agent_idle':

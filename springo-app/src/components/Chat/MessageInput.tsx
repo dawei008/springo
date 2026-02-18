@@ -285,6 +285,17 @@ export default function MessageInput() {
       textareaRef.current.style.height = 'auto';
     }
 
+    // Team mode: spawn a new team instead of normal send
+    if (teamModeEnabled && content) {
+      const currentSettings = useSettingsStore.getState().settings;
+      const mode = teamCollaborativeMode ? 'collaborative' : 'classic';
+      await useChatStore.getState().sendTeamMessage(convId, content, {
+        model: currentSettings.model,
+        mode: mode as 'classic' | 'collaborative',
+      });
+      return;
+    }
+
     const atts = attachments.map((a) => ({
       type: a.type,
       data: a.data,
@@ -305,7 +316,7 @@ export default function MessageInput() {
     if (useUIStore.getState().activeSkill) {
       useUIStore.getState().clearActiveSkill();
     }
-  }, [text, attachments, isStreaming, currentSessionId, activeTeamId]);
+  }, [text, attachments, isStreaming, currentSessionId, activeTeamId, teamModeEnabled, teamCollaborativeMode]);
 
   const handleStop = useCallback(() => {
     if (currentSessionId) {

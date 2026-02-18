@@ -1,8 +1,11 @@
-import { useMemo, useState, useEffect, useRef } from 'react';
+import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
 import ArtifactRenderer, { ArtifactInline } from '@/components/Visual/ArtifactRenderer';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import { useUIStore } from '@/stores/uiStore';
+import { useChatStore } from '@/stores/chatStore';
+import { useSessionStore } from '@/stores/sessionStore';
+import { useTeamStore } from '@/stores/teamStore';
 import type { Message as MessageType, ContentBlock, ToolUseBlock } from '@/types';
 
 // ==================== SVG Avatar Icons ====================
@@ -76,6 +79,24 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
       .join('\n');
   }
   return '';
+}
+
+/**
+ * Detect skill-wrapped user messages and extract the user's actual request.
+ * Format: <skill name="xxx">...instructions...</skill>\n\nUser request: ...\n\nPlease follow...
+ * Returns { skillName, userText } or null if not a skill message.
+ */
+function parseSkillMessage(text: string): { skillName: string; userText: string } | null {
+  const match = text.match(/^<skill\s+name="([^"]+)">/);
+  if (!match) return null;
+  const skillName = match[1];
+  // Extract the "User request: ..." portion after </skill>
+  const afterSkill = text.replace(/^<skill[^>]*>[\s\S]*?<\/skill>\s*/, '');
+  const userRequest = afterSkill
+    .replace(/^User request:\s*/i, '')
+    .replace(/\s*Please follow the skill instructions above.*$/s, '')
+    .trim();
+  return { skillName, userText: userRequest || `/${skillName}` };
 }
 
 function extractToolUseBlocks(content: string | ContentBlock[] | undefined): ToolUseBlock[] {
@@ -342,6 +363,64 @@ function ExcalidrawLinkCard({ elements }: { elements: unknown }) {
   );
 }
 
+// ==================== Ask User Options (inline in chat) ====================
+
+function AskUserOptions({ teamId, agentName, options }: {
+  teamId: string;
+  agentName: string;
+  options: Array<{ label: string; description?: string }>;
+}) {
+  const [answered, setAnswered] = useState(false);
+  const [selectedLabel, setSelectedLabel] = useState<string | null>(null);
+
+  const handleClick = useCallback(async (label: string) => {
+    if (answered) return;
+    setAnswered(true);
+    setSelectedLabel(label);
+
+    // Add user reply to main chat
+    const convId = useSessionStore.getState().currentSessionId;
+    if (convId) {
+      useChatStore.getState().addMessage(convId, {
+        role: 'user',
+        content: label,
+        timestamp: Date.now(),
+      });
+    }
+
+    // Send to backend
+    try {
+      await fetch(`http://127.0.0.1:8081/v1/teams/${teamId}/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: label, recipient: 'team-lead' }),
+      });
+    } catch (err) {
+      console.error('Failed to send ask_user reply:', err);
+    }
+
+    useTeamStore.getState().clearAskUser();
+  }, [teamId, answered]);
+
+  if (options.length === 0) return null;
+
+  return (
+    <div className="team-ask-user-options" style={{ marginTop: 8 }}>
+      {options.map((opt) => (
+        <button
+          key={opt.label}
+          className={`team-ask-option${selectedLabel === opt.label ? ' selected' : ''}`}
+          disabled={answered}
+          title={opt.description || ''}
+          onClick={() => handleClick(opt.label)}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ==================== Main Message Component ====================
 
 export interface DisplayMessage extends MessageType {
@@ -379,13 +458,22 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
   const timeStr = formatTimestamp(message.timestamp);
 
   // Build renderable text content
-  const textContent = useMemo(() => {
+  const rawText = useMemo(() => {
     return (
       message.mergedContent ||
       (message.displayContent as string | undefined) ||
       extractTextContent(message.content)
     );
   }, [message.mergedContent, message.displayContent, message.content]);
+
+  // Detect skill-wrapped user messages
+  const skillInfo = useMemo(() => {
+    if (message.role !== 'user' || !rawText) return null;
+    return parseSkillMessage(rawText);
+  }, [message.role, rawText]);
+
+  // For skill messages, show only the user's request; otherwise full text
+  const textContent = skillInfo ? skillInfo.userText : rawText;
 
   // Extract inline images from content blocks (user messages only —
   // assistant messages may contain image blocks from tool results synced
@@ -439,6 +527,16 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         {timeStr && <span className="message-time">{timeStr}</span>}
       </div>
       <div className="message-content">
+        {skillInfo && (
+          <span className="skill-badge-inline">
+            <span className="skill-icon-inline">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+              </svg>
+            </span>
+            /{skillInfo.skillName}
+          </span>
+        )}
         {imageBlocks.map((block, idx) => {
           if (block.type !== 'image') return null;
           const src = block.source?.data
@@ -470,6 +568,14 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
               </>
             )}
           </ArtifactRenderer>
+        )}
+        {/* Ask user options — interactive buttons for team_ask_user */}
+        {message.askUser && (
+          <AskUserOptions
+            teamId={message.askUser.teamId}
+            agentName={message.askUser.agentName}
+            options={message.askUser.options}
+          />
         )}
         {toolUses.length > 0 && showToolPanel && <ToolContainer tools={toolUses} isStreaming={isStreaming} />}
         {/* Visual content from tools — always visible for all messages */}
