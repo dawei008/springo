@@ -1442,6 +1442,12 @@ class AgentTeamManager:
                 "execute commands, search the web, write code, and more. They handle all "
                 "research, exploration, and implementation. Your job is to decompose, "
                 "coordinate, and synthesize.\n\n"
+                "**Workers stay alive after completing tasks.** They go idle and preserve "
+                "their context (research findings, tool results). You can re-assign them "
+                "new tasks by sending a message with the new assignment. Prefer re-using "
+                "an existing idle worker over spawning a new one — the worker already has "
+                "domain context from its previous task. Only spawn a new worker when no "
+                "suitable idle worker exists.\n\n"
                 "## Task Design\n"
                 "- Each task should be self-contained enough for a worker to complete independently\n"
                 "- If the request has parallel dimensions (e.g., 'compare A vs B', 'each module'), "
@@ -1466,6 +1472,15 @@ class AgentTeamManager:
                 "- After calling ask_user, STOP and wait — do not continue working until the user responds\n"
                 "- If a worker message arrives while you're waiting for a user reply, handle it briefly "
                 "(acknowledge completion, note results) but remember you are still awaiting the user's answer\n\n"
+                "## Handling Requirement Changes\n"
+                "When the user changes direction mid-flight (e.g., 'change destination from A to B'):\n"
+                "1. Use send_message(type='broadcast') to notify ALL workers at once with the updated instructions\n"
+                "2. WAIT for workers to acknowledge — they may be mid-task and need a moment to respond\n"
+                "3. Do NOT spawn new workers for the same role — the existing workers will adapt and "
+                "continue with the updated requirements. They preserve their context and tools.\n"
+                "4. Only spawn a new worker if an existing worker has exited (you will get an error "
+                "saying the agent is no longer available) or if you need a genuinely new role.\n"
+                "5. Update task descriptions with task_update if the task scope changed significantly\n\n"
                 "## Progress Reporting\n"
                 "Keep the user informed of key milestones by sending messages with "
                 "send_message(recipient='user'). Report:\n"
@@ -1598,6 +1613,29 @@ class AgentTeamManager:
                 # Check if all agent tasks are done
                 all_done = all(t.done() for t in agent_tasks)
                 if all_done:
+                    # Before finishing, check if the task board still has
+                    # incomplete tasks.  Agents may have exited (idle timeout
+                    # or auto-exit) while tasks remain pending/in-progress.
+                    # If so, don't mark the team complete — it's a premature exit.
+                    incomplete_tasks = [
+                        t for t in task_mgr._tasks.values()
+                        if t.status not in ("completed", "error")
+                    ]
+                    if incomplete_tasks:
+                        task_titles = [t.title for t in incomplete_tasks[:3]]
+                        logger.warning(
+                            f"Collaborative team {team_id}: all agent loops exited "
+                            f"but {len(incomplete_tasks)} task(s) still incomplete: "
+                            f"{task_titles}. Marking team as 'error' instead of 'complete'."
+                        )
+                        team.status = "error"
+                        team.completed_at = datetime.now().isoformat()
+                        yield SSEEventBuilder.team_error(
+                            team_id,
+                            f"Team stopped with {len(incomplete_tasks)} incomplete task(s): "
+                            + ", ".join(t.title for t in incomplete_tasks[:5]),
+                        )
+
                     # Drain remaining events
                     while not event_queue.empty():
                         event = event_queue.get_nowait()

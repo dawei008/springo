@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 # Team tool names that require special handling
 TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "task_get", "ask_user", "spawn_worker", "exit_plan_mode", "team_info"}
 
+# Per-turn peer message budget — workers can send at most this many
+# messages to other workers in a single tool-loop turn.  Beyond this
+# limit, messages are silently redirected through team-lead.
+# Claude Code achieves a similar effect structurally (workers exit after
+# task completion, idle between turns, task-list coordination); we add
+# an explicit budget as an extra guardrail.
+PEER_MSG_BUDGET_PER_TURN = 2
+
 
 def _get_api_format(model_name: str) -> str:
     info = get_model_info(model_name)
@@ -171,7 +179,44 @@ async def run_agent_loop(
                 if current_message is None:
                     # Timeout — send heartbeat and continue waiting
                     consecutive_idle_secs += 30.0
+
+                    # Check if idle timeout should be suppressed:
+                    # 1. Team-lead stays alive while any worker is still running
+                    # 2. Workers stay alive while their blocked-by tasks are still pending/in-progress
+                    suppress_idle_timeout = False
                     if consecutive_idle_secs >= idle_timeout:
+                        if team_tools_only:  # team-lead
+                            # Don't timeout if any worker is still active
+                            active_workers = [
+                                a for a in team.agents
+                                if a.name != "team-lead"
+                                and a.status not in ("complete", "error")
+                            ]
+                            if active_workers:
+                                suppress_idle_timeout = True
+                                if int(consecutive_idle_secs) % 120 == 0:
+                                    names = [a.name or a.agent_id for a in active_workers]
+                                    logger.info(
+                                        f"[AgentLoop:team-lead] Idle timeout suppressed — "
+                                        f"{len(active_workers)} worker(s) still active: {names}"
+                                    )
+                        else:  # worker
+                            # Don't timeout if my tasks are blocked by tasks still in-progress
+                            my_tasks = [
+                                t for t in task_manager.list_tasks()
+                                if t.owner == agent_name
+                            ]
+                            for t in my_tasks:
+                                if t.status in ("pending", "in_progress"):
+                                    for bid in t.blocked_by:
+                                        blocker = task_manager.get_task(bid)
+                                        if blocker and blocker.status in ("pending", "in_progress"):
+                                            suppress_idle_timeout = True
+                                            break
+                                if suppress_idle_timeout:
+                                    break
+
+                    if consecutive_idle_secs >= idle_timeout and not suppress_idle_timeout:
                         logger.info(
                             f"[AgentLoop:{agent_name}] Idle timeout ({idle_timeout}s) — self-terminating"
                         )
@@ -266,9 +311,16 @@ async def run_agent_loop(
                 agent.completed_at = datetime.now().isoformat()
                 return
 
-            # Auto-exit for workers: if all assigned tasks are completed,
-            # the worker should stop — like Claude Code where agents finish
-            # their task and return, rather than lingering for peer messages.
+            # Task-complete idle: when all assigned tasks are done, the worker
+            # goes idle and waits for new assignments from team-lead.
+            # Unlike Claude Code (where workers exit and are re-spawned),
+            # we keep the worker alive to preserve its accumulated context
+            # (research findings, tool results, conversation history).
+            # The worker sits on `mailbox.receive()` at zero cost — no
+            # polling, no API calls — and is woken instantly when team-lead
+            # sends a new task or a shutdown request.
+            # The regular idle timeout still applies: if nobody messages
+            # the worker for `idle_timeout` seconds, it self-terminates.
             if not team_tools_only:  # workers only, not team lead
                 my_tasks = [
                     t for t in task_manager.list_tasks()
@@ -276,12 +328,10 @@ async def run_agent_loop(
                 ]
                 if my_tasks and all(t.status in ("completed", "error") for t in my_tasks):
                     logger.info(
-                        f"[AgentLoop:{agent_name}] All assigned tasks completed — auto-exiting"
+                        f"[AgentLoop:{agent_name}] All assigned tasks completed — "
+                        f"going idle (context preserved, awaiting re-assignment)"
                     )
-                    await message_bus.notify_shutdown(agent_name)
-                    agent.status = "complete"
-                    agent.completed_at = datetime.now().isoformat()
-                    return
+                    await message_bus.notify_idle(agent_name)
 
             # Context management: summarize if messages grow too large
             if len(messages) > 30:
@@ -342,6 +392,11 @@ async def _run_tool_loop(
     working_dir = get_working_dir() or None
     consecutive_poll_only = 0  # Anti-polling: track consecutive task_list-only iterations
     _POLL_TOOLS = {"task_list"}  # Only task_list is polling; task_get is reviewing details
+
+    # Mutable state shared with _execute_team_tool for per-turn tracking.
+    # peer_msg_count resets each outer message turn (run_agent_loop calls
+    # _run_tool_loop once per received message).
+    loop_state = {"peer_msg_count": 0}
 
     agent.status = "executing"
 
@@ -497,6 +552,7 @@ async def _run_tool_loop(
                     message_bus, task_manager,
                     spawn_context=spawn_context,
                     team=team,
+                    loop_state=loop_state,
                 )
                 is_error = "error" in result
             else:
@@ -636,6 +692,7 @@ async def _execute_team_tool(
     task_manager: TeamTaskManager,
     spawn_context: Optional[Dict[str, Any]] = None,
     team: Optional[Team] = None,
+    loop_state: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Execute a team communication tool with injected context.
 
@@ -661,23 +718,78 @@ async def _execute_team_tool(
             )
             return {"error": "recipient is required for direct messages"}
 
-        # Block worker-to-worker messages.  Workers can only message
-        # team-lead or user.  This prevents O(n²) peer chatter storms
-        # that waste millions of tokens on coordination overhead.
-        _allowed_recipients = {"team-lead", "user", ""}
+        # Peer message budget for workers.
+        # Workers CAN message other workers (like Claude Code allows),
+        # but are limited to PEER_MSG_BUDGET_PER_TURN per tool-loop turn.
+        # Beyond the budget, messages are redirected through team-lead so
+        # the coordinator stays in the loop — preventing O(n²) chatter
+        # storms while still allowing essential peer collaboration.
+        _non_peer_recipients = {"team-lead", "user", ""}
         is_worker = agent_name != "team-lead"
-        if is_worker and msg_type == "message" and recipient not in _allowed_recipients:
+        is_peer_message = (
+            is_worker
+            and msg_type == "message"
+            and recipient not in _non_peer_recipients
+        )
+
+        if is_peer_message and loop_state is not None:
+            count = loop_state.get("peer_msg_count", 0)
+            if count >= PEER_MSG_BUDGET_PER_TURN:
+                # Budget exceeded — redirect through team-lead instead of blocking.
+                # The worker's intent is preserved; team-lead decides whether to relay.
+                logger.info(
+                    f"[{agent_name}] Peer message budget exceeded "
+                    f"({count}/{PEER_MSG_BUDGET_PER_TURN}), "
+                    f"redirecting message for '{recipient}' through team-lead"
+                )
+                redirected_content = (
+                    f"[Redirected peer message]\n"
+                    f"Worker '{agent_name}' wanted to send this to '{recipient}':\n\n"
+                    f"{content}\n\n"
+                    f"Relay this if useful, or note the information for synthesis."
+                )
+                redirect_msg = AgentMessage(
+                    type="message",
+                    sender=agent_name,
+                    recipient="team-lead",
+                    content=redirected_content,
+                    summary=f"Redirected msg for {recipient}: {summary[:30]}",
+                )
+                await message_bus.send_message(redirect_msg)
+                return {
+                    "status": "redirected",
+                    "message": (
+                        f"You've reached the peer message limit for this turn. "
+                        f"Your message to '{recipient}' has been forwarded to "
+                        f"team-lead who will relay it if needed. "
+                        f"Prefer using task_list to check on other workers' progress."
+                    ),
+                }
+            # Within budget — allow but increment counter
+            loop_state["peer_msg_count"] = count + 1
             logger.info(
-                f"[{agent_name}] Blocked peer message to '{recipient}' — "
-                f"workers can only message team-lead"
+                f"[{agent_name}] Peer message to '{recipient}' allowed "
+                f"({count + 1}/{PEER_MSG_BUDGET_PER_TURN})"
             )
-            return {
-                "error": (
-                    f"Workers cannot message other workers directly. "
-                    f"Send your message to 'team-lead' instead, who will "
-                    f"relay it if needed."
-                ),
-            }
+
+        # Safety check: if recipient's mailbox was unregistered (e.g.,
+        # force-cancelled or idle-timed-out), the message would silently
+        # vanish.  Return an explicit error so the sender can adapt.
+        if msg_type == "message" and recipient and recipient != "user":
+            recipient_mailbox = message_bus.get_mailbox(recipient)
+            if recipient_mailbox is None:
+                logger.info(
+                    f"[{agent_name}] Message to '{recipient}' — "
+                    f"agent has exited (no mailbox)."
+                )
+                return {
+                    "error": (
+                        f"Agent '{recipient}' is no longer available "
+                        f"(exited or timed out). Create a new task with "
+                        f"task_create and spawn a new worker with spawn_worker "
+                        f"if you need this work done."
+                    ),
+                }
 
         msg = AgentMessage(
             type=msg_type,
@@ -687,7 +799,9 @@ async def _execute_team_tool(
             summary=summary,
         )
 
-        # Block worker broadcasts — only team-lead can broadcast
+        # Block worker broadcasts — only team-lead can broadcast.
+        # (Unlike peer DMs which have a budget, broadcasts are never
+        # allowed for workers — matching Claude Code's design.)
         if msg_type == "broadcast" and is_worker:
             logger.info(
                 f"[{agent_name}] Blocked broadcast — only team-lead can broadcast"
@@ -1009,14 +1123,14 @@ async def _execute_team_tool(
             "\n\n## Critical Rules\n"
             "- Focus ONLY on your assigned task(s). Do not discuss, coordinate, "
             "or make small talk with other workers.\n"
-            "- NEVER use send_message to contact other workers. You can ONLY "
-            "message team-lead.\n"
+            "- Prefer communicating through team-lead. You may message another "
+            "worker directly ONLY when you need specific technical information "
+            "that only they can provide — but keep it brief and task-relevant.\n"
+            "- Use task_list to check other workers' progress instead of messaging them.\n"
             "- Do NOT broadcast messages. Only team-lead broadcasts.\n"
             "- Do NOT introduce yourself or greet anyone. Start working immediately.\n"
             "- After completing your task and reporting to team-lead, STOP. "
             "Do not send further messages or wait for responses.\n"
-            "- If you need information that another worker might have, ask team-lead "
-            "to relay it — do not contact the worker directly.\n"
         )
 
         base_system_prompt = (
@@ -1216,9 +1330,9 @@ def _build_team_context_prompt(agent_name: str, team: Team) -> str:
     """Build additional system prompt with team context information.
 
     Team lead gets full agent list for coordination.
-    Workers only see team-lead — they should not know about or contact
-    other workers directly.  This structural choice prevents O(n²)
-    peer messaging storms.
+    Workers see only team-lead by default and are guided to use task_list
+    for coordination.  Peer messaging is allowed but budget-limited
+    (see PEER_MSG_BUDGET_PER_TURN).
     """
     is_lead = agent_name == "team-lead"
 
@@ -1243,10 +1357,14 @@ def _build_team_context_prompt(agent_name: str, team: Team) -> str:
             f"You are '{agent_name}' in team '{team.team_id}'.\n"
             f"Team request: {team.user_request}\n"
             f"Your coordinator: team-lead\n\n"
-            "If you need user input or clarification, call ask_user — it routes "
-            "through the team lead who relays the answer back. After calling "
-            "ask_user, wait for the reply before proceeding.\n\n"
-            "When you finish your task:\n"
+            "## Coordination\n"
+            "- Use task_list to check what other workers are doing — this is the "
+            "primary way to coordinate, not messaging.\n"
+            "- If you need user input or clarification, call ask_user — it routes "
+            "through the team lead who relays the answer back.\n"
+            "- You may message another worker directly when you need specific "
+            "information only they have, but prefer routing through team-lead.\n\n"
+            "## When you finish your task\n"
             "1. Mark it completed with task_update\n"
             "2. Send a brief summary to team-lead with send_message\n"
             "3. Then STOP — do not send further messages or wait for responses\n"
