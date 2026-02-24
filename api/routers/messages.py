@@ -345,7 +345,7 @@ async def messages_auto_api(
                     current_model = body.get("model", "")
                     _ext_ctx = body.get("extended_context")
                     if _ext_ctx is None:
-                        _ext_ctx = True
+                        _ext_ctx = False
                     model_limits = get_model_limits(current_model, extended_context=_ext_ctx)
                     current_tokens = count_messages_tokens(messages)
                     if should_summarize(messages, model=current_model, extended_context=_ext_ctx):
@@ -727,7 +727,7 @@ async def messages_auto_api(
                 ns_model = body.get("model", "")
                 _ns_ext_ctx = body.get("extended_context")
                 if _ns_ext_ctx is None:
-                    _ns_ext_ctx = True
+                    _ns_ext_ctx = False
                 ns_limits = get_model_limits(ns_model, extended_context=_ns_ext_ctx)
                 if should_summarize(messages, model=ns_model, extended_context=_ns_ext_ctx):
                     logger.info(f"[Context] Non-stream compact: {count_messages_tokens(messages):,}/{ns_limits['max_context_tokens']:,} tokens")

@@ -574,6 +574,7 @@ export interface Skill {
   title: string;
   description: string;
   keywords?: string[];
+  path?: string;
 }
 
 // ==================== Config API shapes ====================

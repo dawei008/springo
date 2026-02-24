@@ -41,7 +41,7 @@ export default function SettingsModal() {
   const [minimaxTesting, setMinimaxTesting] = useState(false)
   const [minimaxStatus, setMinimaxStatus] = useState('')
   const [localModel, setLocalModel] = useState(settings.model || defaultModel)
-  const [localEnable1mContext, setLocalEnable1mContext] = useState(settings.enable1mContext !== false)
+  const [localEnable1mContext, setLocalEnable1mContext] = useState(settings.enable1mContext === true)
   const [localMaxTokens, setLocalMaxTokens] = useState(settings.maxTokens || 16384)
   const [localTemperature, setLocalTemperature] = useState(settings.temperature || 0.7)
   const [localCompactModel, setLocalCompactModel] = useState(settings.compactModel || defaultCompactModel)

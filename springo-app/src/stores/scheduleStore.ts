@@ -109,7 +109,7 @@ async function executeTask(taskId: string) {
         stream: false,
         session_id: tempSessionId,
         compact_model: settings.getEffectiveCompactModel(),
-        extended_context: settings.settings.enable1mContext !== false,
+        extended_context: settings.settings.enable1mContext === true,
       }),
     });
 

@@ -622,7 +622,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: apiMessages,
         session_id: options.sessionId || convId,
         compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
-        extended_context: options.enable1mContext !== false,
+        extended_context: options.enable1mContext === true,
       };
 
       // Use api.messages.sendAutoRaw for fetchWithRetry + proper error handling

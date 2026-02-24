@@ -64,14 +64,10 @@ export default function ToolsPanel() {
     insertTextToInput(`Use the ${server.name} MCP server to `);
   }, [insertTextToInput]);
 
-  // Double-click: same as click but with visual flash on the input area
+  // Double-click: open the SKILL.md file in the system editor
   const handleSkillDoubleClick = useCallback((skill: Skill) => {
-    useUIStore.getState().setActiveSkill({ name: skill.name, description: skill.description });
-    // Flash the message input to indicate action
-    const wrapper = document.querySelector('.input-area');
-    if (wrapper) {
-      wrapper.classList.add('drag-over');
-      setTimeout(() => wrapper.classList.remove('drag-over'), 400);
+    if (skill.path && window.electronAPI?.openPath) {
+      window.electronAPI.openPath(`${skill.path}/SKILL.md`);
     }
   }, []);
 

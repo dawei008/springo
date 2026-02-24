@@ -134,6 +134,43 @@ function formatToolOutput(result: Record<string, unknown> | null | undefined, is
   }
 }
 
+// ==================== Clickable file paths in pre blocks ====================
+
+const FILE_PATH_RE = /((?:\/[\w.+@-]+){2,}(?:\.[\w]+)?|~\/[\w.+@/-]+)/g;
+
+function renderWithClickablePaths(text: string): React.ReactNode[] {
+  const escaped = escapeHtml(text);
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  // Re-run regex on escaped text — file paths don't contain HTML special chars
+  FILE_PATH_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = FILE_PATH_RE.exec(escaped)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(<span key={`t-${lastIndex}`} dangerouslySetInnerHTML={{ __html: escaped.slice(lastIndex, match.index) }} />);
+    }
+    const path = match[1];
+    parts.push(
+      <span
+        key={`p-${match.index}`}
+        className="clickable-path"
+        title={`Open ${path}`}
+        onClick={() => window.electronAPI?.openPath(path)}
+      >
+        {path}
+      </span>,
+    );
+    lastIndex = match.index + match[0].length;
+  }
+  if (parts.length === 0) {
+    return [<span key="all" dangerouslySetInnerHTML={{ __html: escaped }} />];
+  }
+  if (lastIndex < escaped.length) {
+    parts.push(<span key={`t-${lastIndex}`} dangerouslySetInnerHTML={{ __html: escaped.slice(lastIndex) }} />);
+  }
+  return parts;
+}
+
 // ==================== ToolUse type from store ====================
 
 interface ToolUseRuntime {
@@ -173,12 +210,12 @@ function ToolDetailModal({ tool, onClose }: { tool: ToolUseRuntime; onClose: () 
         <div className="tool-detail-body">
           <div className="tool-detail-section">
             <div className="tool-detail-section-label">Input</div>
-            <pre>{escapeHtml(inputStr)}</pre>
+            <pre>{renderWithClickablePaths(inputStr)}</pre>
           </div>
           {hasResult ? (
             <div className="tool-detail-section">
               <div className="tool-detail-section-label">{hasError ? 'Error' : 'Output'}</div>
-              <pre>{escapeHtml(outputStr)}</pre>
+              <pre>{renderWithClickablePaths(outputStr)}</pre>
             </div>
           ) : (
             <div className="tool-detail-section">

@@ -75,10 +75,13 @@ export default function FileBrowser() {
     setCurrentPath(path);
   }, []);
 
-  const handleItemClick = useCallback(
+  const handleItemDoubleClick = useCallback(
     (entry: FileEntry) => {
+      const fullPath = `${currentPath}/${entry.name}`.replace(/\/+/g, '/');
       if (entry.type === 'directory') {
-        navigateTo(`${currentPath}/${entry.name}`.replace(/\/+/g, '/'));
+        navigateTo(fullPath);
+      } else {
+        window.electronAPI?.openPath(fullPath);
       }
     },
     [currentPath, navigateTo],
@@ -174,7 +177,7 @@ export default function FileBrowser() {
             key={entry.name}
             className="file-browser-item"
             draggable={entry.type === 'file'}
-            onClick={() => handleItemClick(entry)}
+            onDoubleClick={() => handleItemDoubleClick(entry)}
             onDragStart={(e) => handleItemDragStart(e, entry)}
           >
             {entry.type === 'directory' ? (

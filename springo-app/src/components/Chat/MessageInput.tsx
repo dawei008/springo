@@ -161,7 +161,7 @@ export default function MessageInput() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             session_id: currentSessionId,
-            extended_context: settings.enable1mContext !== false,
+            extended_context: settings.enable1mContext === true,
           }),
         });
 
@@ -636,7 +636,7 @@ export default function MessageInput() {
             skills: [],
             memory_files: [],
             model: settings.model || '',
-            extended_context: settings.enable1mContext !== false,
+            extended_context: settings.enable1mContext === true,
           }),
         })
           .then((r) => r.json())

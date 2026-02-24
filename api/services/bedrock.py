@@ -199,6 +199,17 @@ When searching for **skills**, **sessions**, **config**, or **scripts**, ALWAYS 
 | Ask user questions | `ask_user` | - |
 | Plan before coding | `enter_plan_mode` | - |
 
+## Parallel Tool Execution
+
+You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between the calls, make all of the independent calls in the same response. Maximize use of parallel tool calls where possible to increase efficiency. However, if some tool calls depend on previous calls to inform dependent values, do NOT call these tools in parallel and instead call them sequentially. For instance, if one operation must complete before another starts (like reading a file before editing it), run these operations sequentially instead. Never use placeholders or guess missing parameters in tool calls.
+
+Examples of parallel-safe calls:
+- Multiple `write_file` calls writing different files
+- Multiple `read_file` / `read_files` calls for different paths
+- Multiple `grep` / `glob` searches in different directories
+- Multiple `edit` calls on different files
+- Running `execute_command` for independent operations
+
 ## Task Management (Important!)
 
 Use `todo_write` to track progress on complex, multi-step tasks:
@@ -509,7 +520,7 @@ class BedrockService:
             # and extended_context is not explicitly disabled
             extended_context = request.get("extended_context")
             if extended_context is None:
-                extended_context = True  # backward-compatible default
+                extended_context = False  # disabled by default; user must opt-in
             beta_features = model_info.get("beta_features", []) if model_info else []
             if beta_features and extended_context:
                 bedrock_body["anthropic_beta"] = beta_features
@@ -599,7 +610,7 @@ class BedrockService:
         original_model = body.pop("_original_model", None) or ""
         extended_context = body.pop("extended_context", None)
         if extended_context is None:
-            extended_context = True
+            extended_context = False  # disabled by default; user must opt-in
 
         for attempt in range(max_retries):
             try:
@@ -655,7 +666,7 @@ class BedrockService:
         body.pop("_original_model", None)
         extended_context = body.pop("extended_context", None)
         if extended_context is None:
-            extended_context = True
+            extended_context = False  # disabled by default; user must opt-in
 
         # Retry connection phase for 429 throttling
         response = None
@@ -800,7 +811,7 @@ class BedrockService:
         original_model = body.pop("_original_model", None) or ""
         extended_context = body.pop("extended_context", None)
         if extended_context is None:
-            extended_context = True
+            extended_context = False  # disabled by default; user must opt-in
 
         response = None
         client_ctx = None

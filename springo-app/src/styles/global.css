@@ -55,6 +55,17 @@ a:hover {
     color: var(--text-primary);
 }
 
+/* Selection inside code blocks (always dark bg) needs visible highlight */
+pre ::selection,
+pre::selection,
+code ::selection,
+code::selection,
+.tool-input ::selection,
+.tool-output ::selection {
+    background: rgba(218, 119, 86, 0.35);
+    color: #F0F0F0;
+}
+
 /* === Scrollbar Styling === */
 ::-webkit-scrollbar {
     width: 6px;

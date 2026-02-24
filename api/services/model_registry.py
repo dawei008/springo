@@ -53,7 +53,7 @@ _CONTEXT_LIMITS: Dict[str, dict] = {
 }
 
 
-def get_model_limits(model: str, extended_context: bool = True) -> dict:
+def get_model_limits(model: str, extended_context: bool = False) -> dict:
     """Get context-management limits for a model.
 
     Priority:
@@ -61,9 +61,9 @@ def get_model_limits(model: str, extended_context: bool = True) -> dict:
     2. Auto-derived from ``MODEL_REGISTRY.context_window / max_output``.
     3. ``_DEFAULT_LIMITS`` for unknown models.
 
-    When *extended_context* is False and the model has an override in
-    ``_CONTEXT_LIMITS``, the override is skipped and ``_DEFAULT_LIMITS``
-    (200K) is returned instead.  This lets users opt out of the 1M beta.
+    When *extended_context* is False (default) and the model has an override
+    in ``_CONTEXT_LIMITS``, the override is skipped and ``_DEFAULT_LIMITS``
+    (200K) is returned instead.  Users must explicitly opt-in to 1M context.
     """
     if model in _CONTEXT_LIMITS:
         if extended_context:

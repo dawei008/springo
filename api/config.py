@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     # Timeouts (seconds)
     bedrock_connect_timeout: int = Field(default=60, description="Bedrock connection timeout")
     bedrock_read_timeout: int = Field(default=900, description="Bedrock read timeout (15min for long conversations)")
-    bedrock_stream_chunk_timeout: int = Field(default=120, description="Timeout for individual stream chunks (detect stalled streams)")
+    bedrock_stream_chunk_timeout: int = Field(default=300, description="Timeout for individual stream chunks (5min; Opus extended thinking needs longer)")
     tool_execution_timeout: int = Field(default=300, description="Default tool/command execution timeout")
     tool_execution_timeout_quick: int = Field(default=30, description="Quick tool execution (file ops, etc.)")
     tool_execution_timeout_long: int = Field(default=600, description="Long tool execution (builds, installs)")
