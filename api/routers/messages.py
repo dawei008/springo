@@ -38,6 +38,21 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# ── Session cancellation registry ──
+# Maps session_id → asyncio.Event.  When set(), the streaming loop breaks.
+_cancel_events: Dict[str, asyncio.Event] = {}
+
+
+def _get_cancel_event(session_id: str) -> asyncio.Event:
+    """Get or create a cancellation event for a session."""
+    if session_id not in _cancel_events:
+        _cancel_events[session_id] = asyncio.Event()
+    return _cancel_events[session_id]
+
+
+def _cleanup_cancel_event(session_id: str) -> None:
+    _cancel_events.pop(session_id, None)
+
 
 # Dependency: Get Bedrock service (kept for backward compat)
 async def get_bedrock() -> BedrockService:
@@ -230,6 +245,11 @@ async def messages_auto_api(
         if msg_request.stream:
             # Streaming auto-tool execution
             async def auto_stream_generator() -> AsyncGenerator[str, None]:
+                # Set up cancellation token for this session
+                cancel_event: Optional[asyncio.Event] = None
+                if session_id:
+                    cancel_event = _get_cancel_event(session_id)
+
                 messages = [m.model_dump() if hasattr(m, 'model_dump') else m for m in msg_request.messages]
                 iteration = 0
                 system_extra = ""
@@ -275,7 +295,10 @@ async def messages_auto_api(
                 while iteration < max_iterations:
                     iteration += 1
 
-                    # Check client disconnect (#18/#22)
+                    # Check client disconnect or cancellation
+                    if cancel_event and cancel_event.is_set():
+                        logger.info(f"[Auto] Cancelled at iteration {iteration}")
+                        break
                     if request and await request.is_disconnected():
                         logger.warning(f"[Auto] Client disconnected at iteration {iteration}, stopping")
                         break
@@ -402,6 +425,11 @@ async def messages_auto_api(
                     _prompt_too_long = False
                     try:
                         async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
+                            # Check cancellation during streaming
+                            if cancel_event and cancel_event.is_set():
+                                logger.info(f"[Auto] Cancelled during Bedrock stream at iteration {iteration}")
+                                stop_reason = "cancelled"
+                                break
                             yield event
 
                             # Parse event to track content and tool uses
@@ -475,8 +503,11 @@ async def messages_auto_api(
                             except:
                                 tool["input"] = {}
 
-                    # Check if we need to execute tools
+                    # Check if we need to execute tools (or if cancelled)
                     if stop_reason != "tool_use" or not tool_uses:
+                        break
+                    if cancel_event and cancel_event.is_set():
+                        logger.info(f"[Auto] Cancelled before tool execution at iteration {iteration}")
                         break
 
                     # Execute tools via MCPManager (parallel with batch SSE events)
@@ -657,6 +688,10 @@ async def messages_auto_api(
 
                 # Send done
                 yield SSEEventBuilder.done()
+
+                # Cleanup cancellation event
+                if session_id:
+                    _cleanup_cancel_event(session_id)
 
             return create_sse_response(auto_stream_generator(), request)
         
@@ -861,3 +896,18 @@ async def messages_auto_api(
             status_code=get_http_status(e),
             detail=eh_format_error(e),
         )
+
+
+@router.post("/sessions/{session_id}/cancel")
+async def cancel_session(session_id: str):
+    """Cancel a running streaming session.
+
+    Sets the cancellation event so the auto_stream_generator loop breaks
+    at its next check point.
+    """
+    evt = _cancel_events.get(session_id)
+    if evt:
+        evt.set()
+        logger.info(f"[Cancel] Session {session_id} cancelled by client")
+        return {"status": "cancelled", "session_id": session_id}
+    return {"status": "not_found", "session_id": session_id}

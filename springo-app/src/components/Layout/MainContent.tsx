@@ -121,15 +121,13 @@ function StatusBar() {
         e.target.value = displayDir;
       } else if (value) {
         setWorkingDir(value);
-        // Sync to server
-        try {
-          await fetch('http://127.0.0.1:8081/v1/config/working-dir', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ working_dir: value }),
-          });
-        } catch (err) {
-          console.warn('Failed to sync working directory:', err);
+        // Also update current session's workingDir
+        if (currentSessionId) {
+          useSessionStore.setState((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === currentSessionId ? { ...s, workingDir: value } : s,
+            ),
+          }));
         }
       }
     },

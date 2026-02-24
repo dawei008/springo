@@ -1521,6 +1521,14 @@ class AgentTeamManager:
                 "when they complete their tasks. You do not need to poll task_list — "
                 "you will receive a notification for each completed task. Only call "
                 "task_list when you need to check overall status after receiving a message.\n\n"
+                "## Task Completion Notifications\n"
+                "When you receive a message starting with 'TASK COMPLETED:', this is a "
+                "definitive signal from the task manager. The task IS done — do NOT call "
+                "task_list or task_get to verify. Instead:\n"
+                "1. Wait for the worker's summary message (arrives separately)\n"
+                "2. Decide next action: assign new work, create follow-up tasks, or "
+                "synthesize results\n"
+                "3. If all tasks are done, present the final answer to the user\n\n"
                 "Do not use emojis in any output."
             )
 

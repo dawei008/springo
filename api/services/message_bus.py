@@ -292,8 +292,11 @@ class TeamMessageBus:
         if not recipient_mailbox:
             return
 
-        # User messages get priority delivery
-        if msg.sender == "user":
+        # User messages and system task-completion signals get priority delivery
+        if msg.sender == "user" or (
+            msg.sender == "system" and msg.content
+            and msg.content.startswith("TASK COMPLETED:")
+        ):
             await recipient_mailbox.deliver_priority(msg)
         else:
             await recipient_mailbox.deliver(msg)

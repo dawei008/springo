@@ -191,12 +191,23 @@ export default function WelcomeScreen() {
 
     const caps = CAPABILITY_DEFS.filter((cap) => {
       const matched: string[] = [];
-      cap.matchSkills?.forEach((s) => {
-        if (skillNames.has(s)) matched.push(s);
-      });
-      cap.matchServers?.forEach((s) => {
-        if (serverNames.has(s)) matched.push(s);
-      });
+
+      if (cap.matchSkills) {
+        for (const skill of cap.matchSkills) {
+          if (skillNames.has(skill)) {
+            matched.push(skill);
+          }
+        }
+      }
+
+      if (cap.matchServers) {
+        for (const server of cap.matchServers) {
+          if (serverNames.has(server)) {
+            matched.push(server);
+          }
+        }
+      }
+
       matches[cap.id] = matched;
       return cap.alwaysShow || matched.length > 0;
     }).slice(0, 6);

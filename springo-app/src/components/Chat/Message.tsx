@@ -578,17 +578,41 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           />
         )}
         {toolUses.length > 0 && showToolPanel && <ToolContainer tools={toolUses} isStreaming={isStreaming} />}
-        {/* Visual content from tools — always visible for all messages */}
-        {toolUses.map((tool) => {
-          // Excalidraw: show link card instead of inline rendering
-          if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
-            return <ExcalidrawLinkCard key={`vis-${tool.id}`} elements={tool.input.elements} />;
-          }
-          // Other visuals (images, SVG, base64) render from result
-          const hasResult = tool.result !== undefined && tool.result !== null;
-          const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
-          return hasResult && !hasError ? <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} /> : null;
-        })}
+        {/* Visual content from tools — intermediate images collapsed, last visible */}
+        {(() => {
+          // Find indices of tools that produce visual content
+          const visualIndices: number[] = [];
+          toolUses.forEach((tool, i) => {
+            if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
+              visualIndices.push(i);
+              return;
+            }
+            const hasResult = tool.result !== undefined && tool.result !== null;
+            const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
+            if (hasResult && !hasError) {
+              const rs = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result || '');
+              const hasVisual =
+                /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp))/i.test(rs) ||
+                /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/i.test(rs) ||
+                /data:image\/[a-z+]+;base64,/.test(rs) ||
+                (rs.includes('<svg') && rs.includes('</svg>'));
+              if (hasVisual) visualIndices.push(i);
+            }
+          });
+          const lastVisualIdx = visualIndices.length > 0 ? visualIndices[visualIndices.length - 1] : -1;
+
+          return toolUses.map((tool, i) => {
+            if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
+              return <ExcalidrawLinkCard key={`vis-${tool.id}`} elements={tool.input.elements} />;
+            }
+            const hasResult = tool.result !== undefined && tool.result !== null;
+            const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
+            if (!hasResult || hasError) return null;
+            // Collapse intermediate images, show last one expanded
+            const shouldCollapse = visualIndices.length > 1 && i !== lastVisualIdx && visualIndices.includes(i);
+            return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={shouldCollapse} />;
+          });
+        })()}
       </div>
     </div>
   );

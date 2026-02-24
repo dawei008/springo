@@ -133,6 +133,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   switchSession: (id: string) => {
     set({ currentSessionId: id });
+
+    // Sync the session's working directory to the backend
+    const session = get().sessions.find((s) => s.id === id);
+    const dir = session?.workingDir || useSettingsStore.getState().workingDir || '';
+    if (dir) {
+      fetch(`${BASE_URL}/v1/config/working-dir`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ working_dir: dir }),
+      }).catch(() => {});
+    }
   },
 
   deleteSession: async (id: string) => {

@@ -43,6 +43,13 @@ _CONTEXT_LIMITS: Dict[str, dict] = {
         "target_after_summary": 200000,
         "max_output_tokens": 64000,
     },
+    "claude-sonnet-4-6": {
+        "max_context_tokens": 1000000,
+        "compact_threshold": 600000,
+        "warning_threshold": 800000,
+        "target_after_summary": 200000,
+        "max_output_tokens": 64000,
+    },
 }
 
 
@@ -108,12 +115,13 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "bedrock_id": "us.anthropic.claude-sonnet-4-6",
         "provider": "anthropic",
         "display_name": "Claude Sonnet 4.6",
-        "context_window": 200000,
+        "context_window": 1000000,
         "max_output": 64000,
         "supports_vision": True,
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "anthropic",
+        "beta_features": ["context-1m-2025-08-07"],
     },
     "claude-sonnet-4-5-20250929": {
         "vendor": "bedrock",

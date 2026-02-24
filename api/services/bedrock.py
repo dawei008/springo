@@ -701,8 +701,17 @@ class BedrockService:
             message_id = f"msg_{uuid.uuid4().hex[:24]}"
             current_block_index = -1
             started_message = False
+            chunk_timeout = settings.bedrock_stream_chunk_timeout
 
-            async for event in response['body']:
+            body_iter = response['body'].__aiter__()
+            while True:
+                try:
+                    event = await asyncio.wait_for(body_iter.__anext__(), timeout=chunk_timeout)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.error(f"Bedrock stream stalled: no chunk received in {chunk_timeout}s")
+                    raise Exception(f"Stream stalled: no data received in {chunk_timeout} seconds")
                 chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
                 chunk_type = chunk.get("type")
 
@@ -832,7 +841,16 @@ class BedrockService:
                 raise
 
         try:
-            async for event in response['body']:
+            chunk_timeout = settings.bedrock_stream_chunk_timeout
+            body_iter = response['body'].__aiter__()
+            while True:
+                try:
+                    event = await asyncio.wait_for(body_iter.__anext__(), timeout=chunk_timeout)
+                except StopAsyncIteration:
+                    break
+                except asyncio.TimeoutError:
+                    logger.error(f"Bedrock stream_text stalled: no chunk in {chunk_timeout}s")
+                    raise Exception(f"Stream stalled: no data received in {chunk_timeout} seconds")
                 chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
                 chunk_type = chunk.get("type")
 
@@ -1278,23 +1296,30 @@ class BedrockService:
         out while waiting for slow Bedrock models (e.g. large Converse
         models with long time-to-first-token).
 
-        Importantly, the underlying ``__anext__`` future is **not**
-        cancelled on timeout – we simply keep waiting for it while
-        emitting heartbeats.
+        If no real event arrives within ``bedrock_stream_chunk_timeout``
+        seconds, the iterator raises to prevent indefinite hangs.
         """
+        max_wait = settings.bedrock_stream_chunk_timeout
         it = async_iter.__aiter__()
         pending = asyncio.ensure_future(it.__anext__())
         try:
             while True:
-                done, _ = await asyncio.wait({pending}, timeout=interval)
-                if done:
-                    try:
-                        yield ("event", pending.result())
-                    except StopAsyncIteration:
-                        return
-                    pending = asyncio.ensure_future(it.__anext__())
-                else:
-                    yield ("heartbeat", None)
+                elapsed = 0.0
+                while True:
+                    done, _ = await asyncio.wait({pending}, timeout=interval)
+                    if done:
+                        try:
+                            yield ("event", pending.result())
+                        except StopAsyncIteration:
+                            return
+                        pending = asyncio.ensure_future(it.__anext__())
+                        break
+                    else:
+                        elapsed += interval
+                        if elapsed >= max_wait:
+                            logger.error(f"Converse stream stalled: no event in {max_wait}s")
+                            raise Exception(f"Stream stalled: no data received in {max_wait} seconds")
+                        yield ("heartbeat", None)
         finally:
             if not pending.done():
                 pending.cancel()

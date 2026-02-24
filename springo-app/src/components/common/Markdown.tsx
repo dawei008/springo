@@ -37,16 +37,19 @@ const COMBINED_RE = new RegExp(`(${URL_PATTERN})|(${FILEPATH_PATTERN})`, 'g');
 
 function cleanTrailingPunctuation(url: string): string {
   let cleaned = url.replace(/[.,;:!?]+$/, '');
-  // Strip trailing ) only if unbalanced
+
+  // Strip trailing ) only if parentheses are unbalanced
   while (cleaned.endsWith(')')) {
-    const opens = (cleaned.match(/\(/g) || []).length;
-    const closes = (cleaned.match(/\)/g) || []).length;
-    if (closes > opens) {
+    const openCount = (cleaned.match(/\(/g) || []).length;
+    const closeCount = (cleaned.match(/\)/g) || []).length;
+
+    if (closeCount > openCount) {
       cleaned = cleaned.slice(0, -1);
     } else {
       break;
     }
   }
+
   return cleaned;
 }
 
@@ -61,13 +64,7 @@ function linkifyTextNode(text: string): any[] {
   while ((match = COMBINED_RE.exec(text)) !== null) {
     const rawUrl = match[1];
     const rawPath = match[2];
-    let value: string;
-
-    if (rawUrl) {
-      value = cleanTrailingPunctuation(rawUrl);
-    } else {
-      value = rawPath;
-    }
+    const value = rawUrl ? cleanTrailingPunctuation(rawUrl) : rawPath;
 
     if (match.index > lastIndex) {
       nodes.push({ type: 'text', value: text.slice(lastIndex, match.index) });
@@ -84,11 +81,14 @@ function linkifyTextNode(text: string): any[] {
     COMBINED_RE.lastIndex = consumed;
   }
 
-  if (nodes.length === 0) return [];
+  if (nodes.length === 0) {
+    return [];
+  }
 
   if (lastIndex < text.length) {
     nodes.push({ type: 'text', value: text.slice(lastIndex) });
   }
+
   return nodes;
 }
 
@@ -140,6 +140,41 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function CollapsibleImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLImageElement>) {
+  const [collapsed, setCollapsed] = useState(false);
+  const label = alt || (src ? src.split('/').pop()?.split('?')[0] : '') || 'Image';
+
+  return (
+    <div className={`tool-visual-content${collapsed ? ' collapsed' : ''}`}>
+      <div className="tool-visual-header" onClick={() => setCollapsed((c) => !c)}>
+        <span className="tool-visual-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <polyline points="21 15 16 10 5 21" />
+          </svg>
+        </span>
+        <span className="tool-visual-label">{label}</span>
+        <svg className="tool-visual-toggle" fill="none" stroke="currentColor" viewBox="0 0 24 24" width="14" height="14">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </div>
+      {!collapsed && (
+        <div className="tool-visual-image">
+          <img
+            {...props}
+            src={src}
+            alt={alt}
+            className="chat-image"
+            onClick={() => { if (src) useUIStore.getState().setImagePreview(src); }}
+            style={{ maxWidth: '100%', cursor: 'pointer', borderRadius: 8 }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function Markdown({ content }: Props) {
   const components: Components = {
     pre({ children, ...props }) {
@@ -157,22 +192,21 @@ export default function Markdown({ content }: Props) {
     a({ href, children, ...props }) {
       const isFilePath = href ? /^(\/|~\/)/.test(href) : false;
 
-      const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+      function handleClick(e: React.MouseEvent<HTMLAnchorElement>): void {
         e.preventDefault();
         if (!href) return;
 
         if (isFilePath) {
-          if (window.electronAPI?.openPath) {
-            window.electronAPI.openPath(href);
-          }
-        } else {
-          if (window.electronAPI?.openExternal) {
-            window.electronAPI.openExternal(href);
-          } else {
-            window.open(href, '_blank', 'noopener,noreferrer');
-          }
+          window.electronAPI?.openPath(href);
+          return;
         }
-      };
+
+        if (window.electronAPI?.openExternal) {
+          window.electronAPI.openExternal(href);
+        } else {
+          window.open(href, '_blank', 'noopener,noreferrer');
+        }
+      }
 
       return (
         <a
@@ -188,22 +222,7 @@ export default function Markdown({ content }: Props) {
     },
 
     img({ src, alt, ...props }) {
-      const handleClick = () => {
-        if (src) {
-          useUIStore.getState().setImagePreview(src);
-        }
-      };
-
-      return (
-        <img
-          {...props}
-          src={src}
-          alt={alt}
-          className="chat-image"
-          onClick={handleClick}
-          style={{ maxWidth: '100%', cursor: 'pointer', borderRadius: 8 }}
-        />
-      );
+      return <CollapsibleImage src={src} alt={alt} {...props} />;
     },
   };
 

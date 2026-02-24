@@ -1122,6 +1122,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       controller.abort();
     }
 
+    // Signal backend to cancel the session's streaming loop
+    fetch(`http://127.0.0.1:8081/v1/sessions/${convId}/cancel`, { method: 'POST' }).catch(() => {});
+
     const runtime = runtimes[convId];
     if (runtime) {
       runtime.isStreaming = false;

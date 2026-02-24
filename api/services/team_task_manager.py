@@ -9,7 +9,7 @@ from ..models.teams import EnhancedTaskBoardItem
 from ..utils.streaming import SSEEventBuilder
 
 if TYPE_CHECKING:
-    from .message_bus import TeamMessageBus, AgentMessage
+    from .message_bus import TeamMessageBus
     from .team_store import TeamStore
 
 logger = logging.getLogger(__name__)
@@ -161,8 +161,12 @@ class TeamTaskManager:
             sender="system",
             recipient="team-lead",
             content=(
-                f"Task #{task.task_id} '{task.title}' has been completed"
-                f"{' by ' + task.owner if task.owner else ''}."
+                f"TASK COMPLETED: #{task.task_id} '{task.title}'"
+                f"{' by ' + task.owner if task.owner else ''}\n\n"
+                f"This is a definitive completion signal from the task manager. "
+                f"Do NOT call task_list or task_get to verify -- the task is done. "
+                f"Review the worker's summary message (arriving separately) and "
+                f"decide: assign new work, create follow-up tasks, or synthesize results."
             ),
             summary=f"Task #{task.task_id} completed",
         )
