@@ -450,6 +450,7 @@ export type SSEEventType =
   | 'content_block_stop'
   | 'message_stop'
   | 'tool_execution_start'
+  | 'tool_start'
   | 'tool_executing'
   | 'tool_result'
   | 'heartbeat'

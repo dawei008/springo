@@ -4,17 +4,18 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useUIStore } from '@/stores/uiStore';
 import ToolsPanel from './ToolsPanel';
-import type { ConversationStatus } from '@/types';
+// ConversationStatus type used indirectly via session.status
 
-function getStatusTitle(status: ConversationStatus): string {
+function getStatusTitle(visualStatus: string): string {
   const titles: Record<string, string> = {
-    idle: 'Ready',
+    idle: 'Inactive',
+    active: 'Active',
     running: 'Running...',
     completed: 'Completed',
     error: 'Error',
     compacting: 'Compacting...',
   };
-  return titles[status] || 'Ready';
+  return titles[visualStatus] || 'Inactive';
 }
 
 // ─── Context Menu ───
@@ -593,12 +594,18 @@ export default function Sidebar() {
           <div key={group.label}>
             <div className="session-date-group">{group.label}</div>
             {group.sessions.map((session) => {
-              const status = session.status || 'idle';
+              const rawStatus = session.status || 'idle';
               // Session number: position in full (unfiltered) list, newest = highest
               const fullIndex = sessions.indexOf(session);
               const sessionNumber = totalCount - fullIndex;
               const isActive = session.id === currentSessionId;
               const isRenaming = renamingId === session.id;
+
+              // Derive visual status: running > compacting > error > active > idle
+              let visualStatus: string = rawStatus;
+              if (rawStatus === 'idle' && isActive) {
+                visualStatus = 'active';
+              }
 
               return (
                 <div
@@ -609,8 +616,8 @@ export default function Sidebar() {
                   data-id={session.id}
                 >
                   <div
-                    className={`conversation-status ${status}`}
-                    title={getStatusTitle(status)}
+                    className={`conversation-status ${visualStatus}`}
+                    title={getStatusTitle(visualStatus)}
                   />
                   <span className="session-number">#{sessionNumber}</span>
                   {isRenaming ? (

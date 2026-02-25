@@ -51,6 +51,7 @@ class ClearContextResponse(BaseModel):
 
 class ContextStatsRequest(BaseModel):
     """上下文统计请求"""
+    session_id: Optional[str] = Field(default=None, description="Session ID to load messages from store")
     messages: List[Dict[str, Any]] = Field(default=[], description="Message history")
     system_prompt: str = Field(default="", description="System prompt")
     system: Optional[str] = None
@@ -148,9 +149,22 @@ async def context_stats(request: ContextStatsRequest) -> Dict[str, Any]:
     """获取上下文 token 统计"""
     try:
         from ..services.context_manager import get_context_stats
-        extended_ctx = request.extended_context if request.extended_context is not None else True
+
+        messages = request.messages
+        # Load messages from session store if session_id provided and no messages given
+        if not messages and request.session_id:
+            try:
+                from ..services.session_store import get_session_store
+                store = get_session_store()
+                session = store.get_session(request.session_id)
+                if session:
+                    messages = session.get("messages", [])
+            except Exception:
+                pass
+
+        extended_ctx = request.extended_context if request.extended_context is not None else False
         return get_context_stats(
-            messages=request.messages,
+            messages=messages,
             system_prompt=request.system_prompt,
             tools=request.tools,
             model=request.model,
@@ -168,7 +182,7 @@ async def context_breakdown(request: ContextStatsRequest) -> Dict[str, Any]:
         from ..services.context_manager import get_context_breakdown
 
         system = request.system or request.system_prompt or ""
-        extended_ctx = request.extended_context if request.extended_context is not None else True
+        extended_ctx = request.extended_context if request.extended_context is not None else False
         return get_context_breakdown(
             messages=request.messages,
             system_prompt=system,

@@ -12,6 +12,7 @@ import { processStreamingResponse } from '@/services/sse';
 import { api } from '@/services/api';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useSessionStore } from '@/stores/sessionStore';
 import { useTeamStore } from '@/stores/teamStore';
 import { useScheduleStore } from '@/stores/scheduleStore';
 
@@ -573,6 +574,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       runtimes: { ...state.runtimes, [convId]: { ...runtime } },
     }));
+    useSessionStore.getState().updateSessionStatus(convId, 'running');
 
     // Add thinking indicator
     runtime.messages.push({
@@ -635,13 +637,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Process SSE stream using the comprehensive parser from sse.ts
       const store = useChatStore.getState();
 
-      // Throttle UI updates to ~60fps via rAF to avoid re-render storm during streaming
+      // Throttle UI updates to ~60fps via rAF to avoid re-render storm during streaming.
+      // Tool state changes (new tool added, status change) flush immediately so the user
+      // sees the "running" spinner before the tool result arrives in the same SSE chunk.
       let rafId: number | null = null;
       let pendingText = '';
       let pendingToolUses: ToolUse[] = [];
+      let lastRenderedToolCount = 0;
       const flushPendingUpdate = () => {
         rafId = null;
-        store.updateAssistantMessage(convId, pendingText, pendingToolUses, false);
+        store.updateAssistantMessage(convId, pendingText, [...pendingToolUses], false);
+        lastRenderedToolCount = pendingToolUses.length;
       };
 
       await processStreamingResponse(response, convId, {
@@ -651,8 +657,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
             // Always flush immediately on final update
             if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
             store.updateAssistantMessage(convId, text, toolUses, true);
+            lastRenderedToolCount = toolUses.length;
+          } else if (toolUses.length !== lastRenderedToolCount) {
+            // Tool count changed — flush immediately so running state is visible
+            // before tool_result arrives in the same SSE chunk
+            if (rafId !== null) { cancelAnimationFrame(rafId); rafId = null; }
+            store.updateAssistantMessage(convId, text, [...toolUses], false);
+            lastRenderedToolCount = toolUses.length;
           } else {
-            // Buffer intermediate updates, flush at next animation frame
+            // Text-only delta — buffer via rAF for smooth streaming
             pendingText = text;
             pendingToolUses = toolUses;
             if (rafId === null) {
@@ -682,14 +695,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
           console.log(`[${convId}] Skill injected: ${skillName}`);
         },
         onContextCompact: () => {
-          // TODO: Show compacting status in UI
-          console.log(`[${convId}] Context compacting...`);
+          useSessionStore.getState().updateSessionStatus(convId, 'compacting');
         },
         onContextCompactDone: () => {
-          console.log(`[${convId}] Context compaction complete`);
+          useSessionStore.getState().updateSessionStatus(convId, 'running');
         },
         onContextCompactFailed: (evt) => {
           console.warn(`[${convId}] Context compaction failed:`, evt);
+          useSessionStore.getState().updateSessionStatus(convId, 'running');
         },
         onMessagesUpdated: (evt) => {
           // Sync frontend messages after compaction
@@ -840,6 +853,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           [convId]: { ...finalRuntime, isStreaming: false, messages: [...finalRuntime.messages] },
         },
       }));
+      useSessionStore.getState().updateSessionStatus(convId, 'idle');
 
       // CRITICAL: In AUTO mode, the backend saves the properly structured
       // messages (separate per-iteration assistant/tool_result pairs + final
@@ -849,6 +863,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // the model to lose all tool execution context.
       const hasToolUse = finalRuntime.messages.some((m) => m.hasToolUse);
       if (hasToolUse) {
+        // Save the accumulated toolUses from streaming before backend sync overwrites them
+        const streamingToolUses = finalRuntime.messages
+          .filter((m) => m.role === 'assistant' && m.toolUses && m.toolUses.length > 0)
+          .flatMap((m) => m.toolUses!);
+
         try {
           const resp = await fetch(`${BASE_URL}/v1/sessions/${convId}`);
           if (resp.ok) {
@@ -856,6 +875,33 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const rawMessages = (data.messages || []) as Message[];
             const synced = validateConversationMessages(rawMessages);
             if (synced.length > 0) {
+              // Attach accumulated toolUses to the FIRST assistant message in the current
+              // turn. Backend stores per-iteration messages (each with 1-2 tools). The UI
+              // merges consecutive assistant messages — only the first (merge base) keeps
+              // its toolUses. So we must put all tools there, not on the last message.
+              if (streamingToolUses.length > 0) {
+                // Find last user text message (not tool_result) to locate current turn
+                let turnStart = -1;
+                for (let si = synced.length - 1; si >= 0; si--) {
+                  const msg = synced[si];
+                  if (msg.role === 'user') {
+                    const c = msg.content;
+                    const isToolResult = Array.isArray(c) &&
+                      (c as ContentBlock[]).some((b) => b.type === 'tool_result');
+                    if (!isToolResult) { turnStart = si; break; }
+                  }
+                }
+                // Attach to the first assistant message after the turn start
+                const searchFrom = turnStart >= 0 ? turnStart + 1 : 0;
+                for (let si = searchFrom; si < synced.length; si++) {
+                  if (synced[si].role === 'assistant') {
+                    synced[si].toolUses = streamingToolUses;
+                    synced[si].hasToolUse = true;
+                    break;
+                  }
+                }
+              }
+
               const rt = get().getRuntime(convId);
               rt.messages = synced;
               set((state) => ({
@@ -864,7 +910,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   [convId]: { ...rt, messages: [...synced] },
                 },
               }));
-              console.log(`[${convId}] AUTO mode: synced ${synced.length} messages from backend`);
+              console.log(`[${convId}] AUTO mode: synced ${synced.length} messages from backend (${streamingToolUses.length} tools preserved)`);
             }
           }
         } catch (syncErr) {
@@ -890,6 +936,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((state) => ({
       runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: [...runtime.messages] } },
     }));
+    useSessionStore.getState().updateSessionStatus(convId, 'running');
 
     const abortController = get().resetAbortController(convId);
 
@@ -1112,6 +1159,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           [convId]: { ...finalRuntime, isStreaming: false, messages: [...finalRuntime.messages] },
         },
       }));
+      useSessionStore.getState().updateSessionStatus(convId, 'idle');
     }
   },
 

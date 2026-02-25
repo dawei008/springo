@@ -1085,15 +1085,20 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
 
     # ── Pass 1b: Build adjacency map — for each user msg, which tool_use IDs
     # are in the immediately preceding assistant message ──
+    # Key present → previous message IS assistant (value may be empty set = no tool_use blocks)
+    # Key absent  → previous message is NOT assistant (or i == 0)
     prev_assistant_tool_ids: Dict[int, set] = {}  # user_msg_index -> set of tool_use IDs from prev assistant
     for i, msg in enumerate(messages):
         if msg.get("role") == "user" and i > 0:
             prev_msg = messages[i - 1]
-            if prev_msg.get("role") == "assistant" and isinstance(prev_msg.get("content"), list):
+            if prev_msg.get("role") == "assistant":
                 ids = set()
-                for block in prev_msg["content"]:
-                    if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
-                        ids.add(block["id"])
+                content = prev_msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("id"):
+                            ids.add(block["id"])
+                # Always set — even empty set means "assistant exists but has no tool_use blocks"
                 prev_assistant_tool_ids[i] = ids
 
     # ── Pass 2: Build repaired message list ──
@@ -1134,7 +1139,10 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
             # Filter out orphan tool_results:
             # 1. tool_use_id not in conversation at all → orphan
             # 2. tool_use_id exists but NOT in the immediately preceding assistant msg → adjacency orphan
-            adjacent_ids = prev_assistant_tool_ids.get(i, set())
+            # 3. No preceding assistant message at all → orphan (e.g., after compaction)
+            # Note: use .get() without default — None means "no adjacent assistant",
+            # empty set means "assistant exists but has no tool_use blocks"
+            adjacent_ids = prev_assistant_tool_ids.get(i)  # None or set
             orphan_result_count = 0
             adjacency_orphan_count = 0
             for block in content:
@@ -1143,9 +1151,12 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
                     if ref_id and ref_id not in all_tool_use_ids:
                         orphan_result_count += 1
                         continue  # Drop: no matching tool_use anywhere
-                    if ref_id and adjacent_ids and ref_id not in adjacent_ids:
+                    # Bedrock requires tool_result's tool_use_id to be in the immediately
+                    # preceding assistant message. Drop if: (a) no adjacent assistant, or
+                    # (b) adjacent assistant has no matching tool_use block.
+                    if ref_id and (adjacent_ids is None or ref_id not in adjacent_ids):
                         adjacency_orphan_count += 1
-                        continue  # Drop: tool_use exists but not in previous message
+                        continue  # Drop: tool_use not in immediately preceding assistant
                 new_content.append(block)
 
             if orphan_result_count:

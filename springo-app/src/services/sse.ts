@@ -253,6 +253,7 @@ export async function processStreamingResponse(
             }
             const tool: ToolUse = { ...currentToolUse };
             toolUses.push(tool);
+            console.log(`[SSE] tool_use accumulated: ${tool.name} (total: ${toolUses.length})`);
             callbacks.onToolUse?.(tool);
             currentToolUse = null;
             currentToolInput = '';
@@ -272,6 +273,7 @@ export async function processStreamingResponse(
             for (const t of evt.tools) {
               if (!toolUses.find((tu) => tu.id === t.id)) {
                 toolUses.push({ id: t.id, name: t.name, input: t.input || {}, status: 'running' });
+                console.log(`[SSE] tool_execution_start added: ${t.name} (total: ${toolUses.length})`);
               }
             }
           }
@@ -281,11 +283,15 @@ export async function processStreamingResponse(
           break;
         }
 
+        case 'tool_start':
         case 'tool_executing': {
-          const evt = data as { id: string; name: string };
-          const executing = toolUses.find((tu) => tu.id === evt.id);
+          // Backend sends 'tool_start' with { tool_use_id, tool_name }
+          const evt = data as { id?: string; name?: string; tool_use_id?: string; tool_name?: string };
+          const toolId = evt.id || evt.tool_use_id || '';
+          const toolName = evt.name || evt.tool_name || '';
+          const executing = toolUses.find((tu) => tu.id === toolId);
           if (executing) executing.status = 'running';
-          callbacks.onToolExecuting?.(evt.id, evt.name);
+          callbacks.onToolExecuting?.(toolId, toolName);
           // Push status update to UI
           callbacks.onTextUpdate(textContent, toolUses, false);
           break;
@@ -305,7 +311,13 @@ export async function processStreamingResponse(
         }
 
         case 'heartbeat': {
-          const evt = data as HeartbeatEvent;
+          // Backend sends { elapsed, tool_use_id? }, normalize to HeartbeatEvent
+          const raw = data as Record<string, unknown>;
+          const evt: HeartbeatEvent = {
+            tool_id: (raw.tool_id || raw.tool_use_id || '') as string,
+            tool_name: (raw.tool_name || '') as string,
+            elapsed_seconds: (raw.elapsed_seconds ?? raw.elapsed ?? 0) as number,
+          };
           const hbTool = toolUses.find((tu) => tu.id === evt.tool_id);
           if (hbTool) hbTool.elapsed = evt.elapsed_seconds;
           callbacks.onHeartbeat?.(evt);
@@ -444,6 +456,7 @@ export async function processStreamingResponse(
     }
 
     streamCompleted = true;
+    console.log(`[SSE] Stream complete: ${toolUses.length} tools accumulated, text length: ${textContent.length}`);
     callbacks.onComplete(textContent, toolUses);
     return { textContent, toolUses };
   } catch (e) {

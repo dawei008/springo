@@ -157,7 +157,12 @@ COMMON_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various 
 
 ## CRITICAL: Always Use Absolute Paths
 
-**For ALL tool calls that accept file or directory paths, you MUST use absolute paths.**
+**For ALL tool calls AND response text that mention file or directory paths, you MUST use absolute paths.**
+
+This applies to:
+1. Tool call parameters (file paths, directory paths)
+2. Response text when referencing files (e.g., "I created `/Users/name/project/file.txt`")
+3. Code suggestions that contain file paths
 
 - Correct: `/Users/name/project/file.txt`
 - Correct: `~/.springo/skills/pptx/script.py` (~ expands to home directory)
@@ -165,7 +170,7 @@ COMMON_SYSTEM_PROMPT = """You are a helpful AI assistant with access to various 
 - Wrong: `./project/file.txt` (relative path)
 - Wrong: `workspace/file.txt` (relative path)
 
-The working directory will be provided below. Use it to construct absolute paths.
+The working directory will be provided below. Use it to construct absolute paths for both tool calls and text references.
 
 {SPRINGO_MD_PLACEHOLDER}
 

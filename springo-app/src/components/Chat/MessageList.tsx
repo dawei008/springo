@@ -1,8 +1,7 @@
-import { useMemo, useEffect, useRef } from 'react';
+import { useMemo } from 'react';
 import Message from './Message';
 import type { DisplayMessage } from './Message';
-import type { Message as MessageType, ContentBlock } from '@/types';
-import { useUIStore } from '@/stores/uiStore';
+import type { Message as MessageType, ContentBlock, ToolUseBlock, ToolUse } from '@/types';
 
 /** Extract readable text from message content (string or ContentBlock[]). */
 function extractTextContent(content: string | ContentBlock[] | undefined): string {
@@ -84,6 +83,35 @@ export default function MessageList({ messages, isStreaming = false }: Props) {
         if (currContent) {
           last.mergedContent = prevContent + '\n\n' + currContent;
         }
+        // Accumulate tool_use blocks from merged messages for consolidated tool panel.
+        // After backend sync, each assistant message has 1-2 tool_use blocks in content.
+        // Without this, only the first (merge base) message's tools would be displayed.
+        const currTools: ToolUse[] = m.toolUses && m.toolUses.length > 0
+          ? m.toolUses
+          : Array.isArray(m.content)
+            ? (m.content as ContentBlock[])
+                .filter((c): c is ToolUseBlock => c.type === 'tool_use')
+                .map((tb) => ({ id: tb.id, name: tb.name, input: tb.input || {}, status: 'complete' as const }))
+            : [];
+        if (currTools.length > 0) {
+          if (!last.toolUses || last.toolUses.length === 0) {
+            // First tool merge: also include base message's own tools
+            const baseTools: ToolUse[] = Array.isArray(last.content)
+              ? (last.content as ContentBlock[])
+                  .filter((c): c is ToolUseBlock => c.type === 'tool_use')
+                  .map((tb) => ({ id: tb.id, name: tb.name, input: tb.input || {}, status: 'complete' as const }))
+              : [];
+            last.toolUses = [...baseTools, ...currTools];
+          } else {
+            // Subsequent merges: append new tools, skip duplicates by ID
+            const existingIds = new Set(last.toolUses.map((t) => t.id));
+            const newTools = currTools.filter((t) => !existingIds.has(t.id));
+            if (newTools.length > 0) {
+              last.toolUses = [...last.toolUses, ...newTools];
+            }
+          }
+          last.hasToolUse = true;
+        }
       } else {
         // Add new message (clone to avoid modifying original)
         result.push({ ...m });
@@ -92,18 +120,6 @@ export default function MessageList({ messages, isStreaming = false }: Props) {
 
     return result;
   }, [messages]);
-
-  // Detect context compaction: message count drops significantly mid-session
-  const prevMsgCountRef = useRef(messages.length);
-  useEffect(() => {
-    const prev = prevMsgCountRef.current;
-    const curr = messages.length;
-    prevMsgCountRef.current = curr;
-    // If count dropped by 2+ messages and we had a meaningful history, it's compaction
-    if (prev > 3 && curr > 0 && curr < prev - 1) {
-      useUIStore.getState().showToast('Context compacted automatically', 'success', 4000);
-    }
-  }, [messages.length]);
 
   // Find the last assistant message index — only it should show the tool panel
   const lastAssistantIdx = (() => {

@@ -34,11 +34,9 @@ export default function FileBrowser() {
     }
   }, [fileBrowserOpen, fileBrowserPath]);
 
-  // Load folder contents when path changes
-  useEffect(() => {
-    if (!currentPath || !fileBrowserOpen) return;
-
-    let cancelled = false;
+  // Fetch directory contents
+  const loadDirectory = useCallback((path: string) => {
+    if (!path) return;
     setLoading(true);
     setError('');
 
@@ -47,12 +45,11 @@ export default function FileBrowser() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: 'list_directory',
-        input: { path: currentPath, show_hidden: false },
+        input: { path, show_hidden: false },
       }),
     })
       .then((res) => res.json())
       .then((data) => {
-        if (cancelled) return;
         const result = data.result || data;
         if (result.error) {
           setError(result.error);
@@ -61,15 +58,20 @@ export default function FileBrowser() {
           setEntries(result.entries || []);
         }
       })
-      .catch((e) => {
-        if (!cancelled) setError(e.message);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+      .catch((e) => setError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
 
-    return () => { cancelled = true; };
-  }, [currentPath, fileBrowserOpen]);
+  // Load folder contents when path changes
+  useEffect(() => {
+    if (currentPath && fileBrowserOpen) {
+      loadDirectory(currentPath);
+    }
+  }, [currentPath, fileBrowserOpen, loadDirectory]);
+
+  const handleRefresh = useCallback(() => {
+    if (currentPath) loadDirectory(currentPath);
+  }, [currentPath, loadDirectory]);
 
   const navigateTo = useCallback((path: string) => {
     setCurrentPath(path);
@@ -123,11 +125,19 @@ export default function FileBrowser() {
           {folderName}
           <span className="folder-path-display">{itemCount} items</span>
         </h3>
-        <button className="close-btn" onClick={closeFileBrowser}>
-          <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M3 3l8 8M11 3l-8 8"/>
-          </svg>
-        </button>
+        <div className="file-browser-header-actions">
+          <button className="refresh-btn" onClick={handleRefresh} title="Refresh">
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h5M20 20v-5h-5"/>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20.49 9A9 9 0 005.64 5.64L4 9m16 6l-1.64 3.36A9 9 0 014.51 15"/>
+            </svg>
+          </button>
+          <button className="close-btn" onClick={closeFileBrowser}>
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M3 3l8 8M11 3l-8 8"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Breadcrumb */}

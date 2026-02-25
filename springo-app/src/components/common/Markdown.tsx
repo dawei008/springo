@@ -221,6 +221,57 @@ export default function Markdown({ content }: Props) {
       );
     },
 
+    // Inline code: detect URLs and file paths and make them clickable
+    code({ children, className, ...props }) {
+      // Only handle inline code (no className from syntax highlighting, and not inside <pre>)
+      if (className) {
+        return <code className={className} {...props}>{children}</code>;
+      }
+      const text = extractText(children).trim();
+      if (!text) {
+        return <code {...props}>{children}</code>;
+      }
+
+      // Check if the entire inline code is a URL
+      if (/^https?:\/\/\S+$/.test(text)) {
+        const cleaned = cleanTrailingPunctuation(text);
+        return (
+          <code
+            {...props}
+            className="clickable-url"
+            title={cleaned}
+            style={{ cursor: 'pointer' }}
+            onClick={() => {
+              if (window.electronAPI?.openExternal) {
+                window.electronAPI.openExternal(cleaned);
+              } else {
+                window.open(cleaned, '_blank', 'noopener,noreferrer');
+              }
+            }}
+          >
+            {children}
+          </code>
+        );
+      }
+
+      // Check if the entire inline code is a file path
+      if (/^(\/[\w.+@-][\w.+@/ -]*|~\/[\w.+@/ -][\w.+@/ -]*)$/.test(text)) {
+        return (
+          <code
+            {...props}
+            className="clickable-path"
+            title={`Open ${text}`}
+            style={{ cursor: 'pointer' }}
+            onClick={() => window.electronAPI?.openPath(text)}
+          >
+            {children}
+          </code>
+        );
+      }
+
+      return <code {...props}>{children}</code>;
+    },
+
     img({ src, alt, ...props }) {
       return <CollapsibleImage src={src} alt={alt} {...props} />;
     },
