@@ -235,6 +235,7 @@ function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]
   const [collapsed, setCollapsed] = useState(false);
   const [detailTool, setDetailTool] = useState<ToolUseRuntime | null>(null);
   const prevToolCountRef = useRef(0);
+  const prevAllCompleteRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   if (tools.length === 0) return null;
@@ -251,19 +252,24 @@ function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]
   useEffect(() => {
     if (tools.length > prevToolCountRef.current && collapsed && isStreaming) {
       setCollapsed(false);
+      prevAllCompleteRef.current = false; // reset so collapse re-triggers for new batch
     }
     prevToolCountRef.current = tools.length;
   }, [tools.length, collapsed, isStreaming]);
 
-  // Auto-collapse only after streaming ends (matching legacy: collapseInlineChatToolPanel on isFinal)
+  // Auto-collapse as soon as all current tools complete (don't wait for stream end)
   useEffect(() => {
-    if (!isStreaming && allComplete && tools.length > 0) {
+    if (allComplete && !prevAllCompleteRef.current && tools.length > 0) {
       const timer = setTimeout(() => {
         setCollapsed(true);
-      }, 1500);
+      }, 800);
+      prevAllCompleteRef.current = true;
       return () => clearTimeout(timer);
     }
-  }, [isStreaming, allComplete, tools.length]);
+    if (!allComplete) {
+      prevAllCompleteRef.current = false;
+    }
+  }, [allComplete, tools.length]);
 
   // Auto-scroll to bottom when new tools arrive or status changes
   useEffect(() => {

@@ -61,7 +61,6 @@ export default function SettingsModal() {
 
   // Memory tab state
   const [memEnabled, setMemEnabled] = useState(false)
-  const [memBackend, setMemBackend] = useState('agentcore')
   const [memId, setMemId] = useState('')
   const [s3Bucket, setS3Bucket] = useState('')
   const [ltmStrategies, setLtmStrategies] = useState<Array<{ name: string; description?: string }> | null>(null)
@@ -129,7 +128,6 @@ export default function SettingsModal() {
       const res = await fetch(`${BASE_URL}/v1/config/memory`)
       const data = await res.json()
       setMemEnabled(data.memory_enabled !== false)
-      setMemBackend(data.memory_backend || 'agentcore')
       setMemId(data.memory_id || '')
       // Local memory fields
       setLocalMemEnabled(data.local_memory_enabled !== false)
@@ -430,7 +428,7 @@ export default function SettingsModal() {
         body: JSON.stringify({
           enabled: memEnabled,
           agent_id: memId,
-          memory_backend: memBackend,
+          memory_backend: memEnabled ? 'agentcore' : 'local',
           local_memory_enabled: localMemEnabled,
           retention_days: retentionDays,
           auto_archive_on_reset: autoArchive,
@@ -908,140 +906,135 @@ export default function SettingsModal() {
 
             {/* ====== Memory Tab ====== */}
             <div className={`settings-tab-panel${activeTab === 'memory' ? ' active' : ''}`} id="tab-memory">
-              <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-secondary)' }}>Memory</h3>
+
+              {/* ---- Local Memory (memory/*.md) ---- */}
+              <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-secondary)' }}>Local Memory</h3>
               <div className="setting-group">
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                   <input
                     type="checkbox"
                     style={{ width: 'auto' }}
-                    checked={memEnabled}
-                    onChange={(e) => setMemEnabled(e.target.checked)}
+                    checked={localMemEnabled}
+                    onChange={(e) => setLocalMemEnabled(e.target.checked)}
                   />
-                  Enable Memory Sync
+                  Enable Local Memory (memory/*.md)
                 </label>
+                <div className="hint" style={{ marginTop: '4px' }}>Injects MEMORY.md + recent daily logs into system prompt for session continuity.</div>
               </div>
-              <div className="setting-group">
-                <label>Backend</label>
-                <select value={memBackend} onChange={(e) => setMemBackend(e.target.value)}>
-                  <option value="agentcore">AgentCore Memory (AWS)</option>
-                  <option value="local">Local Only (JSONL)</option>
-                </select>
-                <div className="hint" style={{ marginTop: '4px' }}>AgentCore syncs to cloud; Local stores only in JSONL files.</div>
-              </div>
-              <div id="agentcore-settings" style={{ display: memBackend === 'agentcore' ? undefined : 'none' }}>
-                <div className="setting-group">
-                  <label>Memory ID</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., springo_memory-xxxxx"
-                    value={memId}
-                    onChange={(e) => setMemId(e.target.value)}
-                  />
-                  <div className="hint" style={{ marginTop: '4px' }}>Create via <code>agentcore memory create --name springo_memory</code></div>
-                </div>
-                <div className="setting-group">
-                  <label>S3 Bucket</label>
-                  <input
-                    type="text"
-                    placeholder="e.g., my-springo-bucket"
-                    value={s3Bucket}
-                    onChange={(e) => setS3Bucket(e.target.value)}
-                  />
-                  <div className="hint" style={{ marginTop: '4px' }}>Pre-created S3 bucket for storing images and tool results</div>
-                </div>
-                <div className="setting-group" style={{ marginTop: '12px' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ margin: 0 }}>LTM Strategies</label>
-                    <button
-                      onClick={refreshLtmStrategies}
-                      className="secondary-btn"
-                      style={{ fontSize: '11px', padding: '4px 10px' }}
-                      disabled={ltmRefreshing}
-                    >
-                      <span className={ltmRefreshing ? 'spinning' : ''}>&#8635;</span> Refresh
-                    </button>
-                  </div>
-                  {ltmStrategies && ltmStrategies.length > 0 && (
-                    <div className="ltm-strategies-display">
-                      {ltmStrategies.map((s, i) => (
-                        <div key={i} className="strategy-item">
-                          <span className="strategy-name">{s.name}</span>
-                          {s.description && <span className="strategy-desc">{s.description}</span>}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  <div className="hint" style={{ marginTop: '4px' }}>Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
-                </div>
-              </div>
-
-              {/* ---- Local Memory (memory/*.md) Section ---- */}
-              <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
-                <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-secondary)' }}>Local Memory</h3>
+              <div style={{ display: localMemEnabled ? undefined : 'none' }}>
                 <div className="setting-group">
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                     <input
                       type="checkbox"
                       style={{ width: 'auto' }}
-                      checked={localMemEnabled}
-                      onChange={(e) => setLocalMemEnabled(e.target.checked)}
+                      checked={autoArchive}
+                      onChange={(e) => setAutoArchive(e.target.checked)}
                     />
-                    Enable Local Memory (memory/*.md)
+                    Auto-archive on New Chat
                   </label>
-                  <div className="hint" style={{ marginTop: '4px' }}>Injects MEMORY.md + recent daily logs into system prompt for session continuity.</div>
+                  <div className="hint" style={{ marginTop: '4px' }}>When starting a new session, archive the previous conversation to memory/*.md.</div>
                 </div>
-                <div style={{ display: localMemEnabled ? undefined : 'none' }}>
+                <div className="setting-group">
+                  <label>Retention Days</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={retentionDays}
+                    onChange={(e) => setRetentionDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 7)))}
+                    style={{ width: '80px' }}
+                  />
+                  <div className="hint" style={{ marginTop: '4px' }}>Memory files older than this are cleaned up automatically. Default: 7 days.</div>
+                </div>
+                <div className="setting-group" style={{ marginTop: '12px' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label style={{ margin: 0 }}>Memory Files</label>
+                    <button
+                      onClick={loadMemoryFiles}
+                      className="secondary-btn"
+                      style={{ fontSize: '11px', padding: '4px 10px' }}
+                      disabled={memoryFilesLoading}
+                    >
+                      <span className={memoryFilesLoading ? 'spinning' : ''}>&#8635;</span> Refresh
+                    </button>
+                  </div>
+                  {memoryFiles.length > 0 ? (
+                    <div className="settings-list" style={{ maxHeight: '150px', overflowY: 'auto', marginTop: '6px' }}>
+                      {memoryFiles.map((f, i) => (
+                        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 8px', fontSize: '12px', borderBottom: '1px solid var(--border)' }}>
+                          <span style={{ color: 'var(--text-primary)' }}>{f.path}</span>
+                          <span style={{ color: 'var(--text-muted)', marginLeft: '12px' }}>
+                            {f.size > 1024 ? `${(f.size / 1024).toFixed(1)}KB` : `${f.size}B`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="hint" style={{ marginTop: '6px' }}>No memory files yet. Click Refresh to check, or start a conversation.</div>
+                  )}
+                  <div className="hint" style={{ marginTop: '4px' }}>Location: <code>~/.springo/workspace/memory/</code></div>
+                </div>
+              </div>
+
+              {/* ---- AgentCore Long-term Memory ---- */}
+              <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-secondary)' }}>Long-term Memory</h3>
+                <div className="setting-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={memEnabled}
+                      onChange={(e) => setMemEnabled(e.target.checked)}
+                    />
+                    Enable AgentCore Long-term Memory
+                  </label>
+                  <div className="hint" style={{ marginTop: '4px' }}>Sync conversation memory to AWS AgentCore for cross-session recall and semantic search.</div>
+                </div>
+                <div style={{ display: memEnabled ? undefined : 'none' }}>
                   <div className="setting-group">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        style={{ width: 'auto' }}
-                        checked={autoArchive}
-                        onChange={(e) => setAutoArchive(e.target.checked)}
-                      />
-                      Auto-archive on New Chat
-                    </label>
-                    <div className="hint" style={{ marginTop: '4px' }}>When starting a new session, archive the previous conversation to memory/*.md.</div>
+                    <label>Memory ID</label>
+                    <input
+                      type="text"
+                      placeholder="e.g., springo_memory-xxxxx"
+                      value={memId}
+                      onChange={(e) => setMemId(e.target.value)}
+                    />
+                    <div className="hint" style={{ marginTop: '4px' }}>Create via <code>agentcore memory create --name springo_memory</code></div>
                   </div>
                   <div className="setting-group">
-                    <label>Retention Days</label>
+                    <label>S3 Bucket</label>
                     <input
-                      type="number"
-                      min={1}
-                      max={90}
-                      value={retentionDays}
-                      onChange={(e) => setRetentionDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 7)))}
-                      style={{ width: '80px' }}
+                      type="text"
+                      placeholder="e.g., my-springo-bucket"
+                      value={s3Bucket}
+                      onChange={(e) => setS3Bucket(e.target.value)}
                     />
-                    <div className="hint" style={{ marginTop: '4px' }}>Memory files older than this are cleaned up automatically. Default: 7 days.</div>
+                    <div className="hint" style={{ marginTop: '4px' }}>Pre-created S3 bucket for storing images and tool results</div>
                   </div>
                   <div className="setting-group" style={{ marginTop: '12px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <label style={{ margin: 0 }}>Memory Files</label>
+                      <label style={{ margin: 0 }}>LTM Strategies</label>
                       <button
-                        onClick={loadMemoryFiles}
+                        onClick={refreshLtmStrategies}
                         className="secondary-btn"
                         style={{ fontSize: '11px', padding: '4px 10px' }}
-                        disabled={memoryFilesLoading}
+                        disabled={ltmRefreshing}
                       >
-                        <span className={memoryFilesLoading ? 'spinning' : ''}>&#8635;</span> Refresh
+                        <span className={ltmRefreshing ? 'spinning' : ''}>&#8635;</span> Refresh
                       </button>
                     </div>
-                    {memoryFiles.length > 0 ? (
-                      <div className="settings-list" style={{ maxHeight: '150px', overflowY: 'auto', marginTop: '6px' }}>
-                        {memoryFiles.map((f, i) => (
-                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 8px', fontSize: '12px', borderBottom: '1px solid var(--border)' }}>
-                            <span style={{ color: 'var(--text-primary)' }}>{f.path}</span>
-                            <span style={{ color: 'var(--text-muted)', marginLeft: '12px' }}>
-                              {f.size > 1024 ? `${(f.size / 1024).toFixed(1)}KB` : `${f.size}B`}
-                            </span>
+                    {ltmStrategies && ltmStrategies.length > 0 && (
+                      <div className="ltm-strategies-display">
+                        {ltmStrategies.map((s, i) => (
+                          <div key={i} className="strategy-item">
+                            <span className="strategy-name">{s.name}</span>
+                            {s.description && <span className="strategy-desc">{s.description}</span>}
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      <div className="hint" style={{ marginTop: '6px' }}>No memory files yet. Click Refresh to check, or start a conversation.</div>
                     )}
-                    <div className="hint" style={{ marginTop: '4px' }}>Location: <code>~/.springo/workspace/memory/</code></div>
+                    <div className="hint" style={{ marginTop: '4px' }}>Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
                   </div>
                 </div>
               </div>
