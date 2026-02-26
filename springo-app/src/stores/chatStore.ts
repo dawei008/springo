@@ -859,21 +859,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // Always read the CURRENT runtime from the store to avoid overwriting
       // messages that were added by the SSE stream processor
       const finalRuntime = get().getRuntime(convId);
-      finalRuntime.isStreaming = false;
-      set((state) => ({
-        runtimes: {
-          ...state.runtimes,
-          [convId]: { ...finalRuntime, isStreaming: false, messages: [...finalRuntime.messages] },
-        },
-      }));
-      useSessionStore.getState().updateSessionStatus(convId, 'idle');
 
-      // CRITICAL: In AUTO mode, the backend saves the properly structured
-      // messages (separate per-iteration assistant/tool_result pairs + final
-      // assistant) via _auto_save_session.  Reload from backend to sync
-      // frontend state — without this, tool_result messages are missing and
-      // the next turn's sanitizer strips orphaned tool_use blocks, causing
-      // the model to lose all tool execution context.
+      // CRITICAL: Sync from backend BEFORE setting isStreaming=false.
+      // In AUTO mode, the backend saves the properly structured messages
+      // (separate per-iteration assistant/tool_result pairs + final
+      // assistant) via _auto_save_session. We must reload from backend
+      // to replace the frontend's accumulated single-message view with
+      // proper per-iteration messages. If we set isStreaming=false first,
+      // the user can send a new message before sync completes — the
+      // frontend's accumulated message (with orphaned tool_uses) would
+      // be sanitized, flattening all iteration text into one plain string
+      // and permanently corrupting the session JSONL.
       const hasToolUse = finalRuntime.messages.some((m) => m.hasToolUse);
       if (hasToolUse) {
         // Save the accumulated toolUses from streaming before backend sync overwrites them
@@ -915,6 +911,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 }
               }
 
+              // Update runtime with synced messages (re-read to get latest state)
               const rt = get().getRuntime(convId);
               rt.messages = synced;
               set((state) => ({
@@ -930,6 +927,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
           console.warn(`[${convId}] AUTO mode: failed to sync from backend`, syncErr);
         }
       }
+
+      // NOW safe to mark idle — backend sync is complete, messages are correct
+      const syncedRuntime = get().getRuntime(convId);
+      syncedRuntime.isStreaming = false;
+      set((state) => ({
+        runtimes: {
+          ...state.runtimes,
+          [convId]: { ...syncedRuntime, isStreaming: false, messages: [...syncedRuntime.messages] },
+        },
+      }));
+      useSessionStore.getState().updateSessionStatus(convId, 'idle');
 
       options.onComplete?.();
     }
@@ -1188,18 +1196,97 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     const runtime = runtimes[convId];
     if (runtime) {
-      runtime.isStreaming = false;
-
       // Remove thinking indicator
       const thinkingIdx = runtime.messages.findIndex((m) => m.isThinking);
       if (thinkingIdx >= 0) runtime.messages.splice(thinkingIdx, 1);
 
-      set((state) => ({
-        runtimes: {
-          ...state.runtimes,
-          [convId]: { ...runtime, isStreaming: false, messages: [...runtime.messages] },
-        },
-      }));
+      // CRITICAL: Sync from backend BEFORE setting isStreaming=false.
+      // During agentic streaming, the frontend accumulates ALL iteration text
+      // into a single assistant message. Without backend sync, the accumulated
+      // message has orphaned tool_uses (no matching tool_results). If the user
+      // types a new message before sync, sanitizeMessagesForAPI strips the
+      // orphaned tools and flattens the concatenated text to a plain string,
+      // permanently corrupting the session JSONL.
+      const hasToolUse = runtime.messages.some((m) => m.hasToolUse);
+      if (hasToolUse) {
+        const streamingToolUses = runtime.messages
+          .filter((m) => m.role === 'assistant' && m.toolUses && m.toolUses.length > 0)
+          .flatMap((m) => m.toolUses!);
+
+        fetch(`${BASE_URL}/v1/sessions/${convId}`)
+          .then((resp) => resp.ok ? resp.json() : null)
+          .then((data) => {
+            if (!data?.messages) return;
+            const synced = validateConversationMessages(data.messages as Message[]);
+            if (synced.length === 0) return;
+
+            // Attach accumulated toolUses to first assistant in current turn
+            if (streamingToolUses.length > 0) {
+              let turnStart = -1;
+              for (let si = synced.length - 1; si >= 0; si--) {
+                const msg = synced[si];
+                if (msg.role === 'user') {
+                  const c = msg.content;
+                  const isToolResult = Array.isArray(c) &&
+                    (c as ContentBlock[]).some((b) => b.type === 'tool_result');
+                  if (!isToolResult) { turnStart = si; break; }
+                }
+              }
+              const searchFrom = turnStart >= 0 ? turnStart + 1 : 0;
+              for (let si = searchFrom; si < synced.length; si++) {
+                if (synced[si].role === 'assistant') {
+                  synced[si].toolUses = streamingToolUses;
+                  synced[si].hasToolUse = true;
+                  break;
+                }
+              }
+            }
+
+            const rt = get().getRuntime(convId);
+            rt.messages = synced;
+            rt.isStreaming = false;
+            set((state) => ({
+              runtimes: {
+                ...state.runtimes,
+                [convId]: { ...rt, isStreaming: false, messages: [...synced] },
+              },
+            }));
+            useSessionStore.getState().updateSessionStatus(convId, 'idle');
+            console.log(`[${convId}] stopTask: synced ${synced.length} messages from backend`);
+          })
+          .catch((err) => {
+            console.warn(`[${convId}] stopTask: backend sync failed, marking idle anyway`, err);
+            const rt = get().getRuntime(convId);
+            rt.isStreaming = false;
+            set((state) => ({
+              runtimes: {
+                ...state.runtimes,
+                [convId]: { ...rt, isStreaming: false, messages: [...rt.messages] },
+              },
+            }));
+            useSessionStore.getState().updateSessionStatus(convId, 'idle');
+          });
+
+        // Keep isStreaming=true while sync is in progress (set to false in .then/.catch above)
+        // But still update UI to show "stopping" state
+        set((state) => ({
+          runtimes: {
+            ...state.runtimes,
+            [convId]: { ...runtime, messages: [...runtime.messages] },
+          },
+        }));
+        useSessionStore.getState().updateSessionStatus(convId, 'running');
+      } else {
+        // No tool use — safe to mark idle immediately
+        runtime.isStreaming = false;
+        set((state) => ({
+          runtimes: {
+            ...state.runtimes,
+            [convId]: { ...runtime, isStreaming: false, messages: [...runtime.messages] },
+          },
+        }));
+        useSessionStore.getState().updateSessionStatus(convId, 'idle');
+      }
     }
   },
 

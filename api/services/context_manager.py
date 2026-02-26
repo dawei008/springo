@@ -435,7 +435,11 @@ def create_summary_messages(
     summary: str,
     recent_messages: List[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """构建摘要消息列表：[系统摘要 user msg] + [assistant ack] + recent"""
+    """构建摘要消息列表：[系统摘要 user msg] + [assistant ack] + recent
+
+    If recent_messages starts with an assistant message, skip the ack
+    to avoid consecutive assistant messages (API requires alternating roles).
+    """
     summary_user = {
         "role": "user",
         "content": f"[Context Summary - 对话历史已压缩]\n\n{summary}"
@@ -445,7 +449,15 @@ def create_summary_messages(
         "content": "我已了解之前的对话摘要，可以继续协助你。请告诉我接下来需要做什么。"
     }
 
-    new_messages = [summary_user, summary_ack]
+    new_messages = [summary_user]
+    # Only add the ack if recent_messages doesn't start with an assistant message
+    # (to prevent consecutive assistant messages that violate API alternating-role rules)
+    if recent_messages and recent_messages[0].get("role") == "assistant":
+        # Skip ack — summary_user (user) + recent[0] (assistant) is already valid
+        pass
+    else:
+        new_messages.append(summary_ack)
+
     if recent_messages:
         new_messages.extend(recent_messages)
 
