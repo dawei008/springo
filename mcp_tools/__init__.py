@@ -51,6 +51,7 @@ from .handlers import (
     get_file_info, create_directory, move_file, delete_file,
     execute_command, get_task_status, list_background_tasks,
     glob_files, grep_search, edit_file, read_files,
+    kill_active_processes,
     # Git tools
     git, git_status, git_log, git_diff, git_add, git_commit,
     git_branch, git_checkout, git_pull, git_push, git_clone,

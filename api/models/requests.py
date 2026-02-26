@@ -98,6 +98,7 @@ class MessageAutoRequest(MessageRequest):
     max_tool_iterations: int = Field(default=1000, ge=1, le=2000, description="Max tool loop iterations (safety cap)")
     compact_model: Optional[str] = Field(default=None, description="Model for tool compaction")
     parallel_tool_execution: bool = Field(default=True, description="Enable parallel tool execution")
+    working_directory: Optional[str] = Field(default=None, description="Override working directory for tool execution")
 
 
 class ToolExecuteRequest(BaseModel):

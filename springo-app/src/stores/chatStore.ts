@@ -22,14 +22,27 @@ const BASE_URL = 'http://127.0.0.1:8081';
 // Tool result UI handler — ported from legacy handleToolResultUI()
 // ---------------------------------------------------------------------------
 
-function handleToolResultUI(result: Record<string, unknown> | null | undefined) {
+function handleToolResultUI(result: Record<string, unknown> | null | undefined, sessionId?: string) {
   if (!result) return;
 
   const ui = useUIStore.getState();
+  // Use explicit sessionId from the streaming context (the conversation that produced this result),
+  // NOT currentSessionId which is whichever session the user happens to be viewing.
+  const effectiveSessionId = sessionId || useSessionStore.getState().currentSessionId || '';
 
   // Todo panel updates
   if (result.ui_update === 'todo_panel' && result.todos) {
-    ui.setTodos(result.todos as import('@/stores/uiStore').TodoItem[]);
+    // Map backend format {content, status, activeForm} to frontend TodoItem {id, subject, status}
+    const todos = (result.todos as Array<Record<string, unknown>>).map((t, i) => ({
+      id: (t.id as string) || String(i),
+      subject: (t.content as string) || (t.subject as string) || '',
+      status: ((t.status as string) || 'pending') as 'pending' | 'in_progress' | 'completed',
+    }));
+    ui.setTodos(todos);
+    // Persist todos for this session so they survive session switches
+    if (effectiveSessionId) {
+      ui.saveSessionTodos(effectiveSessionId, todos);
+    }
     // Auto-open right panel to Tasks tab when todos arrive
     ui.setRightPanelOpen(true);
     ui.setRightPanelTab('tasks');
@@ -37,7 +50,7 @@ function handleToolResultUI(result: Record<string, unknown> | null | undefined) 
 
   // Schedule panel: dispatch to schedule store and auto-open right panel
   if (result.ui_update === 'schedules_panel') {
-    useScheduleStore.getState().handleToolResult(result);
+    useScheduleStore.getState().handleToolResult(result, effectiveSessionId);
     ui.setRightPanelOpen(true);
     ui.setRightPanelTab('schedules');
   }
@@ -683,7 +696,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
         onToolResult: (evt) => {
           // Dispatch UI-triggering tool results (todo panel, schedules panel, etc.)
-          handleToolResultUI(evt.result);
+          handleToolResultUI(evt.result, convId);
         },
         onHeartbeat: () => {
           // Parser updates toolUses[].elapsed and calls onTextUpdate
@@ -1027,7 +1040,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             onToolUse: () => {},
             onToolExecutionStart: () => {},
             onToolResult: (evt) => {
-              handleToolResultUI(evt.result);
+              handleToolResultUI(evt.result, convId);
             },
             onHeartbeat: () => {},
             onToolExecutionComplete: () => {},

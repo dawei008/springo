@@ -19,6 +19,7 @@ from .file_tools import (
     grep_search,
     edit_file,
     read_files,
+    kill_active_processes,
 )
 
 from .git_tools import (

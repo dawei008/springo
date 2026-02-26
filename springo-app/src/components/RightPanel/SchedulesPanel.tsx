@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useScheduleStore } from '@/stores/scheduleStore';
+import { useSessionStore } from '@/stores/sessionStore';
 import type { ScheduleTask } from '@/stores/scheduleStore';
 
 // ─── Helper Functions ───
@@ -177,8 +178,10 @@ function ScheduleItem({
   onToggle: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const isFinished = task.status === 'completed' || task.status === 'failed' || task.status === 'skipped';
   const scheduleDesc = formatScheduleDescription(task);
+  const history = task.executionHistory || [];
 
   let secondaryText = '';
   if (isFinished && task.completedAt) {
@@ -207,6 +210,29 @@ function ScheduleItem({
             </span>
           )}
         </div>
+        {history.length > 0 && (
+          <button
+            className="schedule-history-toggle"
+            onClick={() => setHistoryOpen((v) => !v)}
+          >
+            {historyOpen ? '▾' : '▸'} {history.length} execution{history.length > 1 ? 's' : ''}
+          </button>
+        )}
+        {historyOpen && history.length > 0 && (
+          <div className="schedule-history-list">
+            {[...history].reverse().map((rec, i) => (
+              <div key={i} className={`schedule-history-row${rec.success ? '' : ' failed'}`}>
+                <span className="schedule-history-dot">{rec.success ? '✓' : '✗'}</span>
+                <span className="schedule-history-time">
+                  {new Date(rec.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}
+                </span>
+                <span className="schedule-history-preview" title={rec.outputPreview}>
+                  {rec.outputPreview.slice(0, 80) || '(no output)'}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="schedule-item-actions">
@@ -237,10 +263,20 @@ export default function SchedulesPanel() {
   const tasksMap = useScheduleStore((s) => s.tasks);
   const toggleTask = useScheduleStore((s) => s.toggleTask);
   const deleteTask = useScheduleStore((s) => s.deleteTask);
-  const tasks = useMemo(
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const [showAll, setShowAll] = useState(false);
+
+  const allTasks = useMemo(
     () => Object.values(tasksMap).sort((a, b) => a.num - b.num),
     [tasksMap],
   );
+
+  const tasks = useMemo(
+    () => showAll ? allTasks : allTasks.filter((t) => !t.sourceSessionId || t.sourceSessionId === currentSessionId),
+    [allTasks, showAll, currentSessionId],
+  );
+
+  const otherCount = allTasks.length - tasks.length;
 
   const [olderCollapsed, setOlderCollapsed] = useState(true);
   const [, setTick] = useState(0);
@@ -267,13 +303,22 @@ export default function SchedulesPanel() {
         <div className="schedules-panel-header">
           {headerIcon}
           <span className="schedules-panel-title">Schedules</span>
+          {otherCount > 0 && (
+            <button
+              className="schedules-scope-toggle"
+              onClick={() => setShowAll((v) => !v)}
+              title={showAll ? 'Show current session only' : `Show all sessions (+${otherCount})`}
+            >
+              {showAll ? 'This session' : `All (${allTasks.length})`}
+            </button>
+          )}
         </div>
         <div className="schedules-panel-empty">
           <svg width="32" height="32" viewBox="0 0 32 32" fill="none" stroke="var(--text-tertiary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.5">
             <circle cx="16" cy="16" r="12" />
             <path d="M16 9V16L20 19" />
           </svg>
-          <p>No scheduled tasks yet.</p>
+          <p>No scheduled tasks{!showAll && otherCount > 0 ? ' in this session.' : ' yet.'}</p>
         </div>
       </div>
     );
@@ -298,6 +343,15 @@ export default function SchedulesPanel() {
         {headerIcon}
         <span className="schedules-panel-title">Schedules</span>
         <span className="schedules-panel-badge">{tasks.length}</span>
+        {(otherCount > 0 || showAll) && (
+          <button
+            className="schedules-scope-toggle"
+            onClick={() => setShowAll((v) => !v)}
+            title={showAll ? 'Show current session only' : `Show all sessions (+${otherCount})`}
+          >
+            {showAll ? 'This session' : 'All'}
+          </button>
+        )}
       </div>
 
       <div className="schedules-panel-body">

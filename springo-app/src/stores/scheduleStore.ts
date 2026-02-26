@@ -1,11 +1,20 @@
 import { create } from 'zustand';
+import { Cron } from 'croner';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 
+const BASE_URL = 'http://127.0.0.1:8081';
+
 // ---------------------------------------------------------------------------
 // Schedule Task types (ported from legacy scheduler engine)
 // ---------------------------------------------------------------------------
+
+export interface ExecutionRecord {
+  timestamp: number;
+  success: boolean;
+  outputPreview: string;
+}
 
 export interface ScheduleTask {
   id: string;
@@ -23,15 +32,18 @@ export interface ScheduleTask {
   createSession?: boolean;
   workingDirectory?: string;
   sourceSessionId?: string;
+  executionHistory?: ExecutionRecord[];
   num: number;
 }
 
 interface ScheduleState {
   tasks: Record<string, ScheduleTask>;
   nextNum: number;
+  loaded: boolean;
 
   // Actions
-  handleToolResult: (result: Record<string, unknown>) => void;
+  loadTasks: () => Promise<void>;
+  handleToolResult: (result: Record<string, unknown>, sessionId?: string) => void;
   toggleTask: (id: string) => void;
   deleteTask: (id: string) => void;
   getTaskList: () => ScheduleTask[];
@@ -39,11 +51,53 @@ interface ScheduleState {
 
 // Active timers (not in store — side-effect refs)
 const activeTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+// Active Cron instances (for proper cron scheduling)
+const activeCrons: Record<string, Cron> = {};
 
 function stopTimer(id: string) {
+  if (activeCrons[id]) {
+    activeCrons[id].stop();
+    delete activeCrons[id];
+  }
   if (activeTimers[id]) {
     clearTimeout(activeTimers[id]);
     delete activeTimers[id];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Backend persistence helpers
+// ---------------------------------------------------------------------------
+
+async function persistTask(task: ScheduleTask) {
+  try {
+    await fetch(`${BASE_URL}/v1/schedules`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task }),
+    });
+  } catch (e) {
+    console.warn('[Scheduler] Failed to persist task:', e);
+  }
+}
+
+async function persistTaskUpdate(taskId: string, updates: Partial<ScheduleTask>) {
+  try {
+    await fetch(`${BASE_URL}/v1/schedules/${taskId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+  } catch (e) {
+    console.warn('[Scheduler] Failed to persist task update:', e);
+  }
+}
+
+async function persistTaskDelete(taskId: string) {
+  try {
+    await fetch(`${BASE_URL}/v1/schedules/${taskId}`, { method: 'DELETE' });
+  } catch (e) {
+    console.warn('[Scheduler] Failed to persist task delete:', e);
   }
 }
 
@@ -74,6 +128,12 @@ async function executeTask(taskId: string) {
   const task = state.tasks[taskId];
   if (!task) return;
 
+  // Concurrency lock: skip if previous execution is still running
+  if (task.status === 'running') {
+    console.log(`[Scheduler] Task ${taskId} still running, skipping this tick`);
+    return;
+  }
+
   const sourceSessionId = task.sourceSessionId;
   if (!sourceSessionId) {
     console.warn(`[Scheduler] Task ${taskId} has no sourceSessionId, skipping`);
@@ -89,16 +149,16 @@ async function executeTask(taskId: string) {
       [taskId]: { ...s.tasks[taskId], status: 'running' as const, lastRun: Date.now() },
     },
   }));
+  persistTaskUpdate(taskId, { status: 'running', lastRun: Date.now() });
 
   try {
-    // Use a disposable session_id for the API call (not visible to user)
-    const tempSessionId = `sched_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
     const settings = useSettingsStore.getState();
     const model = settings.getEffectiveModel();
 
     // Send the prompt to backend via messages-auto (non-streaming)
-    const res = await fetch('http://127.0.0.1:8081/v1/messages-auto', {
+    // Do NOT pass session_id — we don't want the backend to create a new session.
+    // The result will be injected into sourceSessionId below.
+    const res = await fetch(`${BASE_URL}/v1/messages-auto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -107,9 +167,9 @@ async function executeTask(taskId: string) {
         max_tokens: settings.settings.maxTokens || 4096,
         temperature: settings.settings.temperature || 0.7,
         stream: false,
-        session_id: tempSessionId,
         compact_model: settings.getEffectiveCompactModel(),
         extended_context: settings.settings.enable1mContext === true,
+        working_directory: task.workingDirectory || undefined,
       }),
     });
 
@@ -130,8 +190,12 @@ async function executeTask(taskId: string) {
     }
 
     // Inject messages into the source session's chat runtime
+    // Use compact format: task name + short prompt preview (full prompt is stored in the task)
     const chatStore = useChatStore.getState();
-    const userContent = `[Scheduled: ${task.name}] ${task.prompt}`;
+    const promptPreview = task.prompt.length > 100
+      ? task.prompt.slice(0, 100).replace(/\n/g, ' ') + '...'
+      : task.prompt.replace(/\n/g, ' ');
+    const userContent = `⏰ **Scheduled: ${task.name}** (#${task.num}, run ${(task.executionCount || 0) + 1}${task.maxExecutions ? '/' + task.maxExecutions : ''})\n> ${promptPreview}`;
 
     chatStore.addMessage(sourceSessionId, {
       role: 'user',
@@ -158,7 +222,7 @@ async function executeTask(taskId: string) {
 
     // Persist: load existing backend messages, append new ones, save back
     try {
-      const sessionRes = await fetch(`http://127.0.0.1:8081/v1/sessions/${sourceSessionId}`);
+      const sessionRes = await fetch(`${BASE_URL}/v1/sessions/${sourceSessionId}`);
       if (!sessionRes.ok) {
         throw new Error(`Session fetch failed: ${sessionRes.status}`);
       }
@@ -175,7 +239,7 @@ async function executeTask(taskId: string) {
         });
       }
 
-      await fetch(`http://127.0.0.1:8081/v1/sessions/${sourceSessionId}`, {
+      await fetch(`${BASE_URL}/v1/sessions/${sourceSessionId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -189,10 +253,18 @@ async function executeTask(taskId: string) {
       console.warn(`[Scheduler] Failed to persist task output to session:`, e);
     }
 
+    // Record execution history
+    const record: ExecutionRecord = {
+      timestamp: Date.now(),
+      success,
+      outputPreview: assistantText.slice(0, 200),
+    };
+
     // Update task status
     useScheduleStore.setState((s) => {
       const t = { ...s.tasks[taskId] };
       t.executionCount = (t.executionCount || 0) + 1;
+      t.executionHistory = [...(t.executionHistory || []), record].slice(-20); // keep last 20
 
       const isComplete = t.maxExecutions && t.executionCount >= t.maxExecutions;
 
@@ -207,6 +279,15 @@ async function executeTask(taskId: string) {
         t.completedAt = Date.now();
       }
 
+      // Persist updated status to backend
+      persistTaskUpdate(taskId, {
+        status: t.status,
+        executionCount: t.executionCount,
+        lastRun: t.lastRun,
+        completedAt: t.completedAt,
+        executionHistory: t.executionHistory,
+      });
+
       return { tasks: { ...s.tasks, [taskId]: t } };
     });
   } catch (err) {
@@ -217,6 +298,7 @@ async function executeTask(taskId: string) {
         [taskId]: { ...s.tasks[taskId], status: 'failed' as const, completedAt: Date.now() },
       },
     }));
+    persistTaskUpdate(taskId, { status: 'failed', completedAt: Date.now() });
   }
 }
 
@@ -257,43 +339,44 @@ function startTimer(task: ScheduleTask) {
       },
     }));
   } else if (task.scheduleType === 'cron') {
-    // For cron, use interval approximation (parse minute field)
-    // Full cron support would require croner library — use simple repeat for now
-    const parts = task.scheduleValue.trim().split(/\s+/);
-    if (parts.length < 5) return;
+    // Use croner for full cron expression support
+    try {
+      const job = new Cron(task.scheduleValue, { paused: true }, () => {
+        const t = useScheduleStore.getState().tasks[task.id];
+        if (!t || !t.enabled) {
+          job.stop();
+          delete activeCrons[task.id];
+          return;
+        }
+        executeTask(task.id);
+        // Update nextRun after execution
+        const nextDate = job.nextRun();
+        if (nextDate) {
+          useScheduleStore.setState((s) => ({
+            tasks: {
+              ...s.tasks,
+              [task.id]: { ...s.tasks[task.id], nextRun: nextDate.getTime() },
+            },
+          }));
+        }
+      });
 
-    const minuteField = parts[0];
-    let intervalMs: number;
+      activeCrons[task.id] = job;
+      job.resume();
 
-    if (minuteField.startsWith('*/')) {
-      intervalMs = parseInt(minuteField.slice(2)) * 60_000;
-    } else {
-      // Default: check every minute and match
-      intervalMs = 60_000;
-    }
-
-    const tick = () => {
-      executeTask(task.id);
-      // Re-schedule if still active
-      const t = useScheduleStore.getState().tasks[task.id];
-      if (t && t.enabled && t.status === 'active') {
-        activeTimers[task.id] = setTimeout(tick, intervalMs);
+      // Set initial nextRun
+      const nextDate = job.nextRun();
+      if (nextDate) {
         useScheduleStore.setState((s) => ({
           tasks: {
             ...s.tasks,
-            [task.id]: { ...s.tasks[task.id], nextRun: Date.now() + intervalMs },
+            [task.id]: { ...s.tasks[task.id], nextRun: nextDate.getTime() },
           },
         }));
       }
-    };
-
-    activeTimers[task.id] = setTimeout(tick, intervalMs);
-    useScheduleStore.setState((s) => ({
-      tasks: {
-        ...s.tasks,
-        [task.id]: { ...s.tasks[task.id], nextRun: now + intervalMs },
-      },
-    }));
+    } catch (e) {
+      console.error(`[Scheduler] Invalid cron expression "${task.scheduleValue}":`, e);
+    }
   }
 }
 
@@ -304,8 +387,50 @@ function startTimer(task: ScheduleTask) {
 export const useScheduleStore = create<ScheduleState>((set, get) => ({
   tasks: {},
   nextNum: 1,
+  loaded: false,
 
-  handleToolResult: (result) => {
+  loadTasks: async () => {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/schedules`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const taskList = (data.tasks || []) as ScheduleTask[];
+      if (taskList.length === 0) {
+        set({ loaded: true });
+        return;
+      }
+
+      const tasks: Record<string, ScheduleTask> = {};
+      let maxNum = 0;
+      for (const t of taskList) {
+        tasks[t.id] = t;
+        if (t.num > maxNum) maxNum = t.num;
+      }
+
+      set({ tasks, nextNum: maxNum + 1, loaded: true });
+
+      // Restart timers for active tasks
+      for (const t of taskList) {
+        if (t.enabled && (t.status === 'active' || t.status === 'running')) {
+          // Reset running tasks back to active (stale from previous session)
+          if (t.status === 'running') {
+            tasks[t.id] = { ...t, status: 'active' };
+            set((s) => ({
+              tasks: { ...s.tasks, [t.id]: { ...s.tasks[t.id], status: 'active' } },
+            }));
+          }
+          startTimer(tasks[t.id]);
+        }
+      }
+
+      console.log(`[Scheduler] Restored ${taskList.length} tasks from backend`);
+    } catch (e) {
+      console.warn('[Scheduler] Failed to load tasks from backend:', e);
+      set({ loaded: true });
+    }
+  },
+
+  handleToolResult: (result, sessionId?) => {
     if (!result.success) {
       return;
     }
@@ -320,6 +445,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         delete copy[id];
         return { tasks: copy };
       });
+      persistTaskDelete(id);
       return;
     }
 
@@ -329,8 +455,10 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
       set((s) => {
         const existing = s.tasks[id];
         if (!existing) return s;
+        const updated = { ...existing, ...updates };
+        persistTask(updated);
         return {
-          tasks: { ...s.tasks, [id]: { ...existing, ...updates } },
+          tasks: { ...s.tasks, [id]: updated },
         };
       });
       return;
@@ -339,7 +467,9 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     if (result.task) {
       const raw = result.task as Record<string, unknown>;
       const num = get().nextNum;
-      const currentSessionId = useSessionStore.getState().currentSessionId || '';
+      // Use the sessionId from the streaming context (the conversation that created this task),
+      // NOT currentSessionId which could be a different session the user is viewing.
+      const ownerSessionId = sessionId || useSessionStore.getState().currentSessionId || '';
 
       const task: ScheduleTask = {
         id: (raw.id as string) || `sched_${Date.now()}`,
@@ -355,7 +485,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         maxExecutions: (raw.maxExecutions as number) || undefined,
         createSession: (raw.createSession as boolean) || true,
         workingDirectory: (raw.workingDirectory as string) || '',
-        sourceSessionId: currentSessionId,
+        sourceSessionId: ownerSessionId,
         num,
       };
 
@@ -364,6 +494,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         nextNum: s.nextNum + 1,
       }));
 
+      persistTask(task);
       startTimer(task);
     }
   },
@@ -378,6 +509,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
       } else {
         stopTimer(id);
       }
+      persistTaskUpdate(id, { enabled: updated.enabled });
       return { tasks: { ...s.tasks, [id]: updated } };
     });
   },
@@ -389,6 +521,7 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
       delete copy[id];
       return { tasks: copy };
     });
+    persistTaskDelete(id);
   },
 
   getTaskList: () => {

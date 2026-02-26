@@ -31,6 +31,45 @@ logger = logging.getLogger(__name__)
 _background_tasks = {}
 _task_counter = 0
 
+# ---------------------------------------------------------------------------
+# Active foreground process registry — allows external cancellation
+# Maps a caller-provided key (e.g. session_id) → set of Popen objects
+# ---------------------------------------------------------------------------
+import threading as _threading
+
+_active_processes_lock = _threading.Lock()
+_active_processes: Dict[str, set] = {}  # session_key → {Popen, ...}
+
+
+def register_active_process(key: str, proc) -> None:
+    """Register a running subprocess so it can be killed on cancellation."""
+    with _active_processes_lock:
+        _active_processes.setdefault(key, set()).add(proc)
+
+
+def unregister_active_process(key: str, proc) -> None:
+    """Remove a subprocess from the active registry."""
+    with _active_processes_lock:
+        procs = _active_processes.get(key)
+        if procs:
+            procs.discard(proc)
+            if not procs:
+                del _active_processes[key]
+
+
+def kill_active_processes(key: str) -> int:
+    """Kill all active foreground subprocesses for a given key. Returns count killed."""
+    with _active_processes_lock:
+        procs = _active_processes.pop(key, set())
+    killed = 0
+    for proc in procs:
+        try:
+            proc.kill()
+            killed += 1
+        except Exception:
+            pass
+    return killed
+
 
 def read_file(path: str, encoding: str = "utf-8") -> Dict[str, Any]:
     """Read file contents"""
@@ -386,24 +425,35 @@ def execute_command(command: str, working_directory: str = None, timeout: int = 
                 "message": f"Command started in background. Use get_task_status('{task_id}') to check progress."
             }
         else:
-            result = subprocess.run(
+            # Use Popen so the process can be killed on cancellation
+            from ..session import get_session_state
+            session_key = get_session_state().get("session_id", "__default__")
+
+            proc = subprocess.Popen(
                 cmd_args,
                 shell=use_shell,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
-                cwd=cwd
+                cwd=cwd,
             )
+            register_active_process(session_key, proc)
+            try:
+                stdout, stderr = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()  # reap
+                return {"error": f"Command timed out after {timeout} seconds"}
+            finally:
+                unregister_active_process(session_key, proc)
 
             return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-                "return_code": result.returncode,
+                "stdout": stdout,
+                "stderr": stderr,
+                "return_code": proc.returncode,
                 "command": command,
                 "working_directory": cwd or os.getcwd()
             }
-    except subprocess.TimeoutExpired:
-        return {"error": f"Command timed out after {timeout} seconds"}
     except Exception as e:
         logger.error(f"Command execution error: {e}")
         return {"error": str(e)}

@@ -21,11 +21,11 @@ logger = logging.getLogger(__name__)
 class MCPManager:
     """
     异步 MCP 工具管理器
-    
+
     使用 ThreadPoolExecutor 将同步的 MCP 工具调用隔离到线程池中，
     避免阻塞 asyncio 事件循环。
     """
-    
+
     def __init__(self, max_workers: int = 10):
         """
         初始化 MCP 管理器
@@ -40,6 +40,9 @@ class MCPManager:
         self._tool_handlers: Dict[str, callable] = {}
         self._tool_defs_last_refresh: float = 0
         self._tool_defs_ttl: float = 30  # seconds - refresh definitions periodically
+        # Track active asyncio tasks per session for cancellation
+        self._session_tasks: Dict[str, set] = {}  # session_id → {asyncio.Task, ...}
+        self._session_tasks_lock = asyncio.Lock()
         
     async def initialize(self) -> None:
         """异步初始化，加载工具定义"""
@@ -164,13 +167,15 @@ class MCPManager:
                 logger.warning(f"Failed to refresh tool definitions: {e}")
         return self._tool_definitions
     
-    async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any],
+                           session_id: Optional[str] = None) -> Dict[str, Any]:
         """
         异步执行单个工具 (with semaphore to prevent executor exhaustion)
 
         Args:
             tool_name: 工具名称
             tool_input: 工具输入参数
+            session_id: Optional session ID for cancellation tracking
 
         Returns:
             工具执行结果
@@ -183,6 +188,9 @@ class MCPManager:
                     partial(self._execute_tool_sync, tool_name, tool_input)
                 )
                 return result
+            except asyncio.CancelledError:
+                logger.info(f"Tool execution cancelled: {tool_name}")
+                return {"error": "Tool execution cancelled by user"}
             except Exception as e:
                 logger.error(f"Tool execution failed: {tool_name} - {e}")
                 return {"error": f"Tool execution failed: {e}"}
@@ -267,6 +275,25 @@ class MCPManager:
         
         return processed_results
     
+    async def cancel_session_tools(self, session_id: str) -> int:
+        """Cancel all running tool tasks for a session and kill subprocesses.
+
+        Returns the number of cancelled tasks + killed processes.
+        """
+        cancelled = 0
+
+        # 1. Kill registered subprocesses (execute_command Popen processes)
+        try:
+            from mcp_tools.handlers.file_tools import kill_active_processes
+            killed = kill_active_processes(session_id)
+            if killed:
+                logger.info(f"[Cancel] Killed {killed} active subprocess(es) for session {session_id}")
+            cancelled += killed
+        except ImportError:
+            pass
+
+        return cancelled
+
     async def close(self) -> None:
         """关闭管理器，清理资源"""
         self.executor.shutdown(wait=True)

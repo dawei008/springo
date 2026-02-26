@@ -394,8 +394,8 @@ Cron format: "minute hour day month weekday"
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["create", "list", "cancel", "update"],
-                    "description": "Action to perform"
+                    "enum": ["create", "list", "cancel", "update", "pause", "resume"],
+                    "description": "Action to perform. pause/resume temporarily stops/restarts a task without deleting it."
                 },
                 "name": {
                     "type": "string",

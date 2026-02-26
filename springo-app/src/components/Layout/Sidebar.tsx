@@ -162,68 +162,58 @@ export default function Sidebar() {
 
       prevStreamingRef.current = currentlyStreaming;
 
-      // For sessions that just finished streaming, re-fetch their title
+      // For sessions that just finished streaming, update title from last user message
       for (const id of justFinished) {
         const session = useSessionStore.getState().sessions.find((s) => s.id === id);
         if (session && !session.isCustomTitle) {
-          // Small delay to let backend finish saving the session metadata
+          // Small delay to let backend finish saving the session
           setTimeout(() => {
-            fetch(`http://127.0.0.1:8081/v1/sessions/${id}`)
-              .then((res) => (res.ok ? res.json() : null))
-              .then((data) => {
-                let newTitle = '';
-                if (data) {
-                  const meta = data.metadata || {};
-                  newTitle = meta.title || data.title || '';
-                }
-                // Fallback: generate title from local messages (like legacy)
-                if (!newTitle || newTitle === 'New Chat' || newTitle === 'Untitled') {
-                  const runtime = useChatStore.getState().runtimes[id];
-                  if (runtime?.messages) {
-                    for (let i = runtime.messages.length - 1; i >= 0; i--) {
-                      const msg = runtime.messages[i];
-                      if (msg.role === 'user') {
-                        let text = '';
-                        if (typeof msg.content === 'string') {
-                          text = msg.content;
-                        } else if (Array.isArray(msg.content)) {
-                          const tb = msg.content.find((b: any) => b.type === 'text') as { text?: string } | undefined;
-                          text = tb?.text || '';
-                        }
-                        // Strip time prefix: [Current time: ...]
-                        text = text.replace(/^\[Current time:[^\]]*\]\s*/, '');
-                        // Strip skill wrapper
-                        const skillMatch = text.match(/^<skill\s+name="([^"]+)">[\s\S]*?<\/skill>\s*/);
-                        if (skillMatch) {
-                          const after = text.slice(skillMatch[0].length);
-                          const req = after.replace(/^User request:\s*/i, '').replace(/\s*Please follow the skill instructions above.*$/s, '').trim();
-                          text = req ? `/${skillMatch[1]} ${req}` : `/${skillMatch[1]}`;
-                        }
-                        if (text.trim()) {
-                          newTitle = text.trim().substring(0, 30);
-                          if (text.trim().length > 30) newTitle += '...';
-                          break;
-                        }
-                      }
-                    }
+            // Always generate title from the LAST user message (not backend title)
+            // so the sidebar always reflects the most recent conversation topic
+            let newTitle = '';
+            const runtime = useChatStore.getState().runtimes[id];
+            if (runtime?.messages) {
+              for (let i = runtime.messages.length - 1; i >= 0; i--) {
+                const msg = runtime.messages[i];
+                if (msg.role === 'user') {
+                  let text = '';
+                  if (typeof msg.content === 'string') {
+                    text = msg.content;
+                  } else if (Array.isArray(msg.content)) {
+                    const tb = msg.content.find((b: any) => b.type === 'text') as { text?: string } | undefined;
+                    text = tb?.text || '';
+                  }
+                  // Strip time prefix: [Current time: ...]
+                  text = text.replace(/^\[Current time:[^\]]*\]\s*/, '');
+                  // Strip skill wrapper
+                  const skillMatch = text.match(/^<skill\s+name="([^"]+)">[\s\S]*?<\/skill>\s*/);
+                  if (skillMatch) {
+                    const after = text.slice(skillMatch[0].length);
+                    const req = after.replace(/^User request:\s*/i, '').replace(/\s*Please follow the skill instructions above.*$/s, '').trim();
+                    text = req ? `/${skillMatch[1]} ${req}` : `/${skillMatch[1]}`;
+                  }
+                  if (text.trim()) {
+                    newTitle = text.trim().substring(0, 40);
+                    if (text.trim().length > 40) newTitle += '...';
+                    break;
                   }
                 }
+              }
+            }
 
-                if (newTitle && newTitle !== 'New Chat' && newTitle !== 'Untitled') {
-                  useSessionStore.setState((s) => ({
-                    sessions: s.sessions.map((sess) =>
-                      sess.id === id ? { ...sess, title: newTitle } : sess,
-                    ),
-                  }));
-                  // Also persist to backend
-                  fetch(`http://127.0.0.1:8081/v1/sessions/${id}`, {
-                    method: 'PATCH',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ metadata: { title: newTitle } }),
-                  }).catch(() => {});
-                }
-              })
-              .catch(() => {});
+            if (newTitle && newTitle !== 'New Chat' && newTitle !== 'Untitled') {
+              useSessionStore.setState((s) => ({
+                sessions: s.sessions.map((sess) =>
+                  sess.id === id ? { ...sess, title: newTitle } : sess,
+                ),
+              }));
+              // Persist to backend
+              fetch(`http://127.0.0.1:8081/v1/sessions/${id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ metadata: { title: newTitle } }),
+              }).catch(() => {});
+            }
           }, 500);
         }
       }
@@ -432,22 +422,22 @@ export default function Sidebar() {
     setSettingsOpen(true);
   }, [setSettingsOpen]);
 
-  // ─── Date-grouped sessions ───
+  // ─── Date-grouped sessions (by last activity, not creation) ───
   const groupedSessions = useMemo(() => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const yesterdayStart = todayStart - 86400000;
     const weekStart = todayStart - 6 * 86400000;
 
-    const groups: { label: string; sessions: typeof filteredSessions }[] = [
-      { label: 'Today', sessions: [] },
+    const groups: { label: string; isToday?: boolean; sessions: typeof filteredSessions }[] = [
+      { label: 'Today', isToday: true, sessions: [] },
       { label: 'Yesterday', sessions: [] },
       { label: 'Last 7 days', sessions: [] },
       { label: 'Older', sessions: [] },
     ];
 
     for (const session of filteredSessions) {
-      const ts = session.createdAt || 0;
+      const ts = session.updatedAt || session.createdAt || 0;
       if (ts >= todayStart) {
         groups[0].sessions.push(session);
       } else if (ts >= yesterdayStart) {
@@ -607,10 +597,16 @@ export default function Sidebar() {
                 visualStatus = 'active';
               }
 
+              const itemClasses = [
+                'conversation-item',
+                isActive ? 'active' : '',
+                group.isToday ? 'today' : '',
+              ].filter(Boolean).join(' ');
+
               return (
                 <div
                   key={session.id}
-                  className={`conversation-item${isActive ? ' active' : ''}`}
+                  className={itemClasses}
                   onClick={() => handleSwitch(session.id)}
                   onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
                   data-id={session.id}

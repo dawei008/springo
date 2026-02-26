@@ -186,6 +186,15 @@ When searching for **skills**, **sessions**, **config**, or **scripts**, ALWAYS 
 - Config: `read_file ~/.springo/config.json`
 - For glob/grep, set `path` parameter to `~/.springo/` — do NOT search the project directory for these.
 
+## Skill-First Principle (IMPORTANT)
+
+For any non-trivial task, ALWAYS check if a matching skill exists before writing code yourself:
+1. Review the available skills listed in the `use_skill` tool description
+2. If a skill matches the task, call `use_skill` immediately — do NOT write Python/JS scripts to do what a skill already handles
+3. Only fall back to manual coding if no skill covers the task
+
+This applies to ALL complex tasks: document creation/editing, data processing, browser automation, presentations, spreadsheets, PDF operations, etc. Skills contain tested, optimized workflows — prefer them over ad-hoc scripts.
+
 ## Tool Selection Guidelines
 
 | Task | Best Tool | Avoid |

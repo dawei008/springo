@@ -78,7 +78,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             };
           })
           .sort(
-            (a: Conversation, b: Conversation) => b.createdAt - a.createdAt,
+            (a: Conversation, b: Conversation) => b.updatedAt - a.updatedAt,
           );
 
         set({ sessions, loading: false });

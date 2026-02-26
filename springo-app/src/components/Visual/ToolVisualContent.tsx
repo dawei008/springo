@@ -61,8 +61,35 @@ function CollapsibleVisual({
 }
 
 /**
+ * Extract MCP-format image content blocks from the tool result object.
+ * MCP tools return: {content: [{type: "image", mimeType: "image/png", data: "base64..."}]}
+ */
+function extractMcpImages(result: unknown): Array<{ mimeType: string; data: string }> {
+  if (!result || typeof result !== 'object') return []
+  const obj = result as Record<string, unknown>
+  const content = obj.content
+  if (!Array.isArray(content)) return []
+  const images: Array<{ mimeType: string; data: string }> = []
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === 'object' &&
+      (block as Record<string, unknown>).type === 'image'
+    ) {
+      const b = block as Record<string, unknown>
+      const data = (b.data as string) || ''
+      const mimeType = (b.mimeType as string) || 'image/png'
+      if (data.length > 50) {
+        images.push({ mimeType, data })
+      }
+    }
+  }
+  return images
+}
+
+/**
  * Detects and renders visual content from tool results.
- * Handles: excalidraw, image URLs, image file paths, base64 images, SVG.
+ * Priority: MCP image blocks > data URLs > HTTP URLs > local file paths > SVG.
  */
 export default function ToolVisualContent({ toolUse, defaultCollapsed = false }: ToolVisualContentProps) {
   const setImagePreview = useUIStore((s) => s.setImagePreview)
@@ -75,6 +102,45 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
     : JSON.stringify(toolUse.result || '')
 
   // --- Excalidraw is handled by ExcalidrawLinkCard in Message.tsx ---
+
+  // --- MCP image content blocks (highest priority — inline base64, always works) ---
+  const mcpImages = extractMcpImages(toolUse.result)
+  if (mcpImages.length > 0) {
+    return (
+      <>
+        {mcpImages.map((img, i) => {
+          const dataUrl = `data:${img.mimeType};base64,${img.data}`
+          const label = mcpImages.length === 1 ? 'Screenshot' : `Image ${i + 1}`
+          return (
+            <CollapsibleVisual key={`mcp-${toolUse.id}-${i}`} label={label} defaultCollapsed={defaultCollapsed}>
+              <img
+                src={dataUrl}
+                className="tool-visual-inline-image"
+                alt={label}
+                onClick={() => setImagePreview(dataUrl)}
+              />
+            </CollapsibleVisual>
+          )
+        })}
+      </>
+    )
+  }
+
+  // --- Data URL base64 images (e.g. data:image/png;base64,...) ---
+  const base64Regex = /data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/
+  const base64Match = resultStr.match(base64Regex)
+  if (base64Match) {
+    return (
+      <CollapsibleVisual label="Generated Image" defaultCollapsed={defaultCollapsed}>
+        <img
+          src={base64Match[0]}
+          className="tool-visual-inline-image"
+          alt="Tool output"
+          onClick={() => setImagePreview(base64Match[0])}
+        />
+      </CollapsibleVisual>
+    )
+  }
 
   // --- Image URLs ---
   const imageUrlRegex = /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp)(?:\?[^\s"'`]*)?)/gi
@@ -106,8 +172,8 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
     }
   }
 
-  // --- Image file paths ---
-  const imagePathRegex = /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi
+  // --- Image file paths (absolute paths only, fetch from backend) ---
+  const imagePathRegex = /(?<!\w)(\/(?!\.\.)[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi
   const imagePaths = resultStr.match(imagePathRegex)
 
   useEffect(() => {
@@ -117,7 +183,13 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
       if (imageDataUrls[filePath] || failedImages.has(filePath)) return
       try {
         const baseUrl = api.getBaseUrl()
-        const res = await fetch(`${baseUrl}/v1/images/file?path=${encodeURIComponent(filePath)}`)
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 8000)
+        const res = await fetch(
+          `${baseUrl}/v1/images/file?path=${encodeURIComponent(filePath)}`,
+          { signal: controller.signal },
+        )
+        clearTimeout(timer)
         if (res.ok) {
           const blob = await res.blob()
           const url = URL.createObjectURL(blob)
@@ -166,22 +238,6 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
         </>
       )
     }
-  }
-
-  // --- Base64 images ---
-  const base64Regex = /data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/
-  const base64Match = resultStr.match(base64Regex)
-  if (base64Match) {
-    return (
-      <CollapsibleVisual label="Generated Image" defaultCollapsed={defaultCollapsed}>
-        <img
-          src={base64Match[0]}
-          className="tool-visual-inline-image"
-          alt="Tool output"
-          onClick={() => setImagePreview(base64Match[0])}
-        />
-      </CollapsibleVisual>
-    )
   }
 
   // --- SVG content ---

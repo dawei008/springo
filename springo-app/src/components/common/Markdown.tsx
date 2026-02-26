@@ -32,7 +32,7 @@ function extractText(children: React.ReactNode): string {
 // Remark plugin: auto-linkify bare URLs and file paths in text nodes
 // ---------------------------------------------------------------------------
 const URL_PATTERN = 'https?:\\/\\/[^\\s<>"\'`\\]]+';
-const FILEPATH_PATTERN = '(?:\\/[\\w.+@-]+){2,}|~\\/[\\w.+@\\/-]+';
+const FILEPATH_PATTERN = '(?:\\/[\\w.+@()#-]+){2,}|~\\/[\\w.+@()#\\/-]+';
 const COMBINED_RE = new RegExp(`(${URL_PATTERN})|(${FILEPATH_PATTERN})`, 'g');
 
 function cleanTrailingPunctuation(url: string): string {
@@ -255,7 +255,9 @@ export default function Markdown({ content }: Props) {
       }
 
       // Check if the entire inline code is a file path
-      if (/^(\/[\w.+@-][\w.+@/ -]*|~\/[\w.+@/ -][\w.+@/ -]*)$/.test(text)) {
+      // Backticks give clear boundaries — allow spaces, parens, unicode in filenames.
+      // Require 2+ path segments for absolute paths to avoid false positives.
+      if (/^((?:\/[^\n\r/]+){2,}|~\/[^\n\r]+)$/.test(text)) {
         return (
           <code
             {...props}

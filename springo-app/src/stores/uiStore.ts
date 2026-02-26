@@ -62,6 +62,8 @@ interface UIState {
   planModeActive: boolean;
   planApprovalData: PlanData | null;
   todos: TodoItem[];
+  /** Maps sessionId → todos for restoring when switching sessions */
+  sessionTodosMap: Record<string, TodoItem[]>;
   themeMode: 'light' | 'dark' | 'system';
   fileBrowserOpen: boolean;
   fileBrowserPath: string;
@@ -94,6 +96,8 @@ interface UIState {
   showPlanApproval: (plan: PlanData) => void;
   hidePlanApproval: () => void;
   setTodos: (todos: TodoItem[]) => void;
+  saveSessionTodos: (sessionId: string, todos: TodoItem[]) => void;
+  getSessionTodos: (sessionId: string) => TodoItem[];
   setThemeMode: (mode: 'light' | 'dark' | 'system') => void;
   openFileBrowser: (path: string) => void;
   closeFileBrowser: () => void;
@@ -120,6 +124,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   planModeActive: false,
   planApprovalData: null,
   todos: [],
+  sessionTodosMap: {},
   themeMode: (localStorage.getItem('springo-theme') as 'light' | 'dark' | 'system') || 'system',
   fileBrowserOpen: false,
   fileBrowserPath: '',
@@ -201,6 +206,11 @@ export const useUIStore = create<UIState>((set, get) => ({
   showPlanApproval: (plan) => set({ planApprovalData: plan }),
   hidePlanApproval: () => set({ planApprovalData: null, planModeActive: false }),
   setTodos: (todos) => set({ todos }),
+  saveSessionTodos: (sessionId, todos) =>
+    set((state) => ({
+      sessionTodosMap: { ...state.sessionTodosMap, [sessionId]: todos },
+    })),
+  getSessionTodos: (sessionId) => get().sessionTodosMap[sessionId] || [],
   setThemeMode: (mode) => {
     localStorage.setItem('springo-theme', mode);
     set({ themeMode: mode });

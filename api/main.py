@@ -280,7 +280,7 @@ async def root():
 # Import and include routers
 from .routers import messages, tools, sessions, context, news, images, health
 from .routers import config, memory, skills, tool_results
-from .routers import models, mcp, terminal, teams
+from .routers import models, mcp, terminal, teams, schedules
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
 app.include_router(tools.router, prefix="/v1", tags=["tools"])
@@ -299,6 +299,7 @@ app.include_router(models.router, prefix="/v1", tags=["models"])
 app.include_router(mcp.router, prefix="/v1", tags=["mcp"])
 app.include_router(terminal.router, prefix="/v1", tags=["terminal"])
 app.include_router(teams.router, prefix="/v1", tags=["teams"])
+app.include_router(schedules.router, prefix="/v1", tags=["schedules"])
 
 
 from fastapi.responses import JSONResponse

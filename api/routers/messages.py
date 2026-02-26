@@ -223,9 +223,9 @@ async def messages_auto_api(
                 }
             )
 
-        # Get working directory from session state
+        # Get working directory: request override > session state
         from ..services.session_state import get_working_dir
-        working_dir = get_working_dir() or None
+        working_dir = msg_request.working_directory or get_working_dir() or None
 
         # Get tools: use request tools if provided, otherwise load from MCPManager
         tools = msg_request.tools or []
@@ -249,6 +249,12 @@ async def messages_auto_api(
                 cancel_event: Optional[asyncio.Event] = None
                 if session_id:
                     cancel_event = _get_cancel_event(session_id)
+                    # Propagate session_id to mcp_tools so subprocesses can be tracked
+                    try:
+                        from mcp_tools.session import get_session_state
+                        get_session_state()["session_id"] = session_id
+                    except Exception:
+                        pass
 
                 messages = [m.model_dump() if hasattr(m, 'model_dump') else m for m in msg_request.messages]
                 iteration = 0
@@ -547,7 +553,19 @@ async def messages_auto_api(
                             for t in tool_uses
                         }
 
+                        _cancelled_tools = False
                         while pending:
+                            # Check cancellation — cancel all pending tool tasks
+                            if cancel_event and cancel_event.is_set():
+                                logger.info(f"[Auto] Cancelling {len(pending)} pending tool task(s)")
+                                for p in pending:
+                                    p.cancel()
+                                # Also kill active subprocesses
+                                if session_id:
+                                    await mcp_manager.cancel_session_tools(session_id)
+                                _cancelled_tools = True
+                                break
+
                             done, pending = await asyncio.wait(
                                 pending,
                                 timeout=settings.sse_heartbeat_interval,
@@ -583,10 +601,21 @@ async def messages_auto_api(
                                     "content": result_str,
                                     "is_error": is_error,
                                 })
+                        if _cancelled_tools:
+                            break
                     else:
                         # === Sequential execution with per-tool heartbeats ===
                         heartbeat_queue = asyncio.Queue()
+                        _seq_cancelled = False
                         for tool in tool_uses:
+                            # Check cancellation before starting each tool
+                            if cancel_event and cancel_event.is_set():
+                                logger.info(f"[Auto] Cancelled before executing tool {tool['name']}")
+                                if session_id:
+                                    await mcp_manager.cancel_session_tools(session_id)
+                                _seq_cancelled = True
+                                break
+
                             tool_start_time = asyncio.get_event_loop().time()
                             heartbeat_stop = asyncio.Event()
 
@@ -601,12 +630,37 @@ async def messages_auto_api(
                             hb_task = asyncio.create_task(
                                 _heartbeat_sender(tool["id"], heartbeat_stop, heartbeat_queue, tool_start_time)
                             )
-                            try:
-                                result = await asyncio.wait_for(
+
+                            # Wrap tool execution in a task so we can cancel it
+                            _tool_task = asyncio.create_task(
+                                asyncio.wait_for(
                                     mcp_manager.execute_tool(tool["name"], tool.get("input", {})),
                                     timeout=settings.tool_execution_timeout,
                                 )
-                                is_error = "error" in result
+                            )
+
+                            try:
+                                # Poll for cancellation while tool runs
+                                while not _tool_task.done():
+                                    if cancel_event and cancel_event.is_set():
+                                        logger.info(f"[Auto] Cancelling running tool {tool['name']}")
+                                        _tool_task.cancel()
+                                        if session_id:
+                                            await mcp_manager.cancel_session_tools(session_id)
+                                        break
+                                    await asyncio.sleep(0.1)
+
+                                if _tool_task.cancelled():
+                                    result = {"error": "Tool execution cancelled by user"}
+                                    is_error = True
+                                    _seq_cancelled = True
+                                else:
+                                    result = _tool_task.result()
+                                    is_error = "error" in result
+                            except asyncio.CancelledError:
+                                result = {"error": "Tool execution cancelled by user"}
+                                is_error = True
+                                _seq_cancelled = True
                             except asyncio.TimeoutError:
                                 result = {"error": f"Tool execution timed out after {settings.tool_execution_timeout}s"}
                                 is_error = True
@@ -641,6 +695,11 @@ async def messages_auto_api(
                                 "content": result_str,
                                 "is_error": is_error,
                             })
+
+                            if _seq_cancelled:
+                                break
+                        if _seq_cancelled:
+                            break
 
                     # Emit batch complete event
                     batch_elapsed = asyncio.get_event_loop().time() - batch_start
@@ -903,11 +962,24 @@ async def cancel_session(session_id: str):
     """Cancel a running streaming session.
 
     Sets the cancellation event so the auto_stream_generator loop breaks
-    at its next check point.
+    at its next check point, and kills any active tool subprocesses.
     """
     evt = _cancel_events.get(session_id)
+    killed = 0
     if evt:
         evt.set()
-        logger.info(f"[Cancel] Session {session_id} cancelled by client")
-        return {"status": "cancelled", "session_id": session_id}
-    return {"status": "not_found", "session_id": session_id}
+        # Also kill any active tool subprocesses for this session
+        try:
+            mgr = await get_mcp_manager()
+            killed = await mgr.cancel_session_tools(session_id)
+        except Exception as e:
+            logger.warning(f"[Cancel] Failed to kill tools for {session_id}: {e}")
+        logger.info(f"[Cancel] Session {session_id} cancelled by client (killed {killed} subprocess(es))")
+        return {"status": "cancelled", "session_id": session_id, "tools_killed": killed}
+    # Even without a cancel event, try to kill subprocesses (e.g. from non-streaming calls)
+    try:
+        mgr = await get_mcp_manager()
+        killed = await mgr.cancel_session_tools(session_id)
+    except Exception:
+        pass
+    return {"status": "not_found", "session_id": session_id, "tools_killed": killed}

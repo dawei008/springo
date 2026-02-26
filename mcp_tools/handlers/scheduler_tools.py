@@ -5,9 +5,16 @@ Create and manage scheduled/delayed tasks
 
 import time
 import uuid
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 from ..session import get_session_state
+
+try:
+    from croniter import croniter
+    HAS_CRONITER = True
+except ImportError:
+    HAS_CRONITER = False
 
 # In-memory scheduler storage (tasks are persisted on frontend via electronAPI.cache)
 # This backend just handles API calls and returns data for UI to store
@@ -71,6 +78,10 @@ def scheduler(
             notify_on_trigger=notify_on_trigger,
             create_session=create_session
         )
+    elif action == "pause":
+        return _pause_resume_task(task_id, enabled=False)
+    elif action == "resume":
+        return _pause_resume_task(task_id, enabled=True)
     else:
         return {"error": f"Unknown action: {action}"}
 
@@ -212,6 +223,21 @@ def _update_scheduled_task(
     }
 
 
+def _pause_resume_task(task_id: str, enabled: bool) -> Dict[str, Any]:
+    """Pause or resume a scheduled task without deleting it."""
+    if not task_id:
+        return {"error": "Task ID is required"}
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "updates": {"id": task_id, "enabled": enabled},
+        "action": "update",
+        "message": f"Task {task_id} {'resumed' if enabled else 'paused'}",
+        "ui_update": "schedules_panel"
+    }
+
+
 def _calculate_next_run(schedule_type: str, schedule_value: str, now: int) -> Optional[int]:
     """Calculate the next run time in milliseconds"""
     if schedule_type == "delay":
@@ -225,16 +251,21 @@ def _calculate_next_run(schedule_type: str, schedule_value: str, now: int) -> Op
     elif schedule_type == "once":
         # schedule_value is ISO datetime string
         try:
-            from datetime import datetime
-            # Parse ISO format: 2026-02-06T15:00:00
             dt = datetime.fromisoformat(schedule_value.replace('Z', '+00:00'))
             return int(dt.timestamp() * 1000)
         except (ValueError, AttributeError):
             return None
 
     elif schedule_type == "cron":
-        # Cron: next run calculated by frontend using croner library
-        # Return None here - frontend will calculate
+        if HAS_CRONITER:
+            try:
+                base_dt = datetime.fromtimestamp(now / 1000)
+                cron = croniter(schedule_value, base_dt)
+                next_dt = cron.get_next(datetime)
+                return int(next_dt.timestamp() * 1000)
+            except (ValueError, KeyError):
+                return None
+        # Fallback: frontend will calculate
         return None
 
     return None
@@ -276,34 +307,64 @@ def _describe_cron(cron_expr: str) -> str:
 
     minute, hour, day, month, weekday = parts
 
-    # Common patterns
-    if minute == "0" and hour != "*":
+    day_names = {
+        "0": "Sun", "1": "Mon", "2": "Tue",
+        "3": "Wed", "4": "Thu", "5": "Fri", "6": "Sat", "7": "Sun"
+    }
+
+    # Every N minutes
+    if minute.startswith("*/"):
+        try:
+            n = int(minute[2:])
+            return f"Every {n} minute{'s' if n > 1 else ''}"
+        except ValueError:
+            pass
+
+    # Every N hours
+    if minute == "0" and hour.startswith("*/"):
+        try:
+            n = int(hour[2:])
+            return f"Every {n} hour{'s' if n > 1 else ''}"
+        except ValueError:
+            pass
+
+    # Every minute
+    if minute == "*" and hour == "*":
+        return "Every minute"
+
+    # Specific time patterns
+    if minute != "*" and hour != "*" and not minute.startswith("*/") and not hour.startswith("*/"):
         try:
             h = int(hour)
-            time_str = f"{h:02d}:00"
+            m = int(minute)
+            time_str = f"{h:02d}:{m:02d}"
 
             if day == "*" and month == "*" and weekday == "*":
                 return f"Every day at {time_str}"
 
             if day == "*" and month == "*" and weekday != "*":
-                days = {
-                    "0": "Sunday", "1": "Monday", "2": "Tuesday",
-                    "3": "Wednesday", "4": "Thursday", "5": "Friday", "6": "Saturday"
-                }
-                if weekday in days:
-                    return f"Every {days[weekday]} at {time_str}"
-                return f"Every week on day {weekday} at {time_str}"
+                # Parse weekday ranges/lists: 1-5, 0,6, etc.
+                if "-" in weekday:
+                    start, end = weekday.split("-", 1)
+                    start_name = day_names.get(start, start)
+                    end_name = day_names.get(end, end)
+                    return f"{start_name}-{end_name} at {time_str}"
+                if weekday in day_names:
+                    return f"Every {day_names[weekday]} at {time_str}"
+                return f"Weekday {weekday} at {time_str}"
+
+            if day != "*" and month == "*":
+                return f"Day {day} of each month at {time_str}"
         except ValueError:
             pass
 
-    if minute == "*" and hour == "*":
-        return "Every minute"
-
-    if minute.startswith("*/"):
+    # Validate with croniter and show next run
+    if HAS_CRONITER:
         try:
-            interval = int(minute[2:])
-            return f"Every {interval} minutes"
-        except ValueError:
+            cron = croniter(cron_expr)
+            next_dt = cron.get_next(datetime)
+            return f"Cron: {cron_expr} (next: {next_dt.strftime('%m-%d %H:%M')})"
+        except (ValueError, KeyError):
             pass
 
     return f"Cron: {cron_expr}"

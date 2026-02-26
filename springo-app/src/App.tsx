@@ -9,9 +9,9 @@ import SettingsModal from '@/components/Settings/SettingsModal'
 import ImagePreview from '@/components/common/ImagePreview'
 import AskUserModal from '@/components/common/AskUserModal'
 import PlanApprovalModal, { PlanModeIndicator } from '@/components/common/PlanModeModal'
-import TodoPanel from '@/components/common/TodoPanel'
 import { useUIStore } from '@/stores/uiStore'
 import { useToolsStore } from '@/stores/toolsStore'
+import { useScheduleStore } from '@/stores/scheduleStore'
 import Toast from '@/components/common/Toast'
 
 export default function App() {
@@ -31,6 +31,7 @@ export default function App() {
     loadWorkingDir()
     loadSessions()
     useToolsStore.getState().fetchAll()
+    useScheduleStore.getState().loadTasks()
   }, [loadSettings, loadModels, loadWorkingDir, loadSessions])
 
   // Set theme on body
@@ -153,7 +154,6 @@ export default function App() {
       <FileBrowser />
       <MainContent />
       <PlanModeIndicator />
-      <TodoPanel />
       {settingsOpen && <SettingsModal />}
       {imagePreview && <ImagePreview />}
       {askUserData && <AskUserModal />}

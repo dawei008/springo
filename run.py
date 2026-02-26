@@ -23,14 +23,17 @@ def main():
         os.environ["SPRINGO_DEBUG"] = "true"
     
     # Run with uvicorn
+    # In development (non-packaged), always enable reload for hot code updates
     import uvicorn
-    
+
+    enable_reload = args.reload or not getattr(sys, 'frozen', False)
+
     uvicorn.run(
         "api.main:app",
         host=args.host,
         port=args.port,
-        workers=args.workers,
-        reload=args.reload,
+        workers=args.workers if not enable_reload else 1,
+        reload=enable_reload,
         log_level="debug" if args.debug else "info"
     )
 
