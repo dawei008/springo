@@ -99,6 +99,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   createSession: (title?: string) => {
+    // Fire-and-forget: archive the old session's messages to memory/*.md
+    const oldSessionId = get().currentSessionId;
+    if (oldSessionId) {
+      fetch(`${BASE_URL}/v1/memory/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: oldSessionId }),
+      }).catch(() => {
+        // Non-critical: archive failure should not block new session creation
+      });
+    }
+
     // Use unique ID with random suffix to avoid collisions (matches legacy)
     const id =
       Date.now().toString() +

@@ -81,6 +81,10 @@ class MemoryConfigRequest(BaseModel):
     memory_region: Optional[str] = None
     memory_enabled: Optional[bool] = None
     memory_backend: Optional[str] = None  # "agentcore" | "local"
+    # Local memory (memory/*.md) settings
+    local_memory_enabled: Optional[bool] = None
+    retention_days: Optional[int] = None
+    auto_archive_on_reset: Optional[bool] = None
 
 
 class CreateMemoryRequest(BaseModel):
@@ -316,6 +320,13 @@ async def set_memory_config(request: MemoryConfigRequest) -> Dict[str, Any]:
             config["memory_enabled"] = request.memory_enabled
         if request.memory_backend is not None:
             config["memory_backend"] = request.memory_backend
+        # Local memory fields
+        if request.local_memory_enabled is not None:
+            config["local_memory_enabled"] = request.local_memory_enabled
+        if request.retention_days is not None:
+            config["retention_days"] = max(1, min(90, request.retention_days))
+        if request.auto_archive_on_reset is not None:
+            config["auto_archive_on_reset"] = request.auto_archive_on_reset
         save_memory_config(config)
 
         # Hot-swap memory backend if backend type changed

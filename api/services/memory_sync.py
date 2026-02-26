@@ -34,6 +34,11 @@ DEFAULT_MEMORY_CONFIG = {
     "max_retries": 3,
     "retry_delay": 5,
     "sync_check_delay": 2,
+    # Local memory files (memory/*.md)
+    "local_memory_enabled": True,
+    "workspace_path": "~/.springo/workspace",
+    "retention_days": 7,
+    "auto_archive_on_reset": True,
 }
 
 # Module-level config constants (loaded once)

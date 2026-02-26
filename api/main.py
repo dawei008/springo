@@ -80,6 +80,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"Memory backend not started: {e}")
 
+    # Initialize Local Memory Files (memory/*.md)
+    try:
+        from .services.memory_files import init_memory_file_manager
+        mem_mgr = init_memory_file_manager()
+        file_count = len(mem_mgr.list_files())
+        logger.info(f"Memory files initialized: {file_count} files in {mem_mgr.workspace_dir}")
+    except Exception as e:
+        logger.debug(f"Memory files not started: {e}")
+
     # Initialize S3 Sync (if configured)
     try:
         from .services.s3_sync import init_s3_sync

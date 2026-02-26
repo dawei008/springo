@@ -569,6 +569,16 @@ class BedrockService:
                 f"  - Project files: `path: \"{working_dir}\"`\n"
                 f"  - Skills/config: `path: \"{springo_config_dir}\"`\n"
             )
+        # Inject personal memory (MEMORY.md + recent daily logs)
+        try:
+            from .memory_files import get_memory_file_manager
+            mem_mgr = get_memory_file_manager()
+            if mem_mgr:
+                memory_context = mem_mgr.get_context_for_prompt()
+                if memory_context:
+                    system_prompt += "\n" + memory_context
+        except Exception as e:
+            logger.debug(f"Memory injection skipped: {e}")
         bedrock_body["system"] = system_prompt
         
         # Handle tools (skip for models that don't support tool use)

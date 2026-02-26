@@ -66,6 +66,8 @@ from .handlers import (
     task, delegate_task,
     # Scheduler tools
     scheduler,
+    # Memory tools
+    memory_search, memory_get,
 )
 
 __all__ = [
@@ -100,4 +102,6 @@ __all__ = [
     "task", "delegate_task",
     # Scheduler tools
     "scheduler",
+    # Memory tools
+    "memory_search", "memory_get",
 ]

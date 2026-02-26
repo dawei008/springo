@@ -66,6 +66,12 @@ export default function SettingsModal() {
   const [s3Bucket, setS3Bucket] = useState('')
   const [ltmStrategies, setLtmStrategies] = useState<Array<{ name: string; description?: string }> | null>(null)
   const [ltmRefreshing, setLtmRefreshing] = useState(false)
+  // Local memory (memory/*.md) state
+  const [localMemEnabled, setLocalMemEnabled] = useState(true)
+  const [retentionDays, setRetentionDays] = useState(7)
+  const [autoArchive, setAutoArchive] = useState(true)
+  const [memoryFiles, setMemoryFiles] = useState<Array<{ path: string; size: number; modified: string; type: string }>>([])
+  const [memoryFilesLoading, setMemoryFilesLoading] = useState(false)
 
   // Integrations tab state
   const [feishuEnabled, setFeishuEnabled] = useState(false)
@@ -125,12 +131,26 @@ export default function SettingsModal() {
       setMemEnabled(data.memory_enabled !== false)
       setMemBackend(data.memory_backend || 'agentcore')
       setMemId(data.memory_id || '')
+      // Local memory fields
+      setLocalMemEnabled(data.local_memory_enabled !== false)
+      setRetentionDays(data.retention_days ?? 7)
+      setAutoArchive(data.auto_archive_on_reset !== false)
     } catch { /* ignore */ }
     try {
       const s3Res = await fetch(`${BASE_URL}/v1/config/s3`)
       const s3Data = await s3Res.json()
       setS3Bucket(s3Data.s3_bucket || '')
     } catch { /* ignore */ }
+  }
+
+  async function loadMemoryFiles() {
+    setMemoryFilesLoading(true)
+    try {
+      const res = await fetch(`${BASE_URL}/v1/memory/files`)
+      const data = await res.json()
+      setMemoryFiles(data.files || [])
+    } catch { /* ignore */ }
+    setMemoryFilesLoading(false)
   }
 
   async function loadFeishuSettings() {
@@ -411,6 +431,9 @@ export default function SettingsModal() {
           enabled: memEnabled,
           agent_id: memId,
           memory_backend: memBackend,
+          local_memory_enabled: localMemEnabled,
+          retention_days: retentionDays,
+          auto_archive_on_reset: autoArchive,
         }),
       })
       await fetch(`${BASE_URL}/v1/config/s3`, {
@@ -949,6 +972,77 @@ export default function SettingsModal() {
                     </div>
                   )}
                   <div className="hint" style={{ marginTop: '4px' }}>Fill in Memory ID, then click Refresh to test connection and discover strategies.</div>
+                </div>
+              </div>
+
+              {/* ---- Local Memory (memory/*.md) Section ---- */}
+              <div style={{ marginTop: '20px', borderTop: '1px solid var(--border)', paddingTop: '16px' }}>
+                <h3 style={{ margin: '0 0 12px', fontSize: '14px', color: 'var(--text-secondary)' }}>Local Memory</h3>
+                <div className="setting-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={localMemEnabled}
+                      onChange={(e) => setLocalMemEnabled(e.target.checked)}
+                    />
+                    Enable Local Memory (memory/*.md)
+                  </label>
+                  <div className="hint" style={{ marginTop: '4px' }}>Injects MEMORY.md + recent daily logs into system prompt for session continuity.</div>
+                </div>
+                <div style={{ display: localMemEnabled ? undefined : 'none' }}>
+                  <div className="setting-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        style={{ width: 'auto' }}
+                        checked={autoArchive}
+                        onChange={(e) => setAutoArchive(e.target.checked)}
+                      />
+                      Auto-archive on New Chat
+                    </label>
+                    <div className="hint" style={{ marginTop: '4px' }}>When starting a new session, archive the previous conversation to memory/*.md.</div>
+                  </div>
+                  <div className="setting-group">
+                    <label>Retention Days</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={retentionDays}
+                      onChange={(e) => setRetentionDays(Math.max(1, Math.min(90, parseInt(e.target.value) || 7)))}
+                      style={{ width: '80px' }}
+                    />
+                    <div className="hint" style={{ marginTop: '4px' }}>Memory files older than this are cleaned up automatically. Default: 7 days.</div>
+                  </div>
+                  <div className="setting-group" style={{ marginTop: '12px' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <label style={{ margin: 0 }}>Memory Files</label>
+                      <button
+                        onClick={loadMemoryFiles}
+                        className="secondary-btn"
+                        style={{ fontSize: '11px', padding: '4px 10px' }}
+                        disabled={memoryFilesLoading}
+                      >
+                        <span className={memoryFilesLoading ? 'spinning' : ''}>&#8635;</span> Refresh
+                      </button>
+                    </div>
+                    {memoryFiles.length > 0 ? (
+                      <div className="settings-list" style={{ maxHeight: '150px', overflowY: 'auto', marginTop: '6px' }}>
+                        {memoryFiles.map((f, i) => (
+                          <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 8px', fontSize: '12px', borderBottom: '1px solid var(--border)' }}>
+                            <span style={{ color: 'var(--text-primary)' }}>{f.path}</span>
+                            <span style={{ color: 'var(--text-muted)', marginLeft: '12px' }}>
+                              {f.size > 1024 ? `${(f.size / 1024).toFixed(1)}KB` : `${f.size}B`}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="hint" style={{ marginTop: '6px' }}>No memory files yet. Click Refresh to check, or start a conversation.</div>
+                    )}
+                    <div className="hint" style={{ marginTop: '4px' }}>Location: <code>~/.springo/workspace/memory/</code></div>
+                  </div>
                 </div>
               </div>
             </div>

@@ -531,4 +531,49 @@ Cron format: "minute hour day month weekday"
             "required": ["file_path"]
         }
     },
+    # ============ Memory Tools ============
+    {
+        "name": "memory_search",
+        "description": """Search your persistent memory across local memory files and long-term AgentCore storage.
+
+**Three-tier retrieval:**
+- `recent`: Search memory/*.md files (within retention window, default 7 days) — fast, local grep
+- `longterm`: Search AgentCore Memory (older than retention window) — slower, semantic search
+- `auto` (default): Search recent first, then longterm if not enough results
+
+**When to use this tool:**
+- Before answering questions about prior conversations, decisions, preferences, or context from previous sessions
+- When the user references something discussed "before", "last time", "yesterday", etc.
+- When you need to recall stored facts, todos, or project context
+
+Note: MEMORY.md and the last 2 days of daily logs are already injected into your system prompt. Use this tool for searching **older** memory files or when you need targeted recall.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query text"},
+                "scope": {
+                    "type": "string",
+                    "description": "Search scope: 'auto' (default), 'recent' (local files only), 'longterm' (AgentCore only)",
+                    "enum": ["auto", "recent", "longterm"],
+                    "default": "auto"
+                },
+                "max_results": {"type": "integer", "description": "Maximum results to return (default: 10)", "default": 10},
+                "days": {"type": "integer", "description": "Override retention days for recent search"}
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "memory_get",
+        "description": "Read a specific memory file by path. Use after memory_search to read full content of a matched file. Only .md files within the workspace are accessible.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Relative path within workspace (e.g., 'MEMORY.md', 'memory/2026-02-26.md')"},
+                "from_line": {"type": "integer", "description": "Start reading from this line (1-based)"},
+                "lines": {"type": "integer", "description": "Number of lines to read"}
+            },
+            "required": ["path"]
+        }
+    },
 ]

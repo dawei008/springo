@@ -1,10 +1,10 @@
 """
 Memory Router for FastAPI
-AgentCore Memory 状态与管理端点（完整版）
+AgentCore Memory 状态与管理端点 + 本地 memory/*.md 文件管理
 """
 from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -105,3 +105,61 @@ async def get_memory_status() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Memory status error: {e}")
         return {"status": "error", "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Session archive (Phase 3)
+# ---------------------------------------------------------------------------
+
+class ArchiveRequest(BaseModel):
+    session_id: str
+    message_count: int = 15
+
+
+@router.post("/memory/archive")
+async def archive_session_endpoint(request: ArchiveRequest) -> Dict[str, Any]:
+    """Archive a session's recent messages to memory/*.md.
+
+    Called by frontend when user creates a new session (fire-and-forget).
+    """
+    try:
+        from ..services.memory_archiver import archive_session
+        result = await archive_session(request.session_id, request.message_count)
+        return result
+    except Exception as e:
+        logger.error(f"Archive endpoint error: {e}")
+        return {"archived": False, "error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Local memory file management (Phase 4)
+# ---------------------------------------------------------------------------
+
+@router.get("/memory/files")
+async def list_memory_files() -> Dict[str, Any]:
+    """List all local memory files with metadata."""
+    try:
+        from ..services.memory_files import get_memory_file_manager
+        mgr = get_memory_file_manager()
+        if mgr is None:
+            return {"files": [], "error": "memory_file_manager_not_initialized"}
+        files = mgr.list_files()
+        return {"files": files, "workspace": mgr.workspace_dir}
+    except Exception as e:
+        logger.error(f"List memory files error: {e}")
+        return {"files": [], "error": str(e)}
+
+
+@router.post("/memory/cleanup")
+async def cleanup_memory_files() -> Dict[str, Any]:
+    """Remove memory files older than retention period."""
+    try:
+        from ..services.memory_files import get_memory_file_manager
+        mgr = get_memory_file_manager()
+        if mgr is None:
+            return {"removed": [], "error": "memory_file_manager_not_initialized"}
+        removed = mgr.cleanup_old_files()
+        return {"removed": removed, "count": len(removed)}
+    except Exception as e:
+        logger.error(f"Cleanup memory files error: {e}")
+        return {"removed": [], "error": str(e)}

@@ -35,6 +35,8 @@ from .handlers import (
     # LSP code intelligence tools
     lsp_go_to_definition, lsp_find_references, lsp_hover,
     lsp_document_symbols, lsp_workspace_symbol, lsp_diagnostics,
+    # Memory tools
+    memory_search, memory_get,
 )
 
 # Skill loader import
@@ -113,6 +115,9 @@ TOOL_HANDLERS = {
     "lsp_document_symbols": lsp_document_symbols,
     "lsp_workspace_symbol": lsp_workspace_symbol,
     "lsp_diagnostics": lsp_diagnostics,
+    # Memory tools
+    "memory_search": memory_search,
+    "memory_get": memory_get,
 }
 
 
