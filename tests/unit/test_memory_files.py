@@ -2,7 +2,7 @@
 Unit tests for MemoryFileManager (api/services/memory_files.py)
 
 Tests cover:
-- File creation and reading (MEMORY.md, daily logs, session archives)
+- File creation and reading (MEMORY.md, daily logs)
 - Content injection for system prompt
 - File listing and metadata
 - Cleanup of old files
@@ -110,40 +110,6 @@ class TestDailyLog:
         assert yesterday not in recent
 
 
-class TestSessionArchive:
-    """Test session archive (memory/YYYY-MM-DD-<slug>.md) operations."""
-
-    def test_write_archive(self, mgr):
-        content = "# Session Archive\nSome conversation..."
-        path = mgr.write_session_archive("test-topic", content, date="2026-02-20")
-        assert os.path.isfile(path)
-        assert "2026-02-20-test-topic.md" in path
-
-    def test_archive_content_matches(self, mgr):
-        content = "# Archive Content"
-        mgr.write_session_archive("my-slug", content, date="2026-02-20")
-        # Read it back directly
-        fpath = os.path.join(mgr.memory_dir, "2026-02-20-my-slug.md")
-        with open(fpath, "r") as f:
-            assert f.read() == content
-
-    def test_slug_sanitization(self, mgr):
-        """Special characters in slug should be replaced with dashes."""
-        path = mgr.write_session_archive("hello world/foo@bar", "content", date="2026-02-20")
-        filename = os.path.basename(path)
-        assert "/" not in filename
-        assert "@" not in filename
-        assert filename.startswith("2026-02-20-")
-
-    def test_slug_length_limit(self, mgr):
-        """Very long slugs should be truncated."""
-        long_slug = "a" * 200
-        path = mgr.write_session_archive(long_slug, "content", date="2026-02-20")
-        filename = os.path.basename(path)
-        # Date prefix (10) + dash (1) + truncated slug (60) + .md (3) = 74
-        assert len(filename) <= 74
-
-
 class TestReadFile:
     """Test safe file reading with path restrictions."""
 
@@ -192,23 +158,19 @@ class TestListFiles:
         assert files[0]["type"] == "longterm"
         assert files[0]["size"] > 0
 
-    def test_lists_daily_and_archive(self, mgr):
+    def test_lists_daily_files(self, mgr):
         mgr.append_daily("daily content", date="2026-02-20")
-        mgr.write_session_archive("topic", "archive content", date="2026-02-20")
         files = mgr.list_files()
         paths = [f["path"] for f in files]
         assert any("2026-02-20.md" in p for p in paths)
-        assert any("2026-02-20-topic.md" in p for p in paths)
 
     def test_file_types_correct(self, mgr):
         mgr.write_longterm("x")
         mgr.append_daily("y", date="2026-02-20")
-        mgr.write_session_archive("z", "w", date="2026-02-20")
         files = mgr.list_files()
         type_map = {f["path"]: f["type"] for f in files}
         assert type_map["MEMORY.md"] == "longterm"
         assert type_map["memory/2026-02-20.md"] == "daily"
-        assert type_map["memory/2026-02-20-z.md"] == "archive"
 
 
 class TestCleanup:

@@ -1,22 +1,36 @@
 """
 Memory Archiver
-Archives session conversations to memory/*.md files when a new session is created.
+Extracts key facts from session conversations and saves to daily memory log.
 
-Reads recent messages from the old session JSONL, generates a summary slug,
-and writes a Markdown archive file for near-term memory retrieval.
+Called when user creates a new session or deletes one.
+Uses a fast model (Haiku) to extract important facts, decisions, and preferences
+instead of dumping raw conversation text.
 """
 
 import json
 import logging
 import os
-import re
 from datetime import datetime
 from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
-# Max messages to include in archive
+# Max messages to include in extraction
 DEFAULT_MESSAGE_COUNT = 15
+
+# Prompt for fact extraction from session conversations
+_SESSION_EXTRACT_PROMPT = """You are a memory extraction assistant. A user session has ended. Your job is to extract any **important facts, decisions, user preferences, or project context** that should be remembered for future sessions.
+
+Rules:
+- Only extract genuinely important information (decisions, preferences, technical choices, key findings)
+- Skip routine chitchat, greetings, and ephemeral task details
+- If there is nothing worth remembering, respond with exactly: NOTHING_TO_REMEMBER
+- Otherwise, respond with a concise Markdown list of facts to remember (max 10 items)
+- Format each item as: `- [category] fact` where category is one of: decision, preference, finding, context, todo
+- Keep each item under 100 characters
+
+Session messages:
+{messages_text}"""
 
 
 def _read_recent_messages(session_id: str, message_count: int = DEFAULT_MESSAGE_COUNT) -> List[Dict[str, Any]]:
@@ -71,65 +85,27 @@ def _read_recent_messages(session_id: str, message_count: int = DEFAULT_MESSAGE_
     return messages[-message_count:]
 
 
-def _generate_slug(messages: List[Dict[str, Any]]) -> str:
-    """Generate a short descriptive slug from conversation messages.
-
-    Uses simple heuristic: extract key nouns from first user message.
-    Falls back to timestamp if no meaningful content.
-    """
-    # Find first substantive user message
-    for msg in messages:
-        if msg["role"] == "user" and len(msg["text"]) > 10:
-            text = msg["text"][:200].lower()
-            # Remove common words and extract key terms
-            words = re.findall(r'[a-z\u4e00-\u9fff]+', text)
-            stop_words = {"the", "a", "an", "is", "are", "was", "were", "to", "for",
-                          "in", "on", "at", "of", "and", "or", "but", "not", "with",
-                          "this", "that", "it", "be", "do", "have", "has", "had",
-                          "can", "could", "would", "should", "will", "just", "please",
-                          "help", "me", "my", "i", "you", "your", "we", "us",
-                          "what", "how", "why", "when", "where", "which"}
-            key_words = [w for w in words if w not in stop_words and len(w) > 2][:4]
-            if key_words:
-                return "-".join(key_words)
-
-    # Fallback: use timestamp
-    return datetime.now().strftime("%H%M")
-
-
-def _format_archive(session_id: str, messages: List[Dict[str, Any]], slug: str) -> str:
-    """Format messages into a Markdown archive file."""
-    now = datetime.now()
-    date_str = now.strftime("%Y-%m-%d")
-    time_str = now.strftime("%H:%M:%S")
-
-    parts = [
-        f"# Session Archive: {date_str} {time_str}",
-        "",
-        f"- **Session ID**: {session_id}",
-        f"- **Messages**: {len(messages)}",
-        f"- **Topic**: {slug.replace('-', ' ')}",
-        "",
-        "## Conversation",
-        "",
-    ]
+def _build_messages_text(messages: List[Dict[str, Any]], max_chars: int = 8000) -> str:
+    """Build a text representation of messages for the extraction prompt."""
+    text_parts = []
+    total_chars = 0
 
     for msg in messages:
-        role_label = "**User**" if msg["role"] == "user" else "**Assistant**"
-        text = msg["text"].strip()
-        # Truncate very long messages
-        if len(text) > 2000:
-            text = text[:2000] + "\n\n... (truncated)"
-        parts.append(f"{role_label}: {text}")
-        parts.append("")
+        snippet = msg["text"].strip()[:500]
+        line = f"[{msg['role']}]: {snippet}"
+        if total_chars + len(line) > max_chars:
+            break
+        text_parts.append(line)
+        total_chars += len(line)
 
-    return "\n".join(parts)
+    return "\n".join(text_parts)
 
 
 async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_COUNT) -> Dict[str, Any]:
-    """Archive a session's recent messages to memory/*.md.
+    """Extract key facts from a session and save to daily memory log.
 
-    Called when user creates a new session (fire-and-forget from frontend).
+    Called when user creates a new session or deletes one (fire-and-forget from frontend).
+    Uses a fast model to extract important facts instead of dumping raw conversation.
 
     Returns:
         Dict with archive result metadata.
@@ -153,24 +129,84 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
     if not messages:
         return {"archived": False, "reason": "no_messages", "session_id": session_id}
 
-    # Generate slug and format content
-    slug = _generate_slug(messages)
-    content = _format_archive(session_id, messages, slug)
+    messages_text = _build_messages_text(messages)
+    if not messages_text:
+        return {"archived": False, "reason": "no_text_content", "session_id": session_id}
 
-    # Write archive file
-    # AgentCore sync is handled by the file sync worker (checkpoint-based),
-    # which will detect the new .md file and sync it within file_sync_interval.
+    # Call fast model to extract facts
     try:
-        path = mgr.write_session_archive(slug, content)
-        rel_path = os.path.relpath(path, mgr.workspace_dir)
-        logger.info(f"Session {session_id} archived to {rel_path} ({len(messages)} messages)")
-        return {
-            "archived": True,
-            "path": rel_path,
-            "slug": slug,
-            "message_count": len(messages),
-            "session_id": session_id,
+        from .bedrock import get_bedrock_service
+        from .model_registry import get_model_info, get_bedrock_id
+        from ..config import get_settings
+
+        bedrock = get_bedrock_service()
+        settings = get_settings()
+        flush_model = settings.compact_model_id
+
+        # Resolve model
+        model_info = get_model_info(flush_model)
+        api_format = "anthropic"
+        if model_info:
+            api_format = model_info.get("api_format", "anthropic")
+
+        _FALLBACK = "claude-haiku-4-5-20251001"
+        if api_format == "converse":
+            flush_model = _FALLBACK
+            api_format = "anthropic"
+
+        model_id = flush_model
+        if not model_id.startswith(("us.", "deepseek.", "minimax.", "moonshotai.", "moonshot.", "qwen.", "zai.")):
+            model_id = get_bedrock_id(flush_model)
+
+        prompt = _SESSION_EXTRACT_PROMPT.format(messages_text=messages_text)
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1024,
+            "temperature": 0.2,
+            "messages": [{"role": "user", "content": prompt}],
         }
+
+        result = await bedrock.invoke_model(
+            model_id=model_id,
+            body=body,
+            api_format=api_format,
+        )
+
+        # Extract response text
+        response_text = ""
+        if result and isinstance(result, dict):
+            content_blocks = result.get("content", [])
+            if content_blocks and isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        response_text = block["text"]
+                        break
+
+        if not response_text or "NOTHING_TO_REMEMBER" in response_text:
+            logger.info(f"Session {session_id}: nothing worth remembering ({len(messages)} messages)")
+            return {"archived": False, "reason": "nothing_to_remember", "session_id": session_id, "message_count": len(messages)}
+
+        # Write extracted facts to daily memory log
+        from mcp_tools.handlers.memory_tools import memory_write
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+        content_to_write = f"## Session archive ({now})\n\n{response_text.strip()}\n"
+        write_result = memory_write(target="daily", content=content_to_write)
+
+        if write_result.get("success"):
+            facts_count = sum(1 for line in response_text.split("\n") if line.strip().startswith("-"))
+            logger.info(f"Session {session_id} archived: {facts_count} facts to {write_result.get('path')}")
+            return {
+                "archived": True,
+                "path": write_result.get("path"),
+                "facts_count": facts_count,
+                "message_count": len(messages),
+                "session_id": session_id,
+            }
+        else:
+            logger.warning(f"Session {session_id} archive write failed: {write_result.get('error')}")
+            return {"archived": False, "error": write_result.get("error"), "session_id": session_id}
+
     except Exception as e:
         logger.error(f"Failed to archive session {session_id}: {e}")
         return {"archived": False, "error": str(e), "session_id": session_id}

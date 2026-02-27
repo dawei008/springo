@@ -23,7 +23,7 @@ def workspace(tmp_path):
     today = datetime.now().strftime("%Y-%m-%d")
     mgr.write_longterm("# MEMORY\nUser prefers Python. Project uses FastAPI.")
     mgr.append_daily("Debugged memory search feature. Fixed slug generation.", date=today)
-    mgr.write_session_archive("python-fastapi", "# Session\n**User**: How to test FastAPI?\n**Assistant**: Use pytest with httpx.", date=today)
+    mgr.append_daily("## Session archive\n- [finding] Use pytest with httpx for FastAPI testing", date=today)
     return ws, mgr
 
 

@@ -3,21 +3,17 @@ Unit tests for memory_archiver (api/services/memory_archiver.py)
 
 Tests cover:
 - Reading recent messages from JSONL session files
-- Slug generation from conversation content
-- Archive formatting to Markdown
-- End-to-end archive_session flow
+- Fact extraction archive_session flow (model call + daily log write)
 """
 import json
 import os
 import pytest
-import tempfile
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 from datetime import datetime
 
 from api.services.memory_archiver import (
     _read_recent_messages,
-    _generate_slug,
-    _format_archive,
+    _build_messages_text,
     archive_session,
     DEFAULT_MESSAGE_COUNT,
 )
@@ -163,88 +159,32 @@ class TestReadRecentMessages:
         assert msgs[0]["text"] == "valid"
 
 
-class TestGenerateSlug:
-    """Test _generate_slug function."""
+class TestBuildMessagesText:
+    """Test _build_messages_text helper."""
 
-    def test_extracts_key_words(self):
-        messages = [{"role": "user", "text": "How do I implement a binary search tree in Python?"}]
-        slug = _generate_slug(messages)
-        assert len(slug) > 0
-        assert "-" in slug or len(slug.split("-")) >= 1
-
-    def test_skips_stop_words(self):
-        messages = [{"role": "user", "text": "What is the best way to do this thing?"}]
-        slug = _generate_slug(messages)
-        # "what", "is", "the", "to", "do", "this" are all stop words
-        assert "what" not in slug.split("-")
-        assert "the" not in slug.split("-")
-
-    def test_uses_first_substantive_message(self):
+    def test_builds_text_from_messages(self):
         messages = [
-            {"role": "user", "text": "hi"},  # too short (<= 10 chars)
-            {"role": "user", "text": "Can you help me debug my Python FastAPI application?"},
+            {"role": "user", "text": "Hello world"},
+            {"role": "assistant", "text": "Hi there"},
         ]
-        slug = _generate_slug(messages)
-        assert "python" in slug or "fastapi" in slug or "debug" in slug or "application" in slug
-
-    def test_fallback_to_timestamp(self):
-        messages = [{"role": "assistant", "text": "Hello there!"}]
-        slug = _generate_slug(messages)
-        # Should be a 4-digit time string (HHMM)
-        assert len(slug) == 4
-        assert slug.isdigit()
-
-    def test_limits_to_4_words(self):
-        messages = [{"role": "user", "text": "implement binary search tree algorithm data structure optimization performance"}]
-        slug = _generate_slug(messages)
-        parts = slug.split("-")
-        assert len(parts) <= 4
-
-    def test_handles_chinese_text(self):
-        messages = [{"role": "user", "text": "请帮我实现一个记忆系统的搜索功能"}]
-        slug = _generate_slug(messages)
-        assert len(slug) > 0
-
-
-class TestFormatArchive:
-    """Test _format_archive function."""
-
-    def test_contains_session_metadata(self):
-        messages = [{"role": "user", "text": "Hello"}]
-        content = _format_archive("session-123", messages, "test-slug")
-        assert "session-123" in content
-        assert "test slug" in content  # slug with dashes replaced by spaces
-
-    def test_contains_message_count(self):
-        messages = [
-            {"role": "user", "text": "Q1"},
-            {"role": "assistant", "text": "A1"},
-        ]
-        content = _format_archive("s1", messages, "slug")
-        assert "**Messages**: 2" in content
-
-    def test_formats_user_and_assistant(self):
-        messages = [
-            {"role": "user", "text": "What is Python?"},
-            {"role": "assistant", "text": "Python is a programming language."},
-        ]
-        content = _format_archive("s1", messages, "python")
-        assert "**User**: What is Python?" in content
-        assert "**Assistant**: Python is a programming language." in content
+        text = _build_messages_text(messages)
+        assert "[user]: Hello world" in text
+        assert "[assistant]: Hi there" in text
 
     def test_truncates_long_messages(self):
-        messages = [{"role": "user", "text": "x" * 3000}]
-        content = _format_archive("s1", messages, "long")
-        assert "... (truncated)" in content
-        # The truncated text should be around 2000 chars, not 3000
-        user_line = [l for l in content.split("\n") if l.startswith("**User**:")][0]
-        assert len(user_line) < 2100
+        messages = [{"role": "user", "text": "x" * 1000}]
+        text = _build_messages_text(messages)
+        # Each message snippet is capped at 500 chars
+        assert len(text) < 600
 
-    def test_has_markdown_structure(self):
-        messages = [{"role": "user", "text": "Hello"}]
-        content = _format_archive("s1", messages, "test")
-        assert content.startswith("# Session Archive:")
-        assert "## Conversation" in content
+    def test_respects_max_chars(self):
+        messages = [{"role": "user", "text": f"Message {i} " * 50} for i in range(20)]
+        text = _build_messages_text(messages, max_chars=500)
+        assert len(text) <= 600  # Some tolerance for the last line
+
+    def test_empty_messages(self):
+        text = _build_messages_text([])
+        assert text == ""
 
 
 class TestArchiveSession:
@@ -287,40 +227,86 @@ class TestArchiveSession:
         assert result["reason"] == "no_messages"
 
     @pytest.mark.asyncio
-    async def test_successful_archive(self):
+    async def test_nothing_to_remember(self):
+        """Model returns NOTHING_TO_REMEMBER for trivial conversations."""
         config = {"local_memory_enabled": True, "auto_archive_on_reset": True}
         mock_mgr = MagicMock()
-        mock_mgr.write_session_archive.return_value = "/fake/workspace/memory/2026-02-26-test.md"
-        mock_mgr.workspace_dir = "/fake/workspace"
-
         messages = [
-            {"role": "user", "text": "How do I test Python code?"},
-            {"role": "assistant", "text": "Use pytest."},
+            {"role": "user", "text": "hi"},
+            {"role": "assistant", "text": "Hello!"},
         ]
+
+        # Mock bedrock to return NOTHING_TO_REMEMBER
+        mock_bedrock = AsyncMock()
+        mock_bedrock.invoke_model.return_value = {
+            "content": [{"type": "text", "text": "NOTHING_TO_REMEMBER"}]
+        }
 
         with patch("api.services.memory_sync.load_memory_config", return_value=config), \
              patch("api.services.memory_files.get_memory_file_manager", return_value=mock_mgr), \
-             patch("api.services.memory_archiver._read_recent_messages", return_value=messages):
+             patch("api.services.memory_archiver._read_recent_messages", return_value=messages), \
+             patch("api.services.bedrock.get_bedrock_service", return_value=mock_bedrock), \
+             patch("api.config.get_settings") as mock_settings, \
+             patch("api.services.model_registry.get_model_info", return_value={"api_format": "anthropic"}), \
+             patch("api.services.model_registry.get_bedrock_id", return_value="us.anthropic.claude-haiku"):
+            mock_settings.return_value.compact_model_id = "claude-haiku-4-5-20251001"
+            result = await archive_session("trivial-session")
+
+        assert result["archived"] is False
+        assert result["reason"] == "nothing_to_remember"
+
+    @pytest.mark.asyncio
+    async def test_successful_fact_extraction(self):
+        """Model extracts facts and writes to daily log."""
+        config = {"local_memory_enabled": True, "auto_archive_on_reset": True}
+        mock_mgr = MagicMock()
+        messages = [
+            {"role": "user", "text": "I prefer dark mode and use Python with FastAPI."},
+            {"role": "assistant", "text": "I'll remember your preferences."},
+        ]
+
+        extracted_facts = "- [preference] User prefers dark mode\n- [context] Project uses Python + FastAPI"
+        mock_bedrock = AsyncMock()
+        mock_bedrock.invoke_model.return_value = {
+            "content": [{"type": "text", "text": extracted_facts}]
+        }
+
+        mock_write_result = {"success": True, "path": "memory/2026-02-27.md", "target": "daily"}
+
+        with patch("api.services.memory_sync.load_memory_config", return_value=config), \
+             patch("api.services.memory_files.get_memory_file_manager", return_value=mock_mgr), \
+             patch("api.services.memory_archiver._read_recent_messages", return_value=messages), \
+             patch("api.services.bedrock.get_bedrock_service", return_value=mock_bedrock), \
+             patch("api.config.get_settings") as mock_settings, \
+             patch("api.services.model_registry.get_model_info", return_value={"api_format": "anthropic"}), \
+             patch("api.services.model_registry.get_bedrock_id", return_value="us.anthropic.claude-haiku"), \
+             patch("mcp_tools.handlers.memory_tools.memory_write", return_value=mock_write_result):
+            mock_settings.return_value.compact_model_id = "claude-haiku-4-5-20251001"
             result = await archive_session("test-session")
 
         assert result["archived"] is True
+        assert result["facts_count"] == 2
         assert result["message_count"] == 2
-        assert result["session_id"] == "test-session"
-        mock_mgr.write_session_archive.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_write_error_handled(self):
+    async def test_model_error_handled(self):
+        """If Bedrock call fails, archive returns error gracefully."""
         config = {"local_memory_enabled": True, "auto_archive_on_reset": True}
         mock_mgr = MagicMock()
-        mock_mgr.write_session_archive.side_effect = IOError("disk full")
-        mock_mgr.workspace_dir = "/fake/workspace"
+        messages = [{"role": "user", "text": "test message"}]
 
-        messages = [{"role": "user", "text": "test message for archive"}]
+        mock_bedrock = AsyncMock()
+        mock_bedrock.invoke_model.side_effect = Exception("Bedrock timeout")
 
         with patch("api.services.memory_sync.load_memory_config", return_value=config), \
              patch("api.services.memory_files.get_memory_file_manager", return_value=mock_mgr), \
-             patch("api.services.memory_archiver._read_recent_messages", return_value=messages):
-            result = await archive_session("test-session")
+             patch("api.services.memory_archiver._read_recent_messages", return_value=messages), \
+             patch("api.services.bedrock.get_bedrock_service", return_value=mock_bedrock), \
+             patch("api.config.get_settings") as mock_settings, \
+             patch("api.services.model_registry.get_model_info", return_value={"api_format": "anthropic"}), \
+             patch("api.services.model_registry.get_bedrock_id", return_value="us.anthropic.claude-haiku"):
+            mock_settings.return_value.compact_model_id = "claude-haiku-4-5-20251001"
+            result = await archive_session("error-session")
 
         assert result["archived"] is False
-        assert "disk full" in result["error"]
+        assert "Bedrock timeout" in result["error"]

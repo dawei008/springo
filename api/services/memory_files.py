@@ -5,7 +5,6 @@ Memory Files Manager
 文件布局:
   ~/.springo/workspace/MEMORY.md          — 长期精炼记忆
   ~/.springo/workspace/memory/YYYY-MM-DD.md           — 每日日志
-  ~/.springo/workspace/memory/YYYY-MM-DD-<slug>.md    — 会话归档
 """
 
 import os
@@ -47,18 +46,6 @@ class MemoryFileManager:
         with open(path, "a", encoding="utf-8") as f:
             f.write(content.rstrip("\n") + "\n\n")
         logger.debug(f"Appended to daily log: {path}")
-        return path
-
-    def write_session_archive(self, slug: str, content: str, date: str = None) -> str:
-        """Write session archive to memory/YYYY-MM-DD-<slug>.md."""
-        if date is None:
-            date = datetime.now().strftime("%Y-%m-%d")
-        safe_slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in slug)[:60]
-        filename = f"{date}-{safe_slug}.md"
-        path = os.path.join(self.memory_dir, filename)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(content)
-        logger.info(f"Session archive written: {filename}")
         return path
 
     def write_longterm(self, content: str) -> str:
@@ -160,7 +147,7 @@ class MemoryFileManager:
                     "path": f"memory/{name}",
                     "size": stat.st_size,
                     "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-                    "type": "daily" if len(name) == 13 else "archive",  # YYYY-MM-DD.md = 13 chars
+                    "type": "daily",
                 })
         return files
 
