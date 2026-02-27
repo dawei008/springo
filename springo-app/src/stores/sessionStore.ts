@@ -7,8 +7,17 @@ import { useSettingsStore } from '@/stores/settingsStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
+/** Dedup: skip if same session was archived within cooldown window. */
+const ARCHIVE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const _recentArchives = new Map<string, number>();
+
 /** Fire-and-forget: archive a session's messages to memory daily log. */
 function archiveSession(sessionId: string) {
+  const now = Date.now();
+  const last = _recentArchives.get(sessionId);
+  if (last && now - last < ARCHIVE_COOLDOWN_MS) return;
+  _recentArchives.set(sessionId, now);
+
   fetch(`${BASE_URL}/v1/memory/archive`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
