@@ -158,56 +158,19 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
     content = _format_archive(session_id, messages, slug)
 
     # Write archive file
+    # AgentCore sync is handled by the file sync worker (checkpoint-based),
+    # which will detect the new .md file and sync it within file_sync_interval.
     try:
         path = mgr.write_session_archive(slug, content)
         rel_path = os.path.relpath(path, mgr.workspace_dir)
         logger.info(f"Session {session_id} archived to {rel_path} ({len(messages)} messages)")
-
-        # Plan B: sync curated archive to AgentCore Memory
-        agentcore_synced = _sync_archive_to_agentcore(session_id, messages, slug)
-
         return {
             "archived": True,
             "path": rel_path,
             "slug": slug,
             "message_count": len(messages),
             "session_id": session_id,
-            "agentcore_synced": agentcore_synced,
         }
     except Exception as e:
         logger.error(f"Failed to archive session {session_id}: {e}")
         return {"archived": False, "error": str(e), "session_id": session_id}
-
-
-def _sync_archive_to_agentcore(session_id: str, messages: List[Dict[str, Any]], slug: str) -> bool:
-    """Sync curated archive content to AgentCore Memory (Plan B).
-
-    Instead of per-message sync during conversation, we sync the curated
-    archive after session archival. This produces higher-quality memory
-    with dramatically less data volume.
-
-    Args:
-        session_id: Original session ID
-        messages: Processed messages from the archive (role + text)
-        slug: Archive slug
-
-    Returns:
-        True if synced successfully, False if skipped or failed
-    """
-    try:
-        from .memory_backend import get_memory_backend, get_memory_backend_type
-
-        if get_memory_backend_type() != "agentcore":
-            return False
-
-        backend = get_memory_backend()
-        if backend is None or not hasattr(backend, "sync_archive"):
-            return False
-
-        synced = backend.sync_archive(session_id, messages, slug)
-        if synced:
-            logger.info(f"Archive synced to AgentCore for session {session_id}")
-        return synced
-    except Exception as e:
-        logger.warning(f"Archive AgentCore sync failed (non-fatal): {e}")
-        return False

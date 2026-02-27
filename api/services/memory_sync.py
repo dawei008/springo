@@ -39,6 +39,9 @@ DEFAULT_MEMORY_CONFIG = {
     "workspace_path": "~/.springo/workspace",
     "retention_days": 7,
     "auto_archive_on_reset": True,
+    # File sync worker (Plan B)
+    "file_sync_interval": 900,       # 15 min between scans
+    "file_sync_initial_delay": 60,   # 1 min delay before first scan
 }
 
 # Module-level config constants (loaded once)
@@ -128,6 +131,7 @@ class MemorySyncManager:
         self.upload_queue: Queue = Queue()
         self.worker_thread: Optional[threading.Thread] = None
         self.sync_check_thread: Optional[threading.Thread] = None
+        self.file_sync_thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._batch: List[Dict] = []
         self._batch_start_time: float = 0
@@ -160,12 +164,17 @@ class MemorySyncManager:
         # _sync_check_worker scans ALL sessions on startup and re-queues everything,
         # which caused repeated crashes from upload flooding.
         self._sync_check_done = True
+        # Start file sync worker (periodic checkpoint-based sync of memory/*.md)
+        self.file_sync_thread = threading.Thread(target=self._file_sync_worker, daemon=True)
+        self.file_sync_thread.start()
         return True
 
     def stop(self):
         self._stop_event.set()
         if self.worker_thread:
             self.worker_thread.join(timeout=5)
+        if self.file_sync_thread:
+            self.file_sync_thread.join(timeout=5)
 
     def queue_message(self, session_id: str, message: Dict, actor: str = "user",
                       message_index: int = -1) -> bool:
@@ -236,6 +245,148 @@ class MemorySyncManager:
         except Exception as e:
             logger.error(f"Failed to sync archive to AgentCore: {e}")
             return False
+
+    # -----------------------------------------------------------------------
+    # File-based periodic sync (Plan B checkpoint worker)
+    # -----------------------------------------------------------------------
+
+    def _file_sync_worker(self):
+        """Periodic worker that syncs changed memory/*.md files to AgentCore.
+
+        Runs every `file_sync_interval` seconds (default 900 = 15 min).
+        Uses a checkpoint file to track which files have been synced.
+        """
+        # Wait a bit before first scan to let the system stabilize
+        initial_delay = self._config.get("file_sync_initial_delay", 60)
+        for _ in range(initial_delay):
+            if self._stop_event.is_set():
+                return
+            time.sleep(1)
+
+        interval = self._config.get("file_sync_interval", 900)  # 15 min
+        logger.info(f"File sync worker started (interval={interval}s)")
+
+        while not self._stop_event.is_set():
+            try:
+                self._sync_changed_files()
+            except Exception as e:
+                logger.error(f"File sync error: {e}")
+
+            # Sleep in 1s increments so we can respond to stop quickly
+            for _ in range(interval):
+                if self._stop_event.is_set():
+                    return
+                time.sleep(1)
+
+    def _sync_changed_files(self):
+        """Scan memory files, sync new/modified ones to AgentCore."""
+        workspace_path = os.path.expanduser(
+            self._config.get("workspace_path", "~/.springo/workspace")
+        )
+        memory_dir = os.path.join(workspace_path, "memory")
+        checkpoint_path = os.path.join(workspace_path, ".sync_checkpoint.json")
+
+        checkpoint = self._load_file_checkpoint(checkpoint_path)
+
+        # Collect all memory files
+        files_to_check: List[tuple] = []
+
+        # MEMORY.md
+        memory_md = os.path.join(workspace_path, "MEMORY.md")
+        if os.path.isfile(memory_md):
+            files_to_check.append(("MEMORY.md", memory_md))
+
+        # memory/*.md
+        if os.path.isdir(memory_dir):
+            for name in sorted(os.listdir(memory_dir)):
+                if name.endswith(".md"):
+                    files_to_check.append((f"memory/{name}", os.path.join(memory_dir, name)))
+
+        if not files_to_check:
+            return
+
+        synced_count = 0
+        for rel_path, abs_path in files_to_check:
+            if self._stop_event.is_set():
+                break
+            try:
+                stat = os.stat(abs_path)
+                mtime = stat.st_mtime
+                size = stat.st_size
+
+                # Skip if unchanged since last sync
+                prev = checkpoint.get("files", {}).get(rel_path)
+                if prev and prev.get("mtime") == mtime and prev.get("size") == size:
+                    continue
+
+                with open(abs_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+
+                if not content.strip():
+                    continue
+
+                success = self._sync_file_to_agentcore(rel_path, content)
+                if success:
+                    checkpoint.setdefault("files", {})[rel_path] = {
+                        "mtime": mtime,
+                        "size": size,
+                        "synced_at": datetime.utcnow().isoformat(),
+                    }
+                    synced_count += 1
+            except Exception as e:
+                logger.warning(f"File sync: failed to process {rel_path}: {e}")
+
+        if synced_count > 0:
+            checkpoint["last_check"] = datetime.utcnow().isoformat()
+            self._save_file_checkpoint(checkpoint_path, checkpoint)
+            logger.info(f"File sync: synced {synced_count} changed file(s) to AgentCore")
+
+    def _sync_file_to_agentcore(self, rel_path: str, content: str) -> bool:
+        """Sync a single memory file to AgentCore as a conversational event."""
+        if not self._memory_client:
+            return False
+
+        try:
+            # Use file path as session ID — deterministic, so re-syncs overwrite
+            session_id = f"memfile-{rel_path.replace('/', '-').replace('.md', '')}"
+
+            payload = [{
+                "conversational": {
+                    "content": {"text": content},
+                    "role": "USER",
+                }
+            }]
+
+            self._memory_client.create_event(
+                memoryId=self.memory_id,
+                actorId="springo",
+                sessionId=session_id,
+                eventTimestamp=datetime.utcnow(),
+                payload=payload,
+            )
+            logger.info(f"File sync: synced {rel_path} to AgentCore ({len(content)} chars)")
+            return True
+        except Exception as e:
+            logger.error(f"File sync: failed to sync {rel_path}: {e}")
+            return False
+
+    def _load_file_checkpoint(self, path: str) -> Dict:
+        """Load sync checkpoint from JSON file."""
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return {"files": {}}
+
+    def _save_file_checkpoint(self, path: str, data: Dict):
+        """Save sync checkpoint to JSON file."""
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, ensure_ascii=False, fp=f, indent=2)
+        except Exception as e:
+            logger.warning(f"File sync: failed to save checkpoint: {e}")
 
     def queue_conversation(self, session_id: str, messages: List[Dict]) -> int:
         """批量队列消息，返回成功入队数"""
@@ -516,6 +667,8 @@ class MemorySyncManager:
             "queue_size": self.upload_queue.qsize(),
             "batch_size": len(self._batch),
             "worker_running": self.worker_thread.is_alive() if self.worker_thread else False,
+            "file_sync_running": self.file_sync_thread.is_alive() if self.file_sync_thread else False,
+            "file_sync_interval": self._config.get("file_sync_interval", 900),
             "sync_check_done": self._sync_check_done,
         }
 
