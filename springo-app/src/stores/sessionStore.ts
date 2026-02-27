@@ -7,6 +7,15 @@ import { useSettingsStore } from '@/stores/settingsStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
+/** Fire-and-forget: archive a session's messages to memory daily log. */
+function archiveSession(sessionId: string) {
+  fetch(`${BASE_URL}/v1/memory/archive`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  }).catch(() => {});
+}
+
 interface SessionState {
   sessions: Conversation[];
   currentSessionId: string | null;
@@ -107,13 +116,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     // Fire-and-forget: archive the old session's messages to memory/*.md
     const oldSessionId = get().currentSessionId;
     if (oldSessionId) {
-      fetch(`${BASE_URL}/v1/memory/archive`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: oldSessionId }),
-      }).catch(() => {
-        // Non-critical: archive failure should not block new session creation
-      });
+      archiveSession(oldSessionId);
     }
 
     // Use unique ID with random suffix to avoid collisions (matches legacy)
@@ -149,6 +152,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchSession: (id: string) => {
+    // Archive the session we're leaving (fire-and-forget)
+    const oldSessionId = get().currentSessionId;
+    if (oldSessionId && oldSessionId !== id) {
+      archiveSession(oldSessionId);
+    }
+
     // Clear unseen completion flag when user views this session
     const unseen = get().unseenCompletedSessions;
     if (unseen.has(id)) {
@@ -173,11 +182,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   deleteSession: async (id: string) => {
     // Archive to memory/*.md before deleting
-    fetch(`${BASE_URL}/v1/memory/archive`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: id }),
-    }).catch(() => {});
+    archiveSession(id);
 
     try {
       const response = await fetch(`${BASE_URL}/v1/sessions/${id}`, {

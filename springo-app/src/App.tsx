@@ -14,6 +14,8 @@ import { useToolsStore } from '@/stores/toolsStore'
 import { useScheduleStore } from '@/stores/scheduleStore'
 import Toast from '@/components/common/Toast'
 
+const BASE_URL = 'http://127.0.0.1:8081'
+
 export default function App() {
   const loadSessions = useSessionStore((s) => s.loadSessions)
   const loadModels = useSettingsStore((s) => s.loadModels)
@@ -33,6 +35,21 @@ export default function App() {
     useToolsStore.getState().fetchAll()
     useScheduleStore.getState().loadTasks()
   }, [loadSettings, loadModels, loadWorkingDir, loadSessions])
+
+  // Archive current session on window close (best-effort via sendBeacon)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      const sessionId = useSessionStore.getState().currentSessionId
+      if (sessionId) {
+        const url = `${BASE_URL}/v1/memory/archive`
+        const body = JSON.stringify({ session_id: sessionId })
+        // sendBeacon is reliable during page unload (unlike fetch)
+        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [])
 
   // Set theme on body
   const themeMode = useUIStore((s) => s.themeMode)
