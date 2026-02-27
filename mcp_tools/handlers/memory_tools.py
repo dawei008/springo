@@ -113,47 +113,102 @@ def _search_recent_memory(query: str, max_results: int = 10, days: int = None) -
     return results[:max_results]
 
 
+def _load_agentcore_config() -> Dict[str, Any]:
+    """Load AgentCore memory config from ~/.springo/config.json."""
+    import json as _json
+    config_path = os.path.expanduser("~/.springo/config.json")
+    if not os.path.exists(config_path):
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        full = _json.load(f)
+    return full.get("memory", {})
+
+
+def _get_strategies() -> List[Dict[str, Any]]:
+    """Get configured LTM strategies with namespace info."""
+    mem_cfg = _load_agentcore_config()
+    return mem_cfg.get("ltm", {}).get("strategies", [])
+
+
+def _detect_strategy_type(namespace: str) -> str:
+    """Infer strategy type from namespace string."""
+    if "ConversationFacts" in namespace or "Fact" in namespace:
+        return "SEMANTIC"
+    if "UserPreferences" in namespace or "Preference" in namespace:
+        return "USER_PREFERENCE"
+    if "ConversationSummary" in namespace or "Summary" in namespace:
+        return "SUMMARIZATION"
+    if "ConversationEpisodes" in namespace or "Episode" in namespace:
+        return "EPISODIC"
+    return "UNKNOWN"
+
+
 def _search_longterm_memory(query: str, max_results: int = 5) -> List[Dict[str, Any]]:
-    """Search AgentCore Memory for long-term recall."""
+    """Search AgentCore Memory for long-term recall.
+
+    Uses bedrock-agentcore data-plane client with retrieve_memory_records API.
+    Searches across all configured strategy namespaces and merges by score.
+    """
     try:
-        from api.services.memory_sync import load_memory_config
-        config = load_memory_config()
-        memory_id = config.get("memory_id", "")
-        region = config.get("memory_region", "us-west-2")
-        enabled = config.get("memory_enabled", True)
+        mem_cfg = _load_agentcore_config()
+        memory_id = mem_cfg.get("memory_id", "")
+        region = mem_cfg.get("memory_region", "us-west-2")
+        enabled = mem_cfg.get("memory_enabled", True)
 
         if not enabled or not memory_id:
             return []
 
+        strategies = _get_strategies()
+        if not strategies:
+            logger.warning("AgentCore memory: no strategies configured")
+            return []
+
         import boto3
-        client = boto3.client("bedrock-agent-runtime", region_name=region)
-        response = client.retrieve(
-            knowledgeBaseId=memory_id,
-            retrievalQuery={"text": query},
-            retrievalConfiguration={
-                "vectorSearchConfiguration": {
-                    "numberOfResults": max_results,
+        client = boto3.client("bedrock-agentcore", region_name=region)
+
+        all_results: List[Dict[str, Any]] = []
+        for strategy in strategies:
+            namespace = strategy.get("namespace", "")
+            strategy_id = strategy.get("id", "")
+            if not namespace:
+                continue
+
+            try:
+                search_criteria: Dict[str, Any] = {
+                    "searchQuery": query,
+                    "topK": max_results,
                 }
-            },
-        )
+                if strategy_id:
+                    search_criteria["memoryStrategyId"] = strategy_id
 
-        results = []
-        for item in response.get("retrievalResults", []):
-            content = item.get("content", {}).get("text", "")
-            score = item.get("score", 0)
-            location = item.get("location", {})
-            source_uri = location.get("s3Location", {}).get("uri", "")
+                response = client.retrieve_memory_records(
+                    memoryId=memory_id,
+                    namespace=namespace,
+                    searchCriteria=search_criteria,
+                    maxResults=max_results,
+                )
 
-            if content:
-                results.append({
-                    "snippet": content[:700],
-                    "score": round(score, 3) if score else 0,
-                    "source": "agentcore",
-                    "source_uri": source_uri,
-                    "path": source_uri.split("/")[-1] if source_uri else "",
-                })
+                for r in response.get("memoryRecordSummaries", []):
+                    content_text = r.get("content", {}).get("text", "")
+                    if not content_text:
+                        continue
+                    namespaces = r.get("namespaces", [])
+                    ns = namespaces[0] if namespaces else namespace
+                    all_results.append({
+                        "snippet": content_text[:700],
+                        "score": round(r.get("score", 0), 3),
+                        "source": "agentcore",
+                        "strategy_type": _detect_strategy_type(ns),
+                        "namespace": ns,
+                        "created_at": str(r.get("createdAt", "")),
+                    })
+            except Exception as e:
+                logger.debug(f"AgentCore search failed for namespace {namespace}: {e}")
+                continue
 
-        return results
+        # Sort by score descending and return top results
+        all_results.sort(key=lambda x: -x.get("score", 0))
+        return all_results[:max_results]
     except Exception as e:
         logger.warning(f"AgentCore memory search failed: {e}")
         return []

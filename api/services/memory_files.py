@@ -216,6 +216,12 @@ class MemoryFileManager:
             "The following is your persistent memory from previous sessions. "
             "Use this context to maintain continuity.\n\n"
             + "\n\n".join(parts)
+            + "\n\n**Memory retrieval rules:**\n"
+            "- Use the `memory_search` tool to search for past conversations, decisions, or context.\n"
+            "- Use the `memory_get` tool to read a specific memory file.\n"
+            "- **NEVER** browse `~/.springo/sessions/` JSONL files directly — session files are internal storage, not a search interface.\n"
+            "- **NEVER** use `list_directory`, `glob`, `read_file`, or `execute_command` to scan session directories for memory recall.\n"
+            "- If `memory_search` returns no results, tell the user honestly — do not attempt to manually dig through raw session data.\n"
         )
 
 

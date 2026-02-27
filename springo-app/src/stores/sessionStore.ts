@@ -159,6 +159,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   deleteSession: async (id: string) => {
+    // Archive to memory/*.md before deleting
+    fetch(`${BASE_URL}/v1/memory/archive`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: id }),
+    }).catch(() => {});
+
     try {
       const response = await fetch(`${BASE_URL}/v1/sessions/${id}`, {
         method: 'DELETE',

@@ -234,6 +234,37 @@ Call with skill_name and optionally user_request. The skill will provide detaile
                 tool["description"] = "Execute a skill (skill loader not installed)"
                 break
 
+    # Dynamically adjust memory_search tool based on AgentCore config
+    try:
+        from api.services.memory_sync import load_memory_config
+        mem_cfg = load_memory_config()
+        agentcore_enabled = mem_cfg.get("memory_enabled", False) and bool(mem_cfg.get("memory_id", ""))
+    except Exception:
+        agentcore_enabled = False
+
+    for tool in tools:
+        if tool["name"] == "memory_search":
+            if agentcore_enabled:
+                # Full three-tier description (already the default in schemas.py)
+                pass
+            else:
+                # Local-only: remove longterm scope, simplify description
+                tool["description"] = """Search your persistent memory files (memory/*.md, MEMORY.md).
+
+**When to use this tool:**
+- Before answering questions about prior conversations, decisions, preferences, or context from previous sessions
+- When the user references something discussed "before", "last time", "yesterday", etc.
+- When you need to recall stored facts, todos, or project context
+
+Note: MEMORY.md and the last 2 days of daily logs are already injected into your system prompt. Use this tool for searching **older** memory files or when you need targeted recall."""
+                tool["input_schema"]["properties"]["scope"] = {
+                    "type": "string",
+                    "description": "Search scope (only 'recent' available — AgentCore not configured)",
+                    "enum": ["recent"],
+                    "default": "recent"
+                }
+            break
+
     # Add MCP tools (lazy loading pattern with caching)
     try:
         from api.services.tool_registry import get_tool_registry

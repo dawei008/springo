@@ -378,32 +378,6 @@ task(
 
 The task runs in a separate session and results are returned when complete.
 
-## Long-Term Memory (LTM)
-
-You have access to the user's long-term memory stored in AgentCore. This contains:
-- **User preferences**: interests, habits, preferred tools, languages, and working style
-- **Conversation facts**: projects they work on, technical decisions, names, key information shared previously
-- **Conversation summaries**: past discussion topics and outcomes
-- **Episodic records**: structured interaction history
-
-**WHEN to retrieve memory** (proactively, without being asked):
-- At the START of a new conversation — retrieve user preferences to personalize your responses
-- When the user asks about past discussions ("你还记得...", "之前我们讨论过...", "上次...")
-- When the user asks to find information they shared before
-- When tasks benefit from knowing user preferences (e.g., formatting style, language preference, project context)
-- When user asks for "最新新闻"/"latest news" — check memory for their interests first
-
-**HOW to retrieve memory** (direct command, no skill activation needed):
-```
-execute_command("python ~/.springo/skills/memory/scripts/memory.py search '查询关键词'")
-execute_command("python ~/.springo/skills/memory/scripts/memory.py get USER_PREFERENCE --limit 5")
-execute_command("python ~/.springo/skills/memory/scripts/memory.py get SEMANTIC --limit 5")
-```
-
-Available strategies: SEMANTIC, USER_PREFERENCE, SUMMARIZATION, EPISODIC
-
-**IMPORTANT**: DO NOT fabricate memories. If you cannot retrieve memory or the result is empty, say so honestly.
-
 ## Safety
 
 - Commands are checked for dangerous patterns
