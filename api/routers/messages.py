@@ -764,6 +764,11 @@ async def messages_auto_api(
                     # Auto-save after each tool execution iteration
                     _auto_save_session(messages, {"iteration": iteration})
 
+                    # Break loop if ask_user was called — let user respond
+                    if any(t["name"] == "ask_user" for t in tool_uses):
+                        logger.info(f"[Auto] ask_user called at iteration {iteration}, yielding for user reply")
+                        break
+
                 # Save final assistant response (when loop ends without tool_use)
                 if content_blocks:
                     final_assistant = []
@@ -936,7 +941,13 @@ async def messages_auto_api(
 
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": tool_results})
-            
+
+                # Break loop if ask_user was called — let user respond
+                if any(t.get("name") == "ask_user" for t in tool_uses):
+                    logger.info(f"[Auto-NS] ask_user called at iteration {iteration}, yielding for user reply")
+                    final_response = bedrock_response
+                    break
+
             if final_response is None:
                 final_response = {"content": [], "stop_reason": "max_iterations", "usage": {"input_tokens": 0, "output_tokens": 0}}
 
