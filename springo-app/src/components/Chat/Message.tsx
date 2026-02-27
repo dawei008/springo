@@ -235,7 +235,7 @@ function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]
   const [collapsed, setCollapsed] = useState(false);
   const [detailTool, setDetailTool] = useState<ToolUseRuntime | null>(null);
   const prevToolCountRef = useRef(0);
-  const wasStreamingRef = useRef(false);
+  const hasCollapsedRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   if (tools.length === 0) return null;
@@ -252,18 +252,23 @@ function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]
   useEffect(() => {
     if (tools.length > prevToolCountRef.current && collapsed && isStreaming) {
       setCollapsed(false);
+      hasCollapsedRef.current = false;
     }
     prevToolCountRef.current = tools.length;
   }, [tools.length, collapsed, isStreaming]);
 
-  // Auto-collapse when streaming ends (entire response complete)
+  // Auto-collapse when streaming ends and all tools are complete
+  // Also handles component remount (mounts with isStreaming=false after sync)
   useEffect(() => {
     if (isStreaming) {
-      wasStreamingRef.current = true;
-    } else if (wasStreamingRef.current && allComplete && tools.length > 0) {
-      // Streaming just ended → collapse after short delay
-      const timer = setTimeout(() => setCollapsed(true), 600);
-      wasStreamingRef.current = false;
+      hasCollapsedRef.current = false;
+      return;
+    }
+    if (allComplete && tools.length > 0 && !hasCollapsedRef.current) {
+      const timer = setTimeout(() => {
+        setCollapsed(true);
+        hasCollapsedRef.current = true;
+      }, 600);
       return () => clearTimeout(timer);
     }
   }, [isStreaming, allComplete, tools.length]);
