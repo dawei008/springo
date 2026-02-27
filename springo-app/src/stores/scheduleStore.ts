@@ -120,6 +120,33 @@ function extractAssistantText(data: Record<string, unknown>): string {
 }
 
 // ---------------------------------------------------------------------------
+// Build prompt with schedule context so the model knows it can signal completion
+// ---------------------------------------------------------------------------
+
+function buildSchedulePrompt(task: ScheduleTask): string {
+  // For one-shot tasks (delay/once), no completion signal needed
+  if (task.scheduleType !== 'cron') {
+    return task.prompt;
+  }
+
+  const runNum = (task.executionCount || 0) + 1;
+  const maxInfo = task.maxExecutions ? ` of ${task.maxExecutions}` : '';
+
+  const header = [
+    `[Scheduled Task Context]`,
+    `Task: "${task.name}" (#${task.num})`,
+    `Type: ${task.scheduleType} (${task.scheduleValue}), Run: ${runNum}${maxInfo}`,
+    ``,
+    `If the task's purpose has been fulfilled, the condition is already met, ` +
+    `or this task is no longer needed, include the marker [SCHEDULE_COMPLETE] ` +
+    `at the end of your response. This will automatically disable the recurring task.`,
+    `---`,
+  ].join('\n');
+
+  return `${header}\n${task.prompt}`;
+}
+
+// ---------------------------------------------------------------------------
 // Execute scheduled task — create a new session and send prompt (like legacy)
 // ---------------------------------------------------------------------------
 
@@ -163,7 +190,7 @@ async function executeTask(taskId: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model,
-        messages: [{ role: 'user', content: task.prompt }],
+        messages: [{ role: 'user', content: buildSchedulePrompt(task) }],
         max_tokens: settings.settings.maxTokens || 4096,
         temperature: settings.settings.temperature || 0.7,
         stream: false,
@@ -189,13 +216,25 @@ async function executeTask(taskId: string) {
       assistantText = `Scheduled task failed: ${errorData}`;
     }
 
+    // Detect [SCHEDULE_COMPLETE] signal from model response
+    const scheduleComplete = assistantText.includes('[SCHEDULE_COMPLETE]');
+    if (scheduleComplete) {
+      assistantText = assistantText.replace(/\s*\[SCHEDULE_COMPLETE\]\s*/g, '').trimEnd();
+      console.log(`[Scheduler] Task ${taskId} signaled SCHEDULE_COMPLETE by model`);
+    }
+
     // Inject messages into the source session's chat runtime
     // Use compact format: task name + short prompt preview (full prompt is stored in the task)
     const chatStore = useChatStore.getState();
+    const runNum = (task.executionCount || 0) + 1;
     const promptPreview = task.prompt.length > 100
       ? task.prompt.slice(0, 100).replace(/\n/g, ' ') + '...'
       : task.prompt.replace(/\n/g, ' ');
-    const userContent = `⏰ **Scheduled: ${task.name}** (#${task.num}, run ${(task.executionCount || 0) + 1}${task.maxExecutions ? '/' + task.maxExecutions : ''})\n> ${promptPreview}`;
+    let userContent = `⏰ **Scheduled: ${task.name}** (#${task.num}, run ${runNum}${task.maxExecutions ? '/' + task.maxExecutions : ''})`;
+    if (scheduleComplete) {
+      userContent += `\n✅ Task auto-completed: condition fulfilled`;
+    }
+    userContent += `\n> ${promptPreview}`;
 
     chatStore.addMessage(sourceSessionId, {
       role: 'user',
@@ -266,9 +305,9 @@ async function executeTask(taskId: string) {
       t.executionCount = (t.executionCount || 0) + 1;
       t.executionHistory = [...(t.executionHistory || []), record].slice(-20); // keep last 20
 
-      const isComplete = t.maxExecutions && t.executionCount >= t.maxExecutions;
+      const isMaxReached = t.maxExecutions && t.executionCount >= t.maxExecutions;
 
-      if (t.scheduleType === 'cron' && isComplete) {
+      if (t.scheduleType === 'cron' && (isMaxReached || scheduleComplete)) {
         t.status = 'completed';
         t.completedAt = Date.now();
         stopTimer(taskId);
