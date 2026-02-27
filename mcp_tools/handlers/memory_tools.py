@@ -214,18 +214,41 @@ def _search_longterm_memory(query: str, max_results: int = 5) -> List[Dict[str, 
         return []
 
 
+def _list_memory_files() -> Dict[str, Any]:
+    """List all local memory files with metadata."""
+    mgr = _get_memory_file_manager()
+    if mgr is None:
+        return {"files": [], "error": "Memory file manager not initialized"}
+
+    files = mgr.list_files()
+    # Also check MEMORY.md
+    memory_md_exists = os.path.isfile(mgr.memory_md_path)
+    memory_md_size = os.path.getsize(mgr.memory_md_path) if memory_md_exists else 0
+
+    return {
+        "scope": "list",
+        "memory_md": {"exists": memory_md_exists, "size": memory_md_size, "path": "MEMORY.md"},
+        "files": files,
+        "count": len(files),
+        "base_path": mgr.workspace_dir,
+    }
+
+
 def memory_search(query: str, scope: str = "auto", max_results: int = 10, days: int = None) -> Dict[str, Any]:
     """Search memory across local files and AgentCore.
 
     Args:
-        query: Search query text
-        scope: "auto" (recent first, then longterm), "recent" (local files only), "longterm" (AgentCore only)
+        query: Search query text (ignored when scope='list')
+        scope: "auto", "recent", "longterm", or "list"
         max_results: Maximum results to return
         days: Override retention days for recent search
 
     Returns:
         Dict with results list, scope used, and metadata
     """
+    if scope == "list":
+        return _list_memory_files()
+
     if not query or not query.strip():
         return {"results": [], "scope": scope, "error": "Empty query"}
 

@@ -536,25 +536,29 @@ Cron format: "minute hour day month weekday"
         "name": "memory_search",
         "description": """Search your persistent memory across local memory files and long-term AgentCore storage.
 
-**Three-tier retrieval:**
+**Scopes:**
 - `recent`: Search memory/*.md files (within retention window, default 7 days) — fast, local grep
 - `longterm`: Search AgentCore Memory (older than retention window) — slower, semantic search
 - `auto` (default): Search recent first, then longterm if not enough results
+- `list`: List all local memory files with metadata (ignores query)
 
 **When to use this tool:**
 - Before answering questions about prior conversations, decisions, preferences, or context from previous sessions
 - When the user references something discussed "before", "last time", "yesterday", etc.
 - When you need to recall stored facts, todos, or project context
+- When you want to see what memory files exist: use scope="list"
+
+Memory files are stored at `~/.springo/workspace/memory/`. **NEVER** use list_directory, glob, or read_file to browse memory directories — always use this tool or memory_get.
 
 Note: MEMORY.md and the last 2 days of daily logs are already injected into your system prompt. Use this tool for searching **older** memory files or when you need targeted recall.""",
         "input_schema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search query text"},
+                "query": {"type": "string", "description": "Search query text (ignored when scope='list')"},
                 "scope": {
                     "type": "string",
-                    "description": "Search scope: 'auto' (default), 'recent' (local files only), 'longterm' (AgentCore only)",
-                    "enum": ["auto", "recent", "longterm"],
+                    "description": "Search scope: 'auto' (default), 'recent' (local files only), 'longterm' (AgentCore only), 'list' (list all memory files)",
+                    "enum": ["auto", "recent", "longterm", "list"],
                     "default": "auto"
                 },
                 "max_results": {"type": "integer", "description": "Maximum results to return (default: 10)", "default": 10},
@@ -565,7 +569,10 @@ Note: MEMORY.md and the last 2 days of daily logs are already injected into your
     },
     {
         "name": "memory_get",
-        "description": "Read a specific memory file by path. Use after memory_search to read full content of a matched file. Only .md files within the workspace are accessible.",
+        "description": """Read a specific memory file by path. Use after memory_search to read full content of a matched file.
+
+Base path: `~/.springo/workspace/`. Pass relative paths like 'MEMORY.md' or 'memory/2026-02-26.md'.
+**NEVER** use read_file or execute_command to read memory files — always use this tool.""",
         "input_schema": {
             "type": "object",
             "properties": {

@@ -259,8 +259,8 @@ Call with skill_name and optionally user_request. The skill will provide detaile
 Note: MEMORY.md and the last 2 days of daily logs are already injected into your system prompt. Use this tool for searching **older** memory files or when you need targeted recall."""
                 tool["input_schema"]["properties"]["scope"] = {
                     "type": "string",
-                    "description": "Search scope (only 'recent' available — AgentCore not configured)",
-                    "enum": ["recent"],
+                    "description": "Search scope: 'recent' (local files), 'list' (list all files). AgentCore not configured.",
+                    "enum": ["recent", "list"],
                     "default": "recent"
                 }
             break
