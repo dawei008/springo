@@ -162,6 +162,25 @@ class SessionStore:
             logger.error(f"Failed to load session {session_id}: {e}")
             return {"error": str(e)}
 
+    def get_session_metadata(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Read just the first-line metadata entry from a session JSONL file.
+
+        Returns the metadata dict, or None if the session doesn't exist.
+        """
+        session_file = self.get_session_path(session_id)
+        if not os.path.exists(session_file):
+            return None
+        try:
+            with open(session_file, 'r', encoding='utf-8') as f:
+                first_line = f.readline().strip()
+            if first_line:
+                entry = json.loads(first_line)
+                if entry.get("type") == "metadata":
+                    return entry
+        except Exception as e:
+            logger.warning(f"Failed to read metadata for {session_id}: {e}")
+        return None
+
     def update_metadata(
         self,
         session_id: str,

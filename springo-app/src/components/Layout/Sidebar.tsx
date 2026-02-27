@@ -34,12 +34,14 @@ function ConversationContextMenu({
   onRename,
   onDelete,
   onExport,
+  onCopyId,
 }: {
   menu: ContextMenuState;
   onClose: () => void;
   onRename: () => void;
   onDelete: () => void;
   onExport: () => void;
+  onCopyId: () => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -92,6 +94,16 @@ function ConversationContextMenu({
           <line x1="12" y1="15" x2="12" y2="3" />
         </svg>
         Export
+      </div>
+      <div
+        className="conv-context-menu-item"
+        onClick={(e) => { e.stopPropagation(); onCopyId(); }}
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+        </svg>
+        Copy Session ID
       </div>
       <div className="conv-context-menu-divider" />
       <div
@@ -326,6 +338,12 @@ export default function Sidebar() {
     } catch (err) {
       console.error('Export failed:', err);
     }
+  }, [contextMenu, closeContextMenu]);
+
+  const handleContextCopyId = useCallback(() => {
+    const id = contextMenu.sessionId;
+    closeContextMenu();
+    navigator.clipboard.writeText(id).catch(() => {});
   }, [contextMenu, closeContextMenu]);
 
   const handleAddFolder = useCallback(async () => {
@@ -675,6 +693,7 @@ export default function Sidebar() {
         onRename={handleContextRename}
         onDelete={handleContextDelete}
         onExport={handleContextExport}
+        onCopyId={handleContextCopyId}
       />
 
       {/* Sidebar footer */}

@@ -267,31 +267,41 @@ async def messages_auto_api(
                     try:
                         import re
                         store = get_session_store()
-                        # Generate title from last user text message
-                        title = ""
-                        for m in reversed(msgs):
-                            if m.get("role") == "user":
-                                content = m.get("content", "")
-                                if isinstance(content, str) and content:
-                                    # Strip injected time prefix: [Current time: ...]\n\n
-                                    clean = re.sub(r'^\[Current time:[^\]]*\]\s*', '', content)
-                                    # Strip skill-wrapped content: <skill name="xxx">...</skill>\n\nUser request: ...
-                                    skill_match = re.match(r'^<skill\s+name="([^"]+)">[\s\S]*?</skill>\s*', clean)
-                                    if skill_match:
-                                        after_skill = clean[skill_match.end():]
-                                        user_req = re.sub(r'^User request:\s*', '', after_skill, flags=re.IGNORECASE)
-                                        user_req = re.sub(r'\s*Please follow the skill instructions above.*$', '', user_req, flags=re.DOTALL).strip()
-                                        clean = f"/{skill_match.group(1)} {user_req}" if user_req else f"/{skill_match.group(1)}"
-                                    if clean:
-                                        title = clean[:30] + ("..." if len(clean) > 30 else "")
-                                    break
-                                elif isinstance(content, list):
-                                    # tool_result messages - skip
-                                    continue
-                        meta = {
-                            "title": title or "New Chat",
-                            "tokens": count_messages_tokens(msgs),
-                        }
+
+                        # Check if user has manually set a custom title — don't overwrite it
+                        existing_meta = store.get_session_metadata(session_id)
+                        has_custom_title = existing_meta.get("isCustomTitle", False) if existing_meta else False
+
+                        meta: dict = {}
+                        if has_custom_title:
+                            # Preserve user-defined title
+                            meta["title"] = existing_meta.get("title", "New Chat")
+                            meta["isCustomTitle"] = True
+                        else:
+                            # Generate title from last user text message
+                            title = ""
+                            for m in reversed(msgs):
+                                if m.get("role") == "user":
+                                    content = m.get("content", "")
+                                    if isinstance(content, str) and content:
+                                        # Strip injected time prefix: [Current time: ...]\n\n
+                                        clean = re.sub(r'^\[Current time:[^\]]*\]\s*', '', content)
+                                        # Strip skill-wrapped content: <skill name="xxx">...</skill>\n\nUser request: ...
+                                        skill_match = re.match(r'^<skill\s+name="([^"]+)">[\s\S]*?</skill>\s*', clean)
+                                        if skill_match:
+                                            after_skill = clean[skill_match.end():]
+                                            user_req = re.sub(r'^User request:\s*', '', after_skill, flags=re.IGNORECASE)
+                                            user_req = re.sub(r'\s*Please follow the skill instructions above.*$', '', user_req, flags=re.DOTALL).strip()
+                                            clean = f"/{skill_match.group(1)} {user_req}" if user_req else f"/{skill_match.group(1)}"
+                                        if clean:
+                                            title = clean[:30] + ("..." if len(clean) > 30 else "")
+                                        break
+                                    elif isinstance(content, list):
+                                        # tool_result messages - skip
+                                        continue
+                            meta["title"] = title or "New Chat"
+
+                        meta["tokens"] = count_messages_tokens(msgs)
                         if extra_meta:
                             meta.update(extra_meta)
                         store.save_session_complete(session_id, msgs, metadata=meta)
@@ -907,23 +917,32 @@ async def messages_auto_api(
             if session_id:
                 try:
                     store = get_session_store()
-                    title = ""
-                    # Generate title from first user message
-                    for m in messages:
-                        if m.get("role") == "user":
-                            c = m.get("content", "")
-                            if isinstance(c, str):
-                                title = c[:50]
-                            elif isinstance(c, list):
-                                for b in c:
-                                    if b.get("type") == "text":
-                                        title = b.get("text", "")[:50]
-                                        break
-                            break
-                    store.save_session_complete(session_id, messages, metadata={
-                        "title": title or "Scheduled Task",
-                        "iteration": iteration,
-                    })
+                    # Check if user has manually set a custom title
+                    existing_meta = store.get_session_metadata(session_id)
+                    has_custom_title = existing_meta.get("isCustomTitle", False) if existing_meta else False
+
+                    save_meta: dict = {}
+                    if has_custom_title:
+                        save_meta["title"] = existing_meta.get("title", "Scheduled Task")
+                        save_meta["isCustomTitle"] = True
+                    else:
+                        title = ""
+                        # Generate title from first user message
+                        for m in messages:
+                            c = m.get("content", "") if isinstance(m, dict) else ""
+                            role = m.get("role", "") if isinstance(m, dict) else ""
+                            if role == "user":
+                                if isinstance(c, str):
+                                    title = c[:50]
+                                elif isinstance(c, list):
+                                    for b in c:
+                                        if isinstance(b, dict) and b.get("type") == "text":
+                                            title = b.get("text", "")[:50]
+                                            break
+                                break
+                        save_meta["title"] = title or "Scheduled Task"
+                    save_meta["iteration"] = iteration
+                    store.save_session_complete(session_id, messages, metadata=save_meta)
                     logger.info(f"Non-streaming session {session_id} saved with {len(messages)} messages")
                 except Exception as e:
                     logger.error(f"Failed to save non-streaming session {session_id}: {e}")
