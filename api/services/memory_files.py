@@ -203,12 +203,21 @@ class MemoryFileManager:
             "The following is your persistent memory from previous sessions. "
             "Use this context to maintain continuity.\n\n"
             + "\n\n".join(parts)
-            + "\n\n**Memory retrieval rules:**\n"
-            "- Use the `memory_search` tool to search for past conversations, decisions, or context.\n"
-            "- Use the `memory_get` tool to read a specific memory file.\n"
-            "- **NEVER** browse `~/.springo/sessions/` JSONL files directly — session files are internal storage, not a search interface.\n"
-            "- **NEVER** use `list_directory`, `glob`, `read_file`, or `execute_command` to scan session directories for memory recall.\n"
-            "- If `memory_search` returns no results, tell the user honestly — do not attempt to manually dig through raw session data.\n"
+            + "\n\n**Memory tools:**\n"
+            "- `memory_search` — Search past conversations, decisions, or context.\n"
+            "- `memory_get` — Read a specific memory file.\n"
+            "- `memory_write(target=\"daily\")` — Append a note to today's daily log. Use for session observations, decisions, todos, running context.\n"
+            "- `memory_write(target=\"longterm\")` — Append to MEMORY.md. Use for durable facts that should persist across all sessions: user preferences, project architecture, coding conventions.\n"
+            "\n**When to proactively write memory:**\n"
+            "- User says \"remember this\", \"note that\", \"don't forget\" → write immediately.\n"
+            "- You discover an important user preference, coding style, or project convention → `memory_write(target=\"longterm\")`.\n"
+            "- You make a significant decision, find a key solution, or complete a major task → `memory_write(target=\"daily\")`.\n"
+            "- You learn something that would be useful in future sessions → choose daily (transient) or longterm (durable).\n"
+            "- Do NOT write routine chitchat or ephemeral task details.\n"
+            "\n**Rules:**\n"
+            "- **NEVER** browse `~/.springo/sessions/` JSONL files — use memory tools instead.\n"
+            "- **NEVER** use `list_directory`, `glob`, `read_file` to scan session directories.\n"
+            "- If `memory_search` returns no results, tell the user honestly.\n"
         )
 
 

@@ -4,19 +4,22 @@ Unit tests for memory_archiver (api/services/memory_archiver.py)
 Tests cover:
 - Reading recent messages from JSONL session files
 - Fact extraction archive_session flow (model call + daily log write)
+- Longterm memory distillation (daily logs → MEMORY.md)
 """
 import json
 import os
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from api.services.memory_archiver import (
     _read_recent_messages,
     _build_messages_text,
     archive_session,
-    DEFAULT_MESSAGE_COUNT,
+    distill_longterm_memory,
+    DISTILL_COOLDOWN_HOURS,
 )
+from api.services.memory_files import MemoryFileManager
 
 
 @pytest.fixture
@@ -310,3 +313,90 @@ class TestArchiveSession:
 
         assert result["archived"] is False
         assert "Bedrock timeout" in result["error"]
+
+
+class TestDistillLongtermMemory:
+    """Test distill_longterm_memory function."""
+
+    @pytest.mark.asyncio
+    async def test_no_manager_returns_error(self):
+        with patch("api.services.memory_files.get_memory_file_manager", return_value=None):
+            result = await distill_longterm_memory()
+        assert result["distilled"] is False
+        assert result["reason"] == "memory_file_manager_not_initialized"
+
+    @pytest.mark.asyncio
+    async def test_cooldown_skips(self, tmp_path):
+        """If MEMORY.md was recently updated, distillation should be skipped."""
+        ws = str(tmp_path / "ws")
+        mgr = MemoryFileManager(workspace_path=ws, retention_days=7)
+        # Write MEMORY.md so it has a recent mtime
+        mgr.write_longterm("# Existing memory")
+
+        with patch("api.services.memory_files.get_memory_file_manager", return_value=mgr):
+            result = await distill_longterm_memory()
+        assert result["distilled"] is False
+        assert result["reason"] == "cooldown"
+
+    @pytest.mark.asyncio
+    async def test_no_daily_logs_skips(self, tmp_path):
+        """If no daily logs exist, distillation should be skipped."""
+        ws = str(tmp_path / "ws")
+        mgr = MemoryFileManager(workspace_path=ws, retention_days=7)
+        # No MEMORY.md, no daily logs → should skip (no daily logs)
+
+        with patch("api.services.memory_files.get_memory_file_manager", return_value=mgr):
+            result = await distill_longterm_memory()
+        assert result["distilled"] is False
+        assert result["reason"] == "no_daily_logs"
+
+    @pytest.mark.asyncio
+    async def test_successful_distillation(self, tmp_path):
+        """Model distills daily logs into MEMORY.md."""
+        ws = str(tmp_path / "ws")
+        mgr = MemoryFileManager(workspace_path=ws, retention_days=7)
+        today = datetime.now().strftime("%Y-%m-%d")
+        mgr.append_daily("- [preference] User likes dark mode\n- [context] Project uses FastAPI", date=today)
+        # No MEMORY.md yet → no cooldown
+
+        distilled_content = "## Preferences\n- User likes dark mode\n\n## Project\n- Uses FastAPI"
+        mock_bedrock = AsyncMock()
+        mock_bedrock.invoke_model.return_value = {
+            "content": [{"type": "text", "text": distilled_content}]
+        }
+
+        with patch("api.services.memory_files.get_memory_file_manager", return_value=mgr), \
+             patch("api.services.bedrock.get_bedrock_service", return_value=mock_bedrock), \
+             patch("api.config.get_settings") as mock_settings, \
+             patch("api.services.model_registry.get_model_info", return_value={"api_format": "anthropic"}), \
+             patch("api.services.model_registry.get_bedrock_id", return_value="us.anthropic.claude-haiku"):
+            mock_settings.return_value.compact_model_id = "claude-haiku-4-5-20251001"
+            result = await distill_longterm_memory()
+
+        assert result["distilled"] is True
+        assert result["chars"] > 0
+        # Verify MEMORY.md was written
+        assert "dark mode" in mgr.read_memory_md()
+        assert "FastAPI" in mgr.read_memory_md()
+
+    @pytest.mark.asyncio
+    async def test_model_error_handled(self, tmp_path):
+        """If model call fails, distillation returns error gracefully."""
+        ws = str(tmp_path / "ws")
+        mgr = MemoryFileManager(workspace_path=ws, retention_days=7)
+        today = datetime.now().strftime("%Y-%m-%d")
+        mgr.append_daily("some notes", date=today)
+
+        mock_bedrock = AsyncMock()
+        mock_bedrock.invoke_model.side_effect = Exception("model error")
+
+        with patch("api.services.memory_files.get_memory_file_manager", return_value=mgr), \
+             patch("api.services.bedrock.get_bedrock_service", return_value=mock_bedrock), \
+             patch("api.config.get_settings") as mock_settings, \
+             patch("api.services.model_registry.get_model_info", return_value={"api_format": "anthropic"}), \
+             patch("api.services.model_registry.get_bedrock_id", return_value="us.anthropic.claude-haiku"):
+            mock_settings.return_value.compact_model_id = "claude-haiku-4-5-20251001"
+            result = await distill_longterm_memory()
+
+        assert result["distilled"] is False
+        assert "model error" in result["error"]
