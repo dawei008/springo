@@ -39,8 +39,8 @@ DEFAULT_MEMORY_CONFIG = {
     "workspace_path": "~/.springo/workspace",
     "retention_days": 7,
     "auto_archive_on_reset": True,
-    # File sync worker (Plan B)
-    "file_sync_interval": 900,       # 15 min between scans
+    # File sync worker (Plan B) — syncs memory files to AgentCore
+    "file_sync_interval": 86400,     # 24h between scheduled scans
     "file_sync_initial_delay": 60,   # 1 min delay before first scan
 }
 
@@ -250,10 +250,20 @@ class MemorySyncManager:
     # File-based periodic sync (Plan B checkpoint worker)
     # -----------------------------------------------------------------------
 
+    def trigger_file_sync(self):
+        """Trigger an immediate file sync (called after distillation, etc.)."""
+        if not self._memory_client:
+            return
+        try:
+            self._sync_changed_files()
+        except Exception as e:
+            logger.warning(f"Triggered file sync failed: {e}")
+
     def _file_sync_worker(self):
         """Periodic worker that syncs changed memory/*.md files to AgentCore.
 
-        Runs every `file_sync_interval` seconds (default 900 = 15 min).
+        Runs every `file_sync_interval` seconds (default 86400 = 24h).
+        Also triggered on-demand after MEMORY.md distillation.
         Uses a checkpoint file to track which files have been synced.
         """
         # Wait a bit before first scan to let the system stabilize
@@ -263,7 +273,7 @@ class MemorySyncManager:
                 return
             time.sleep(1)
 
-        interval = self._config.get("file_sync_interval", 900)  # 15 min
+        interval = self._config.get("file_sync_interval", 86400)  # 24h
         logger.info(f"File sync worker started (interval={interval}s)")
 
         while not self._stop_event.is_set():
@@ -668,7 +678,7 @@ class MemorySyncManager:
             "batch_size": len(self._batch),
             "worker_running": self.worker_thread.is_alive() if self.worker_thread else False,
             "file_sync_running": self.file_sync_thread.is_alive() if self.file_sync_thread else False,
-            "file_sync_interval": self._config.get("file_sync_interval", 900),
+            "file_sync_interval": self._config.get("file_sync_interval", 86400),
             "sync_check_done": self._sync_check_done,
         }
 

@@ -345,6 +345,17 @@ async def distill_longterm_memory() -> Dict[str, Any]:
         # Write distilled content to MEMORY.md (overwrite)
         mgr.write_longterm(response_text.strip())
         logger.info(f"[Distill] MEMORY.md updated ({len(response_text)} chars)")
+
+        # Trigger AgentCore sync for the updated files
+        try:
+            from .memory_sync import get_sync_manager
+            sync_mgr = get_sync_manager()
+            if sync_mgr:
+                sync_mgr.trigger_file_sync()
+                logger.info("[Distill] Triggered AgentCore file sync after distillation")
+        except Exception as e:
+            logger.debug(f"[Distill] AgentCore sync trigger skipped: {e}")
+
         return {"distilled": True, "chars": len(response_text)}
 
     except Exception as e:
