@@ -181,6 +181,62 @@ class SessionStore:
             logger.warning(f"Failed to read metadata for {session_id}: {e}")
         return None
 
+    def append_session_messages(
+        self,
+        session_id: str,
+        new_messages: List[Dict[str, Any]],
+        metadata_updates: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Incrementally append new messages to session JSONL and sync only the delta.
+
+        Unlike save_session_complete which rewrites the entire file, this method:
+        - Appends only new messages (open mode 'a')
+        - Only queues new messages to memory sync (not the full history)
+        - Optionally updates metadata (first-line) without touching messages
+
+        Args:
+            session_id: Session ID
+            new_messages: Only the new messages to append
+            metadata_updates: Optional metadata fields to update (title, tokens, etc.)
+
+        Returns:
+            Dict with success status and counts
+        """
+        session_dir = self.get_session_dir(session_id)
+        session_file = self.get_session_path(session_id)
+
+        if not os.path.exists(session_file):
+            # File doesn't exist yet — fall back to full write
+            return self.save_session_complete(session_id, new_messages, metadata=metadata_updates)
+
+        try:
+            # Append new messages
+            if new_messages:
+                with open(session_file, 'a', encoding='utf-8') as f:
+                    for msg in new_messages:
+                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+
+            # Update metadata if needed (rewrite first line only)
+            if metadata_updates:
+                self.update_metadata(session_id, metadata_updates)
+
+            # Only queue NEW messages to memory sync (not full history)
+            backend = self._get_memory_backend()
+            queued = 0
+            if backend and new_messages:
+                queued = backend.on_conversation(session_id, new_messages)
+
+            return {
+                "success": True,
+                "session_id": session_id,
+                "appended": len(new_messages),
+                "synced": queued,
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to append messages to {session_id}: {e}")
+            return {"error": str(e)}
+
     def update_metadata(
         self,
         session_id: str,

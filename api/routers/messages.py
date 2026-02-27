@@ -260,33 +260,37 @@ async def messages_auto_api(
                 iteration = 0
                 system_extra = ""
 
+                _saved_msg_count = 0  # tracks how many messages have been persisted
+
                 def _auto_save_session(msgs, extra_meta=None):
-                    """Auto-save session to JSONL after each iteration"""
+                    """Auto-save session to JSONL after each iteration.
+
+                    Uses incremental append for subsequent saves to avoid
+                    rewriting the entire file + re-queuing all messages on
+                    every tool call.
+                    """
+                    nonlocal _saved_msg_count
                     if not session_id:
                         return
                     try:
                         import re
                         store = get_session_store()
 
-                        # Check if user has manually set a custom title — don't overwrite it
+                        # Build metadata (title + tokens)
                         existing_meta = store.get_session_metadata(session_id)
                         has_custom_title = existing_meta.get("isCustomTitle", False) if existing_meta else False
 
                         meta: dict = {}
                         if has_custom_title:
-                            # Preserve user-defined title
                             meta["title"] = existing_meta.get("title", "New Chat")
                             meta["isCustomTitle"] = True
                         else:
-                            # Generate title from last user text message
                             title = ""
                             for m in reversed(msgs):
                                 if m.get("role") == "user":
                                     content = m.get("content", "")
                                     if isinstance(content, str) and content:
-                                        # Strip injected time prefix: [Current time: ...]\n\n
                                         clean = re.sub(r'^\[Current time:[^\]]*\]\s*', '', content)
-                                        # Strip skill-wrapped content: <skill name="xxx">...</skill>\n\nUser request: ...
                                         skill_match = re.match(r'^<skill\s+name="([^"]+)">[\s\S]*?</skill>\s*', clean)
                                         if skill_match:
                                             after_skill = clean[skill_match.end():]
@@ -297,14 +301,24 @@ async def messages_auto_api(
                                             title = clean[:30] + ("..." if len(clean) > 30 else "")
                                         break
                                     elif isinstance(content, list):
-                                        # tool_result messages - skip
                                         continue
                             meta["title"] = title or "New Chat"
 
                         meta["tokens"] = count_messages_tokens(msgs)
                         if extra_meta:
                             meta.update(extra_meta)
-                        store.save_session_complete(session_id, msgs, metadata=meta)
+
+                        if _saved_msg_count == 0:
+                            # First save: full write with metadata + all messages
+                            store.save_session_complete(session_id, msgs, metadata=meta)
+                            _saved_msg_count = len(msgs)
+                        else:
+                            # Incremental: only append new messages since last save
+                            new_msgs = msgs[_saved_msg_count:]
+                            store.append_session_messages(
+                                session_id, new_msgs, metadata_updates=meta,
+                            )
+                            _saved_msg_count = len(msgs)
                     except Exception as e:
                         logger.error(f"Auto-save session {session_id} failed: {e}")
 
@@ -406,6 +420,8 @@ async def messages_auto_api(
                                 'compacted': True,
                                 'tokens': count_messages_tokens(messages),
                             })
+                            # Reset saved count — compaction rewrote the file
+                            _saved_msg_count = len(messages)
                             logger.info(f"Session {session_id} persisted with compacted messages (sync reset)")
                         except Exception as e:
                             logger.error(f"Failed to persist compacted session: {e}")
@@ -499,6 +515,7 @@ async def messages_auto_api(
                                 result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)
                                 if result.get("success") and not result.get("skipped"):
                                     messages = result["messages"]
+                                    _saved_msg_count = 0  # Reset — messages replaced by compaction
                                     logger.info(f"[Context] Emergency compaction: {len(messages)} msgs, {count_messages_tokens(messages):,} tokens")
                                     yield SSEEventBuilder.context_compact_done(0, len(messages), count_messages_tokens(messages))
                             except Exception as _compact_err:
