@@ -342,8 +342,9 @@ async def distill_longterm_memory() -> Dict[str, Any]:
         if not response_text or not response_text.strip():
             return {"distilled": False, "reason": "empty_response"}
 
-        # Write distilled content to MEMORY.md (overwrite)
-        mgr.write_longterm(response_text.strip())
+        # Write distilled content to MEMORY.md (overwrite, hard cap 2000 chars)
+        distilled = response_text.strip()[:2000]
+        mgr.write_longterm(distilled)
         logger.info(f"[Distill] MEMORY.md updated ({len(response_text)} chars)")
 
         # Trigger AgentCore sync for the updated files
