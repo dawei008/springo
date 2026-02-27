@@ -30,14 +30,6 @@ class SessionStore:
         """确保会话目录存在"""
         os.makedirs(self.sessions_dir, exist_ok=True)
 
-    def _get_memory_backend(self):
-        """获取当前 memory backend（通过抽象层，解耦具体实现）"""
-        try:
-            from .memory_backend import get_memory_backend
-            return get_memory_backend()
-        except Exception:
-            return None
-
     def get_session_dir(self, session_id: str) -> str:
         """获取会话目录路径"""
         return os.path.join(self.sessions_dir, session_id)
@@ -220,17 +212,11 @@ class SessionStore:
             if metadata_updates:
                 self.update_metadata(session_id, metadata_updates)
 
-            # Only queue NEW messages to memory sync (not full history)
-            backend = self._get_memory_backend()
-            queued = 0
-            if backend and new_messages:
-                queued = backend.on_conversation(session_id, new_messages)
-
+            # Plan B: per-message sync removed — archives handle AgentCore sync
             return {
                 "success": True,
                 "session_id": session_id,
                 "appended": len(new_messages),
-                "synced": queued,
             }
 
         except Exception as e:
@@ -366,12 +352,7 @@ class SessionStore:
             with open(session_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-            # Trigger memory backend
-            backend = self._get_memory_backend()
-            if backend:
-                actor = "assistant" if message.get("role") == "assistant" else "user"
-                backend.on_message(session_id, message, actor)
-
+            # Plan B: per-message sync removed — archives handle AgentCore sync
             return {"success": True, "session_id": session_id}
 
         except Exception as e:
@@ -403,17 +384,11 @@ class SessionStore:
                     }
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-            # Trigger memory backend (batch)
-            backend = self._get_memory_backend()
-            queued = 0
-            if backend:
-                queued = backend.on_conversation(session_id, messages)
-
+            # Plan B: per-message sync removed — archives handle AgentCore sync
             return {
                 "success": True,
                 "session_id": session_id,
                 "message_count": len(messages),
-                "synced": queued,
             }
 
         except Exception as e:
@@ -461,25 +436,7 @@ class SessionStore:
                 for msg in messages:
                     f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
-            # 重置 sync state
-            sync_state_file = os.path.join(session_dir, ".sync_state.json")
-            try:
-                reset_state = {
-                    "last_synced_index": -1,
-                    "last_sync_time": datetime.now().isoformat(),
-                    "total_synced": 0,
-                    "reset_reason": "session_complete_rewrite",
-                }
-                with open(sync_state_file, 'w') as f:
-                    json.dump(reset_state, ensure_ascii=False, fp=f, indent=2)
-            except Exception as e:
-                logger.warning(f"Failed to reset sync state for {session_id}: {e}")
-
-            # 重新队列所有消息到 memory backend
-            backend = self._get_memory_backend()
-            queued = 0
-            if backend:
-                queued = backend.on_conversation(session_id, messages)
+            # Plan B: per-message sync removed — archives handle AgentCore sync
 
             file_size = os.path.getsize(session_file)
             if file_size > MAX_SESSION_FILE_HARD_LIMIT:
@@ -492,7 +449,6 @@ class SessionStore:
                 "session_id": session_id,
                 "message_count": len(messages),
                 "file_size": file_size,
-                "synced": queued,
             }
 
         except Exception as e:

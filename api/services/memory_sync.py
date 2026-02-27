@@ -156,8 +156,10 @@ class MemorySyncManager:
         self._stop_event.clear()
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
-        self.sync_check_thread = threading.Thread(target=self._sync_check_worker, daemon=True)
-        self.sync_check_thread.start()
+        # Plan B: disable startup full-rescan — archives handle sync now.
+        # _sync_check_worker scans ALL sessions on startup and re-queues everything,
+        # which caused repeated crashes from upload flooding.
+        self._sync_check_done = True
         return True
 
     def stop(self):
@@ -181,6 +183,58 @@ class MemorySyncManager:
             return True
         except Exception as e:
             logger.error(f"Failed to queue message: {e}")
+            return False
+
+    def sync_archive(self, session_id: str, messages: List[Dict], slug: str = "") -> bool:
+        """Sync curated archive content to AgentCore Memory (Plan B).
+
+        Called by memory_archiver after writing a memory/*.md file.
+        Sends conversation as a single create_event batch instead of per-message sync.
+
+        Args:
+            session_id: Original session ID
+            messages: List of {"role": "user/assistant", "text": "..."} from archiver
+            slug: Archive slug for logging
+
+        Returns:
+            True if synced successfully, False otherwise
+        """
+        if not self._initialized or not self._memory_client:
+            return False
+
+        try:
+            payload = []
+            for msg in messages:
+                role = msg.get("role", "user").upper()
+                if role not in ("USER", "ASSISTANT"):
+                    role = "USER"
+                text = msg.get("text", "")
+                if text:
+                    payload.append({
+                        "conversational": {"content": {"text": text}, "role": role}
+                    })
+
+            if not payload:
+                return False
+
+            # Use a distinct sessionId prefix so archive events don't mix with any
+            # remaining per-message events from before Plan B migration
+            archive_session_id = f"archive-{session_id}"
+
+            self._memory_client.create_event(
+                memoryId=self.memory_id,
+                actorId="springo",
+                sessionId=archive_session_id,
+                eventTimestamp=datetime.utcnow(),
+                payload=payload,
+            )
+            logger.info(
+                f"Archive synced to AgentCore: {len(payload)} events "
+                f"(session={session_id}, slug={slug})"
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to sync archive to AgentCore: {e}")
             return False
 
     def queue_conversation(self, session_id: str, messages: List[Dict]) -> int:

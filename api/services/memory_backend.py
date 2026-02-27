@@ -35,16 +35,29 @@ class MemoryBackend(Protocol):
 
 
 class AgentCoreBackend:
-    """Wraps the existing MemorySyncManager as a MemoryBackend."""
+    """Wraps the existing MemorySyncManager as a MemoryBackend.
+
+    Plan B: per-message sync (on_message/on_conversation) is now a no-op.
+    Only archive-based sync via sync_archive() feeds AgentCore Memory.
+    """
 
     def __init__(self, sync_manager):
         self._mgr = sync_manager
 
     def on_message(self, session_id: str, message: Dict, actor: str) -> bool:
-        return self._mgr.queue_message(session_id, message, actor)
+        # Plan B: no-op — archives handle AgentCore sync
+        return True
 
     def on_conversation(self, session_id: str, messages: List[Dict]) -> int:
-        return self._mgr.queue_conversation(session_id, messages)
+        # Plan B: no-op — archives handle AgentCore sync
+        return len(messages)
+
+    def sync_archive(self, session_id: str, messages: List[Dict], slug: str = "") -> bool:
+        """Sync curated archive content to AgentCore Memory (Plan B).
+
+        Called by memory_archiver after writing a memory/*.md file.
+        """
+        return self._mgr.sync_archive(session_id, messages, slug)
 
     def shutdown(self) -> None:
         self._mgr.stop()
