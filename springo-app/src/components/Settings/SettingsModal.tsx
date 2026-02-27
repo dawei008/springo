@@ -470,7 +470,8 @@ export default function SettingsModal() {
 
   // --- Integrations tab: Feishu ---
   async function saveFeishuSettings() {
-    const payload: Record<string, unknown> = { enabled: feishuEnabled, app_id: feishuAppId }
+    const payload: Record<string, unknown> = { enabled: feishuEnabled }
+    if (feishuAppId) payload.app_id = feishuAppId
     if (feishuAppSecret) payload.app_secret = feishuAppSecret
     try {
       await fetch(`${BASE_URL}/v1/config/feishu`, {
