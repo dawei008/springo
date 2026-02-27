@@ -11,6 +11,8 @@ interface SessionState {
   sessions: Conversation[];
   currentSessionId: string | null;
   loading: boolean;
+  /** Session IDs that completed while user was viewing another session */
+  unseenCompletedSessions: Set<string>;
 
   loadSessions: (workingDir?: string) => Promise<void>;
   createSession: (title?: string) => string;
@@ -18,6 +20,8 @@ interface SessionState {
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
   updateSessionStatus: (id: string, status: ConversationStatus) => void;
+  markUnseenCompletion: (id: string) => void;
+  clearUnseenCompletion: (id: string) => void;
   saveSession: (
     id: string,
     messages: unknown[],
@@ -34,6 +38,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   sessions: [],
   currentSessionId: null,
   loading: false,
+  unseenCompletedSessions: new Set<string>(),
 
   loadSessions: async (workingDir?: string) => {
     set({ loading: true });
@@ -144,7 +149,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchSession: (id: string) => {
-    set({ currentSessionId: id });
+    // Clear unseen completion flag when user views this session
+    const unseen = get().unseenCompletedSessions;
+    if (unseen.has(id)) {
+      const next = new Set(unseen);
+      next.delete(id);
+      set({ currentSessionId: id, unseenCompletedSessions: next });
+    } else {
+      set({ currentSessionId: id });
+    }
 
     // Sync the session's working directory to the backend
     const session = get().sessions.find((s) => s.id === id);
@@ -235,6 +248,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         s.id === id ? { ...s, status, updatedAt: Date.now() } : s,
       ),
     }));
+  },
+
+  markUnseenCompletion: (id: string) => {
+    set((state) => {
+      const next = new Set(state.unseenCompletedSessions);
+      next.add(id);
+      return { unseenCompletedSessions: next };
+    });
+  },
+
+  clearUnseenCompletion: (id: string) => {
+    set((state) => {
+      if (!state.unseenCompletedSessions.has(id)) return state;
+      const next = new Set(state.unseenCompletedSessions);
+      next.delete(id);
+      return { unseenCompletedSessions: next };
+    });
   },
 
   saveSession: async (

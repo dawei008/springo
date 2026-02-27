@@ -939,6 +939,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }));
       useSessionStore.getState().updateSessionStatus(convId, 'idle');
 
+      // Mark as unseen completion if user is viewing a different session
+      const { currentSessionId, markUnseenCompletion } = useSessionStore.getState();
+      if (currentSessionId && currentSessionId !== convId) {
+        markUnseenCompletion(convId);
+      }
+
       options.onComplete?.();
     }
   },
@@ -1181,6 +1187,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
       }));
       useSessionStore.getState().updateSessionStatus(convId, 'idle');
+
+      // Mark as unseen completion if user is viewing a different session
+      const { currentSessionId: curId, markUnseenCompletion: markUnseen } = useSessionStore.getState();
+      if (curId && curId !== convId) {
+        markUnseen(convId);
+      }
     }
   },
 

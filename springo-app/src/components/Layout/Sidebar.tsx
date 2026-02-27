@@ -12,6 +12,7 @@ function getStatusTitle(visualStatus: string): string {
     active: 'Active',
     running: 'Running...',
     completed: 'Completed',
+    'completed-unseen': 'Completed (new)',
     error: 'Error',
     compacting: 'Compacting...',
   };
@@ -128,6 +129,7 @@ export default function Sidebar() {
   const switchSession = useSessionStore((s) => s.switchSession);
   const deleteSession = useSessionStore((s) => s.deleteSession);
   const renameSession = useSessionStore((s) => s.renameSession);
+  const unseenCompletedSessions = useSessionStore((s) => s.unseenCompletedSessions);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
 
   // ─── Settings store (workspace) ───
@@ -609,9 +611,11 @@ export default function Sidebar() {
               const isActive = session.id === currentSessionId;
               const isRenaming = renamingId === session.id;
 
-              // Derive visual status: running > compacting > error > active > idle
+              // Derive visual status: running > compacting > error > completed-unseen > active > idle
               let visualStatus: string = rawStatus;
-              if (rawStatus === 'idle' && isActive) {
+              if (rawStatus === 'idle' && unseenCompletedSessions.has(session.id)) {
+                visualStatus = 'completed-unseen';
+              } else if (rawStatus === 'idle' && isActive) {
                 visualStatus = 'active';
               }
 

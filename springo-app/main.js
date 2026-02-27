@@ -128,25 +128,21 @@ let mainWindow;
 let serverProcess = null;
 let serverRestartCount = 0;
 
-// Prevent multiple instances of the Electron app
-// Uses requestSingleInstanceLock only in packaged builds —
-// in dev mode, force-kills leave stale lock files.
-if (app.isPackaged) {
-    const gotTheLock = app.requestSingleInstanceLock();
-    if (!gotTheLock) {
-        console.log('Another instance is already running — quitting.');
-        app.quit();
-    } else {
-        app.on('second-instance', () => {
-            if (mainWindow) {
-                if (mainWindow.isMinimized()) mainWindow.restore();
-                mainWindow.show();
-                mainWindow.focus();
-            } else {
-                createWindow();
-            }
-        });
-    }
+// Prevent multiple instances of the Electron app (both dev and packaged)
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+    console.log('Another instance is already running — quitting.');
+    app.quit();
+} else {
+    app.on('second-instance', () => {
+        if (mainWindow) {
+            if (mainWindow.isMinimized()) mainWindow.restore();
+            mainWindow.show();
+            mainWindow.focus();
+        } else {
+            createWindow();
+        }
+    });
 }
 
 // 服务器配置 - FastAPI on port 8081
