@@ -25,7 +25,7 @@ from ..services.context_manager import (
     prepare_messages_for_api, truncate_tool_results, repair_orphan_tool_uses,
     save_tool_result, save_summary_event,
     split_messages_for_summary, create_summary_messages,
-    check_and_prepare_auto_summary,
+    check_and_prepare_auto_summary, pre_compaction_memory_flush,
     MAX_INLINE_OUTPUT_SIZE,
     RECENT_MESSAGES_TO_KEEP,
 )
@@ -383,6 +383,15 @@ async def messages_auto_api(
                         yield SSEEventBuilder.context_compact('approaching_limit', 'haiku', current_tokens)
                         # Send heartbeat before compaction (compaction calls Bedrock and can take 30+ seconds)
                         yield SSEEventBuilder.heartbeat(0, "context_compact")
+                        # Pre-compaction memory flush: extract key facts before they're lost
+                        try:
+                            old_msgs, _ = split_messages_for_summary(messages, model=current_model)
+                            if old_msgs:
+                                flush_result = await pre_compaction_memory_flush(old_msgs, bedrock_service=bedrock, compact_model=compact_model)
+                                if flush_result.get("flushed"):
+                                    logger.info(f"[MemoryFlush] Saved {flush_result.get('facts_count', 0)} facts before compaction")
+                        except Exception as e:
+                            logger.debug(f"[MemoryFlush] Skipped: {e}")
                         try:
                             original_count = len(messages)
                             result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)
@@ -817,6 +826,15 @@ async def messages_auto_api(
                 ns_limits = get_model_limits(ns_model, extended_context=_ns_ext_ctx)
                 if should_summarize(messages, model=ns_model, extended_context=_ns_ext_ctx):
                     logger.info(f"[Context] Non-stream compact: {count_messages_tokens(messages):,}/{ns_limits['max_context_tokens']:,} tokens")
+                    # Pre-compaction memory flush
+                    try:
+                        old_msgs, _ = split_messages_for_summary(messages, model=ns_model)
+                        if old_msgs:
+                            flush_result = await pre_compaction_memory_flush(old_msgs, bedrock_service=bedrock, compact_model=compact_model)
+                            if flush_result.get("flushed"):
+                                logger.info(f"[MemoryFlush] Saved {flush_result.get('facts_count', 0)} facts before non-stream compaction")
+                    except Exception as e:
+                        logger.debug(f"[MemoryFlush] Skipped: {e}")
                     try:
                         original_count = len(messages)
                         result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)

@@ -731,6 +731,152 @@ async def summarize_context(
 
 
 # ============================================================================
+# Pre-compaction Memory Flush (OpenClaw pattern)
+# ============================================================================
+
+# Flush prompt: ask a fast model to extract key facts from messages about
+# to be compacted, then persist them via memory_write.
+_MEMORY_FLUSH_PROMPT = """You are a memory extraction assistant. The following conversation messages are about to be compacted (summarized and discarded). Your job is to extract any **important facts, decisions, user preferences, or project context** that should be remembered for future sessions.
+
+Rules:
+- Only extract genuinely important information (decisions, preferences, technical choices, key findings)
+- Skip routine chitchat, greetings, and ephemeral task details
+- If there is nothing worth remembering, respond with exactly: NOTHING_TO_REMEMBER
+- Otherwise, respond with a concise Markdown list of facts to remember (max 10 items)
+- Format each item as: `- [category] fact` where category is one of: decision, preference, finding, context, todo
+- Keep each item under 100 characters
+
+Messages to analyze:
+{messages_text}"""
+
+
+async def pre_compaction_memory_flush(
+    messages: List[Dict[str, Any]],
+    bedrock_service=None,
+    compact_model: str = None,
+) -> Dict[str, Any]:
+    """Extract and persist key facts from messages before context compaction.
+
+    This implements the OpenClaw "pre-compaction flush" pattern: before context
+    is compressed, a fast model extracts important facts and writes them to
+    the daily memory log via memory_write.
+
+    Args:
+        messages: Messages that are about to be compacted (the "old" portion)
+        bedrock_service: Bedrock service instance for model calls
+        compact_model: Model to use for extraction (defaults to compact_model from settings)
+
+    Returns:
+        Dict with flush results: {flushed: bool, facts_count: int, error: str?}
+    """
+    if not messages or not bedrock_service:
+        return {"flushed": False, "reason": "no_messages_or_service"}
+
+    # Build text representation of messages (truncated to stay within limits)
+    text_parts = []
+    total_chars = 0
+    MAX_CHARS = 8000  # Keep flush prompt small for fast model
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            # Extract text blocks
+            content = " ".join(
+                b.get("text", "") for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        if not content or not content.strip():
+            continue
+        # Skip tool results (noisy)
+        if role == "tool":
+            continue
+
+        snippet = content.strip()[:500]
+        line = f"[{role}]: {snippet}"
+        if total_chars + len(line) > MAX_CHARS:
+            break
+        text_parts.append(line)
+        total_chars += len(line)
+
+    if not text_parts:
+        return {"flushed": False, "reason": "no_text_content"}
+
+    messages_text = "\n".join(text_parts)
+    flush_prompt = _MEMORY_FLUSH_PROMPT.format(messages_text=messages_text)
+
+    # Call fast model to extract facts
+    try:
+        from ..config import get_settings
+        from .model_registry import get_model_info, get_bedrock_id
+
+        _settings = get_settings()
+        _flush_model = compact_model or _settings.compact_model_id
+
+        # Use anthropic format
+        _model_info = get_model_info(_flush_model)
+        _api_format = "anthropic"
+        if _model_info:
+            _api_format = _model_info.get("api_format", "anthropic")
+
+        _FALLBACK = "claude-haiku-4-5-20251001"
+        if _api_format == "converse":
+            _flush_model = _FALLBACK
+            _api_format = "anthropic"
+
+        _flush_model_id = _flush_model
+        if not _flush_model_id.startswith(("us.", "deepseek.", "minimax.", "moonshotai.", "moonshot.", "qwen.", "zai.")):
+            _flush_model_id = get_bedrock_id(_flush_model)
+
+        flush_body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": 1024,
+            "temperature": 0.2,
+            "messages": [{"role": "user", "content": flush_prompt}],
+        }
+
+        result = await bedrock_service.invoke_model(
+            model_id=_flush_model_id,
+            body=flush_body,
+            api_format=_api_format,
+        )
+
+        # Extract response text
+        response_text = ""
+        if result and isinstance(result, dict):
+            content_blocks = result.get("content", [])
+            if content_blocks and isinstance(content_blocks, list):
+                for block in content_blocks:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        response_text = block["text"]
+                        break
+
+        if not response_text or "NOTHING_TO_REMEMBER" in response_text:
+            logger.info("[MemoryFlush] No important facts to persist")
+            return {"flushed": False, "reason": "nothing_to_remember"}
+
+        # Write extracted facts to daily memory log
+        from mcp_tools.handlers.memory_tools import memory_write
+
+        today = datetime.now().strftime("%Y-%m-%d %H:%M")
+        content_to_write = f"## Pre-compaction flush ({today})\n\n{response_text.strip()}\n"
+        write_result = memory_write(target="daily", content=content_to_write)
+
+        if write_result.get("success"):
+            # Count facts (lines starting with -)
+            facts_count = sum(1 for line in response_text.split("\n") if line.strip().startswith("-"))
+            logger.info(f"[MemoryFlush] Persisted {facts_count} facts to {write_result.get('path')}")
+            return {"flushed": True, "facts_count": facts_count, "path": write_result.get("path")}
+        else:
+            logger.warning(f"[MemoryFlush] memory_write failed: {write_result.get('error')}")
+            return {"flushed": False, "error": write_result.get("error")}
+
+    except Exception as e:
+        logger.warning(f"[MemoryFlush] Failed: {e}")
+        return {"flushed": False, "error": str(e)}
+
+
+# ============================================================================
 # 自动摘要检查
 # ============================================================================
 
