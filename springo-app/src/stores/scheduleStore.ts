@@ -216,10 +216,10 @@ async function executeTask(taskId: string) {
       assistantText = `Scheduled task failed: ${errorData}`;
     }
 
-    // Detect [SCHEDULE_COMPLETE] signal from model response
-    const scheduleComplete = assistantText.includes('[SCHEDULE_COMPLETE]');
+    // Detect [SCHEDULE_COMPLETE] signal at end of line/response (avoid false positives)
+    const scheduleComplete = /\[SCHEDULE_COMPLETE\]\s*$/m.test(assistantText);
     if (scheduleComplete) {
-      assistantText = assistantText.replace(/\s*\[SCHEDULE_COMPLETE\]\s*/g, '').trimEnd();
+      assistantText = assistantText.replace(/\s*\[SCHEDULE_COMPLETE\]\s*$/mg, '').trimEnd();
       console.log(`[Scheduler] Task ${taskId} signaled SCHEDULE_COMPLETE by model`);
     }
 

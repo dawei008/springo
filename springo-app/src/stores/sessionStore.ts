@@ -16,13 +16,16 @@ function archiveSession(sessionId: string) {
   const now = Date.now();
   const last = _recentArchives.get(sessionId);
   if (last && now - last < ARCHIVE_COOLDOWN_MS) return;
-  _recentArchives.set(sessionId, now);
 
   fetch(`${BASE_URL}/v1/memory/archive`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId }),
-  }).catch(() => {});
+  })
+    .then((res) => {
+      if (res.ok) _recentArchives.set(sessionId, Date.now());
+    })
+    .catch(() => {});
 }
 
 interface SessionState {

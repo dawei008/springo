@@ -99,9 +99,9 @@ class MemoryFileManager:
         if not rel_path or ".." in rel_path:
             return {"error": "Invalid path", "text": "", "path": rel_path}
 
-        abs_path = os.path.join(self.workspace_dir, rel_path)
+        abs_path = os.path.realpath(os.path.join(self.workspace_dir, rel_path))
         # Security: must be under workspace and must be .md
-        if not abs_path.startswith(self.workspace_dir) or not abs_path.endswith(".md"):
+        if not abs_path.startswith(os.path.realpath(self.workspace_dir)) or not abs_path.endswith(".md"):
             return {"error": "Path not allowed", "text": "", "path": rel_path}
 
         if not os.path.isfile(abs_path):
