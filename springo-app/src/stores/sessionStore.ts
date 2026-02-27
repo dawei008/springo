@@ -161,6 +161,12 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchSession: (id: string) => {
+    // Archive the session we're leaving (fire-and-forget, 15-min debounce)
+    const oldSessionId = get().currentSessionId;
+    if (oldSessionId && oldSessionId !== id) {
+      archiveSession(oldSessionId);
+    }
+
     // Clear unseen completion flag when user views this session
     const unseen = get().unseenCompletedSessions;
     if (unseen.has(id)) {
