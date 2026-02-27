@@ -190,10 +190,13 @@ class MemoryFileManager:
         if memory_md.strip():
             parts.append(f"## Long-term Memory (MEMORY.md)\n\n{memory_md.strip()}")
 
-        # Recent daily logs (today + yesterday)
+        # Recent daily logs (today + yesterday), capped to limit token cost
         recent = self.read_recent_dailies(days=2)
         if recent.strip():
-            parts.append(f"## Recent Memory Notes\n\n{recent.strip()}")
+            trimmed = recent.strip()
+            if len(trimmed) > 2000:
+                trimmed = trimmed[:2000] + "\n\n... (truncated)"
+            parts.append(f"## Recent Memory Notes\n\n{trimmed}")
 
         if not parts:
             return ""

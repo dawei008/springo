@@ -8,7 +8,7 @@ import { useSettingsStore } from '@/stores/settingsStore';
 const BASE_URL = 'http://127.0.0.1:8081';
 
 /** Dedup: skip if same session was archived within cooldown window. */
-const ARCHIVE_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const ARCHIVE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 const _recentArchives = new Map<string, number>();
 
 /** Fire-and-forget: archive a session's messages to memory daily log. */
@@ -161,12 +161,6 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   switchSession: (id: string) => {
-    // Archive the session we're leaving (fire-and-forget)
-    const oldSessionId = get().currentSessionId;
-    if (oldSessionId && oldSessionId !== id) {
-      archiveSession(oldSessionId);
-    }
-
     // Clear unseen completion flag when user views this session
     const unseen = get().unseenCompletedSessions;
     if (unseen.has(id)) {
