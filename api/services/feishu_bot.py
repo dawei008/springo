@@ -1,14 +1,21 @@
 """
 Springo Feishu Bot Integration (Long-Connection Mode)
 飞书机器人集成 — 使用 lark-oapi SDK 的 WebSocket 长连接模式
+
+Supported message types:
+  - text: plain text messages
+  - image: image messages (downloaded from Feishu, sent to Claude as base64)
+  - post: rich text messages (text + images extracted and sent as multimodal)
+  - file: file messages (image files supported, others returned as text note)
 """
+import base64
 import json
 import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Optional
+from typing import Any, List, Optional, Union
 
 import httpx
 
@@ -110,6 +117,132 @@ def _add_reaction(message_id: str, emoji_type: str = "OnIt"):
     return resp
 
 
+def _download_image(message_id: str, image_key: str) -> Optional[tuple[bytes, str]]:
+    """Download an image from Feishu using the message resource API.
+
+    Returns (image_bytes, media_type) or None on failure.
+    """
+    from lark_oapi.api.im.v1 import GetMessageResourceRequest
+
+    req = GetMessageResourceRequest.builder() \
+        .message_id(message_id) \
+        .file_key(image_key) \
+        .type("image") \
+        .build()
+
+    resp = _lark_client.im.v1.message_resource.get(req)
+    if not resp.success():
+        logger.warning(f"Feishu image download failed: {resp.code} {resp.msg}")
+        return None
+
+    image_bytes = resp.file.read() if resp.file else None
+    if not image_bytes:
+        logger.warning("Feishu image download returned empty data")
+        return None
+
+    # Detect media type from magic bytes
+    media_type = "image/png"
+    if image_bytes[:3] == b'\xff\xd8\xff':
+        media_type = "image/jpeg"
+    elif image_bytes[:4] == b'\x89PNG':
+        media_type = "image/png"
+    elif image_bytes[:4] == b'GIF8':
+        media_type = "image/gif"
+    elif image_bytes[:4] == b'RIFF' and image_bytes[8:12] == b'WEBP':
+        media_type = "image/webp"
+
+    logger.info(f"Downloaded Feishu image: {len(image_bytes)} bytes, {media_type}")
+    return image_bytes, media_type
+
+
+def _parse_post_content(message_id: str, content: dict) -> tuple[str, List[dict]]:
+    """Parse Feishu rich text (post) message into text + image blocks.
+
+    Returns (combined_text, list_of_claude_content_blocks).
+    """
+    blocks: List[dict] = []
+    text_parts: List[str] = []
+
+    # Post content structure: {"title": "...", "content": [[{tag, ...}, ...], ...]}
+    title = content.get("title", "")
+    if title:
+        text_parts.append(title)
+
+    for paragraph in content.get("content", []):
+        para_text = ""
+        for element in paragraph:
+            tag = element.get("tag", "")
+            if tag == "text":
+                para_text += element.get("text", "")
+            elif tag == "a":
+                href = element.get("href", "")
+                link_text = element.get("text", href)
+                para_text += f"{link_text} ({href})" if link_text != href else href
+            elif tag == "at":
+                para_text += element.get("user_name", "@someone")
+            elif tag == "img":
+                image_key = element.get("image_key", "")
+                if image_key:
+                    result = _download_image(message_id, image_key)
+                    if result:
+                        img_bytes, media_type = result
+                        b64 = base64.b64encode(img_bytes).decode("utf-8")
+                        blocks.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64,
+                            },
+                        })
+        if para_text.strip():
+            text_parts.append(para_text.strip())
+
+    combined_text = "\n".join(text_parts).strip()
+    return combined_text, blocks
+
+
+def _build_content_blocks(
+    text: str = "",
+    image_data: Optional[tuple[bytes, str]] = None,
+    extra_blocks: Optional[List[dict]] = None,
+) -> Union[str, List[dict]]:
+    """Build Claude-compatible content (string or content block list).
+
+    If only text, returns a simple string.
+    If images are involved, returns a list of content blocks.
+    """
+    has_images = image_data is not None or (extra_blocks and len(extra_blocks) > 0)
+
+    if not has_images:
+        return text
+
+    blocks: List[dict] = []
+
+    # Add text block first if present
+    if text:
+        blocks.append({"type": "text", "text": text})
+
+    # Add single image if provided
+    if image_data:
+        img_bytes, media_type = image_data
+        b64 = base64.b64encode(img_bytes).decode("utf-8")
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": media_type,
+                "data": b64,
+            },
+        })
+
+    # Add extra blocks (from rich text parsing)
+    if extra_blocks:
+        blocks.extend(extra_blocks)
+
+    return blocks if blocks else text
+
+
 def _set_session_title(session_id: str, user_text: str):
     """Set Springo session title with [Feishu] prefix."""
     title = f"[Feishu] {user_text[:60]}"
@@ -127,12 +260,18 @@ def _set_session_title(session_id: str, user_text: str):
 # Core: call Springo /v1/messages-auto and collect response
 # ---------------------------------------------------------------------------
 
-def _call_springo(session_id: str, user_text: str) -> str:
-    """Call Springo messages-auto endpoint (SSE) and return the full response."""
+def _call_springo(session_id: str, content: Union[str, list]) -> str:
+    """Call Springo messages-auto endpoint (SSE) and return the full response.
+
+    Args:
+        session_id: Springo session ID
+        content: Either a plain text string or a list of Claude content blocks
+                 (text + image blocks for multimodal messages)
+    """
     from ..config import settings
     payload = {
         "model": settings.default_chat_model,
-        "messages": [{"role": "user", "content": user_text}],
+        "messages": [{"role": "user", "content": content}],
         "stream": True,
         "max_tokens": 16384,
     }
@@ -203,6 +342,7 @@ def _is_duplicate(message_id: str) -> bool:
 def _on_message(data):
     """Handle incoming Feishu P2ImMessageReceiveV1 event.
 
+    Supported message types: text, image, post (rich text), file (image files).
     Returns immediately to let the SDK send the ACK frame.
     Heavy work (call Springo, reply) runs in a thread pool.
     """
@@ -220,40 +360,82 @@ def _on_message(data):
             logger.debug(f"Feishu dedup: skipping duplicate event for message_id={message_id}")
             return
 
-        # Only handle text messages
-        if msg_type != "text":
-            _reply_text(message_id, "目前只支持文字消息")
-            return
-
-        # Extract text content
         content = json.loads(msg.content)
-        user_text = content.get("text", "").strip()
-        if not user_text:
-            return
 
-        logger.info(f"Feishu message from chat={chat_id}: {user_text[:80]}")
+        if msg_type == "text":
+            user_text = content.get("text", "").strip()
+            if not user_text:
+                return
+            logger.info(f"Feishu text from chat={chat_id}: {user_text[:80]}")
+            _executor.submit(_handle_message_async, chat_id, message_id, user_text, user_text)
 
-        # Offload heavy work to thread pool so the SDK can ACK immediately
-        _executor.submit(_handle_message_async, chat_id, message_id, user_text)
+        elif msg_type == "image":
+            image_key = content.get("image_key", "")
+            if not image_key:
+                return
+            logger.info(f"Feishu image from chat={chat_id}: image_key={image_key}")
+            _executor.submit(_handle_image_message, chat_id, message_id, image_key)
+
+        elif msg_type == "post":
+            # Rich text: extract text + inline images
+            # Post content is locale-keyed: {"zh_cn": {...}, "en_us": {...}}
+            post_body = None
+            for lang_key in ("zh_cn", "en_us", "ja_jp"):
+                if lang_key in content:
+                    post_body = content[lang_key]
+                    break
+            if not post_body:
+                # Fallback: try first key
+                post_body = next(iter(content.values()), None) if content else None
+            if not post_body:
+                return
+            logger.info(f"Feishu post from chat={chat_id}: title={post_body.get('title', '')[:40]}")
+            _executor.submit(_handle_post_message, chat_id, message_id, post_body)
+
+        elif msg_type == "file":
+            file_name = content.get("file_name", "")
+            file_key = content.get("file_key", "")
+            # Support image files sent as file type
+            lower_name = file_name.lower()
+            if file_key and any(lower_name.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")):
+                logger.info(f"Feishu image file from chat={chat_id}: {file_name}")
+                _executor.submit(_handle_image_message, chat_id, message_id, file_key)
+            else:
+                _reply_text(message_id, f"暂不支持该文件类型：{file_name}\n目前支持：文字、图片、富文本消息")
+
+        else:
+            _reply_text(message_id, "暂不支持该消息类型，目前支持：文字、图片、富文本消息")
 
     except Exception as e:
         logger.error(f"Feishu event handler error: {e}", exc_info=True)
 
 
-def _handle_message_async(chat_id: str, message_id: str, user_text: str):
-    """Process a Feishu message in a background thread (non-blocking)."""
+def _handle_message_async(
+    chat_id: str,
+    message_id: str,
+    content: Union[str, list],
+    title_text: str,
+):
+    """Process a Feishu message in a background thread (non-blocking).
+
+    Args:
+        chat_id: Feishu chat ID
+        message_id: Feishu message ID (for reply)
+        content: Claude-compatible content (string or list of content blocks)
+        title_text: Plain text for session title
+    """
     try:
         # Add emoji reaction to acknowledge receipt
         _add_reaction(message_id)
 
         # Map chat_id to session_id and call Springo
-        session_id, _is_new = _get_session_id(chat_id)
-        response_text = _call_springo(session_id, user_text)
+        session_id, _ = _get_session_id(chat_id)
+        response_text = _call_springo(session_id, content)
 
         # Always set [Feishu] title AFTER _call_springo returns, because
         # _auto_save_session inside messages-auto overwrites the title
         # during the SSE stream.
-        _set_session_title(session_id, user_text)
+        _set_session_title(session_id, title_text)
 
         # Reply in the same thread, split if too long
         remaining = response_text
@@ -264,6 +446,65 @@ def _handle_message_async(chat_id: str, message_id: str, user_text: str):
 
     except Exception as e:
         logger.error(f"Feishu async handler error: {e}", exc_info=True)
+
+
+def _handle_image_message(chat_id: str, message_id: str, image_key: str):
+    """Handle an image message: download from Feishu, send to Claude as base64."""
+    try:
+        _add_reaction(message_id)
+
+        result = _download_image(message_id, image_key)
+        if not result:
+            _reply_text(message_id, "图片下载失败，请重试")
+            return
+
+        content = _build_content_blocks(
+            text="请描述/分析这张图片。",
+            image_data=result,
+        )
+        title_text = "[图片]"
+
+        session_id, _ = _get_session_id(chat_id)
+        response_text = _call_springo(session_id, content)
+        _set_session_title(session_id, title_text)
+
+        remaining = response_text
+        while remaining:
+            chunk = remaining[:4000]
+            remaining = remaining[4000:]
+            _reply_text(message_id, chunk)
+
+    except Exception as e:
+        logger.error(f"Feishu image handler error: {e}", exc_info=True)
+
+
+def _handle_post_message(chat_id: str, message_id: str, post_body: dict):
+    """Handle a rich text (post) message: extract text + inline images."""
+    try:
+        _add_reaction(message_id)
+
+        combined_text, image_blocks = _parse_post_content(message_id, post_body)
+        if not combined_text and not image_blocks:
+            return
+
+        content = _build_content_blocks(
+            text=combined_text,
+            extra_blocks=image_blocks,
+        )
+        title_text = combined_text[:60] if combined_text else "[富文本]"
+
+        session_id, _ = _get_session_id(chat_id)
+        response_text = _call_springo(session_id, content)
+        _set_session_title(session_id, title_text)
+
+        remaining = response_text
+        while remaining:
+            chunk = remaining[:4000]
+            remaining = remaining[4000:]
+            _reply_text(message_id, chunk)
+
+    except Exception as e:
+        logger.error(f"Feishu post handler error: {e}", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
