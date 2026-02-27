@@ -36,7 +36,7 @@ from .handlers import (
     lsp_go_to_definition, lsp_find_references, lsp_hover,
     lsp_document_symbols, lsp_workspace_symbol, lsp_diagnostics,
     # Memory tools
-    memory_search, memory_get,
+    memory_search, memory_get, memory_write,
 )
 
 # Skill loader import
@@ -118,6 +118,7 @@ TOOL_HANDLERS = {
     # Memory tools
     "memory_search": memory_search,
     "memory_get": memory_get,
+    "memory_write": memory_write,
 }
 
 

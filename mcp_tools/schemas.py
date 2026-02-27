@@ -568,6 +568,43 @@ Note: MEMORY.md and the last 2 days of daily logs are already injected into your
         }
     },
     {
+        "name": "memory_write",
+        "description": """Write content to your persistent memory files.
+
+**Targets:**
+- `daily`: Append a note to today's daily log (`memory/YYYY-MM-DD.md`). Use for session-specific observations, decisions, todos, running context.
+- `longterm`: Append to MEMORY.md (curated long-term memory). Use for durable facts, user preferences, project decisions that should persist across all sessions.
+
+**When to use this tool:**
+- When the user says "remember this", "note that", "don't forget"
+- When you discover important preferences, decisions, or facts worth preserving
+- When you make a significant decision or complete a key task — record it
+- Before context compaction, to save critical information that shouldn't be lost
+- To record project conventions, architecture decisions, recurring patterns
+
+**Guidelines:**
+- Write concise, structured Markdown (use headers, bullets)
+- Daily log entries are append-only (new content added to end)
+- MEMORY.md appends are added to the existing content (not overwritten)
+- Prefer daily log for transient notes; MEMORY.md for durable facts
+- Do NOT store raw conversation transcripts — store distilled insights""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Where to write: 'daily' (today's log) or 'longterm' (MEMORY.md)",
+                    "enum": ["daily", "longterm"]
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Markdown content to write"
+                }
+            },
+            "required": ["target", "content"]
+        }
+    },
+    {
         "name": "memory_get",
         "description": """Read a specific memory file by path. Use after memory_search to read full content of a matched file.
 

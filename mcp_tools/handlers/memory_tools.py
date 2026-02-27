@@ -282,6 +282,51 @@ def memory_search(query: str, scope: str = "auto", max_results: int = 10, days: 
     }
 
 
+def memory_write(target: str, content: str) -> Dict[str, Any]:
+    """Write content to memory files.
+
+    Args:
+        target: Where to write — "daily" (append to today's log) or "longterm" (overwrite MEMORY.md)
+        content: Content to write (Markdown text)
+
+    Returns:
+        Dict with success status and file path
+    """
+    if not content or not content.strip():
+        return {"error": "Empty content", "target": target}
+
+    mgr = _get_memory_file_manager()
+    if mgr is None:
+        return {"error": "Memory file manager not initialized", "target": target}
+
+    target = target.strip().lower()
+
+    if target == "daily":
+        try:
+            path = mgr.append_daily(content)
+            rel_path = os.path.relpath(path, mgr.workspace_dir)
+            return {"success": True, "target": "daily", "path": rel_path, "chars": len(content)}
+        except Exception as e:
+            return {"error": str(e), "target": "daily"}
+
+    elif target == "longterm":
+        try:
+            # Read existing MEMORY.md and append (don't blindly overwrite)
+            existing = mgr.read_memory_md()
+            if existing.strip():
+                updated = existing.rstrip("\n") + "\n\n" + content
+            else:
+                updated = content
+            path = mgr.write_longterm(updated)
+            rel_path = os.path.relpath(path, mgr.workspace_dir)
+            return {"success": True, "target": "longterm", "path": rel_path, "chars": len(updated)}
+        except Exception as e:
+            return {"error": str(e), "target": "longterm"}
+
+    else:
+        return {"error": f"Unknown target '{target}'. Use 'daily' or 'longterm'.", "target": target}
+
+
 def memory_get(path: str, from_line: int = None, lines: int = None) -> Dict[str, Any]:
     """Read a specific memory file.
 
