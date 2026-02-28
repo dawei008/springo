@@ -113,18 +113,18 @@ async def get_memory_status() -> Dict[str, Any]:
 
 class ArchiveRequest(BaseModel):
     session_id: str
-    message_count: int = 15
 
 
 @router.post("/memory/archive")
 async def archive_session_endpoint(request: ArchiveRequest) -> Dict[str, Any]:
-    """Archive a session's recent messages to memory/*.md.
+    """Archive a session's messages to memory/*.md using watermark-based incremental archiving.
 
-    Called by frontend when user creates a new session (fire-and-forget).
+    Called by frontend on session switch/create/delete/close.
+    Only processes messages added since the last archive (watermark).
     """
     try:
         from ..services.memory_archiver import archive_session
-        result = await archive_session(request.session_id, request.message_count)
+        result = await archive_session(request.session_id)
         return result
     except Exception as e:
         logger.error(f"Archive endpoint error: {e}")

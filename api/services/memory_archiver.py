@@ -15,8 +15,8 @@ from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
-# Max messages to include in extraction
-DEFAULT_MESSAGE_COUNT = 15
+# Archive watermark state file (per-session)
+ARCHIVE_STATE_FILE = ".archive_state.json"
 
 # Prompt for fact extraction from session conversations
 _SESSION_EXTRACT_PROMPT = """You are a memory extraction assistant. A user session has ended. Your job is to extract any **important facts, decisions, user preferences, or project context** that should be remembered for future sessions.
@@ -25,16 +25,46 @@ Rules:
 - Only extract genuinely important information (decisions, preferences, technical choices, key findings)
 - Skip routine chitchat, greetings, and ephemeral task details
 - If there is nothing worth remembering, respond with exactly: NOTHING_TO_REMEMBER
-- Otherwise, respond with a concise Markdown list of facts to remember (max 10 items)
+- Otherwise, respond with a concise Markdown list of facts to remember (max 30 items)
 - Format each item as: `- [category] fact` where category is one of: decision, preference, finding, context, todo
-- Keep each item under 100 characters
+- Keep each item under 150 characters
 
 Session messages:
 {messages_text}"""
 
 
-def _read_recent_messages(session_id: str, message_count: int = DEFAULT_MESSAGE_COUNT) -> List[Dict[str, Any]]:
-    """Read recent user/assistant messages from a session JSONL file."""
+def _get_archive_state_path(session_id: str) -> str:
+    sessions_dir = os.path.expanduser("~/.springo/sessions")
+    return os.path.join(sessions_dir, session_id, ARCHIVE_STATE_FILE)
+
+
+def _load_archive_watermark(session_id: str) -> int:
+    """Load the last archived message index for a session. Returns -1 if never archived."""
+    path = _get_archive_state_path(session_id)
+    if not os.path.isfile(path):
+        return -1
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        return state.get("last_archived_index", -1)
+    except Exception:
+        return -1
+
+
+def _save_archive_watermark(session_id: str, last_index: int):
+    """Save the archive watermark after successful archiving."""
+    path = _get_archive_state_path(session_id)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        state = {"last_archived_index": last_index, "updated_at": datetime.now().isoformat()}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to save archive watermark for {session_id}: {e}")
+
+
+def _read_all_messages(session_id: str) -> List[Dict[str, Any]]:
+    """Read all user/assistant messages from a session JSONL file."""
     sessions_dir = os.path.expanduser("~/.springo/sessions")
     session_dir = os.path.join(sessions_dir, session_id)
     jsonl_path = os.path.join(session_dir, f"{session_id}.jsonl")
@@ -81,17 +111,21 @@ def _read_recent_messages(session_id: str, message_count: int = DEFAULT_MESSAGE_
         logger.warning(f"Failed to read session {session_id}: {e}")
         return []
 
-    # Return last N messages
-    return messages[-message_count:]
+    return messages
 
 
-def _build_messages_text(messages: List[Dict[str, Any]], max_chars: int = 8000) -> str:
-    """Build a text representation of messages for the extraction prompt."""
+def _build_messages_text(messages: List[Dict[str, Any]], max_chars: int = 128000) -> str:
+    """Build a text representation of messages for the Haiku extraction prompt.
+
+    max_chars=128K allows Haiku (~200K context) to see the full conversation.
+    Note: this only affects the archive write path (Haiku input), NOT the read
+    path where daily logs are injected into the main model's context (capped at 2000 chars).
+    """
     text_parts = []
     total_chars = 0
 
     for msg in messages:
-        snippet = msg["text"].strip()[:500]
+        snippet = msg["text"].strip()[:2000]
         line = f"[{msg['role']}]: {snippet}"
         if total_chars + len(line) > max_chars:
             break
@@ -101,11 +135,12 @@ def _build_messages_text(messages: List[Dict[str, Any]], max_chars: int = 8000) 
     return "\n".join(text_parts)
 
 
-async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_COUNT) -> Dict[str, Any]:
+async def archive_session(session_id: str, **_kwargs) -> Dict[str, Any]:
     """Extract key facts from a session and save to daily memory log.
 
-    Called when user creates a new session or deletes one (fire-and-forget from frontend).
-    Uses a fast model to extract important facts instead of dumping raw conversation.
+    Uses watermark-based incremental archiving: only processes messages
+    added since the last archive, ensuring no conversation content is missed
+    even for long sessions archived across multiple triggers.
 
     Returns:
         Dict with archive result metadata.
@@ -124,13 +159,22 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
     if mgr is None:
         return {"archived": False, "reason": "memory_file_manager_not_initialized"}
 
-    # Read recent messages
-    messages = _read_recent_messages(session_id, message_count)
-    if not messages:
+    # Read all messages and slice from watermark
+    all_messages = _read_all_messages(session_id)
+    if not all_messages:
         return {"archived": False, "reason": "no_messages", "session_id": session_id}
 
-    messages_text = _build_messages_text(messages)
+    watermark = _load_archive_watermark(session_id)
+    new_messages = all_messages[watermark + 1:]
+    if not new_messages:
+        return {"archived": False, "reason": "no_new_messages", "session_id": session_id}
+
+    new_watermark = len(all_messages) - 1
+
+    messages_text = _build_messages_text(new_messages)
     if not messages_text:
+        # Advance watermark even if no extractable text (e.g. all slash commands)
+        _save_archive_watermark(session_id, new_watermark)
         return {"archived": False, "reason": "no_text_content", "session_id": session_id}
 
     # Call fast model to extract facts
@@ -161,7 +205,7 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
         prompt = _SESSION_EXTRACT_PROMPT.format(messages_text=messages_text)
         body = {
             "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1024,
+            "max_tokens": 2048,
             "temperature": 0.2,
             "messages": [{"role": "user", "content": prompt}],
         }
@@ -182,9 +226,13 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
                         response_text = block["text"]
                         break
 
+        # Advance watermark regardless of whether facts were extracted
+        _save_archive_watermark(session_id, new_watermark)
+
         if not response_text or "NOTHING_TO_REMEMBER" in response_text:
-            logger.info(f"Session {session_id}: nothing worth remembering ({len(messages)} messages)")
-            return {"archived": False, "reason": "nothing_to_remember", "session_id": session_id, "message_count": len(messages)}
+            logger.info(f"Session {session_id}: nothing worth remembering ({len(new_messages)} new messages, watermark {watermark} → {new_watermark})")
+            return {"archived": False, "reason": "nothing_to_remember", "session_id": session_id,
+                    "message_count": len(new_messages), "watermark": new_watermark}
 
         # Write extracted facts to daily memory log
         from mcp_tools.handlers.memory_tools import memory_write
@@ -195,7 +243,7 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
 
         if write_result.get("success"):
             facts_count = sum(1 for line in response_text.split("\n") if line.strip().startswith("-"))
-            logger.info(f"Session {session_id} archived: {facts_count} facts to {write_result.get('path')}")
+            logger.info(f"Session {session_id} archived: {facts_count} facts, watermark {watermark} → {new_watermark}")
 
             # Trigger longterm memory distillation (throttled, fire-and-forget)
             try:
@@ -209,7 +257,8 @@ async def archive_session(session_id: str, message_count: int = DEFAULT_MESSAGE_
                 "archived": True,
                 "path": write_result.get("path"),
                 "facts_count": facts_count,
-                "message_count": len(messages),
+                "message_count": len(new_messages),
+                "watermark": new_watermark,
                 "session_id": session_id,
             }
         else:

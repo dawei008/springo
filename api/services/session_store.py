@@ -438,6 +438,14 @@ class SessionStore:
 
             # Plan B: per-message sync removed — archives handle AgentCore sync
 
+            # Reset archive watermark — compaction rewrites the JSONL with fewer
+            # messages, which invalidates the old message index watermark.
+            try:
+                from .memory_archiver import _save_archive_watermark
+                _save_archive_watermark(session_id, -1)
+            except Exception:
+                pass
+
             file_size = os.path.getsize(session_file)
             if file_size > MAX_SESSION_FILE_HARD_LIMIT:
                 logger.error(f"Session {session_id} file exceeds hard limit: {file_size:,} bytes")

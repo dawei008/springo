@@ -775,7 +775,7 @@ async def pre_compaction_memory_flush(
     # Build text representation of messages (truncated to stay within limits)
     text_parts = []
     total_chars = 0
-    MAX_CHARS = 8000  # Keep flush prompt small for fast model
+    MAX_CHARS = 128000  # Haiku has 200K context; allow full conversation visibility
 
     for msg in messages:
         role = msg.get("role", "user")
@@ -792,7 +792,7 @@ async def pre_compaction_memory_flush(
         if role == "tool":
             continue
 
-        snippet = content.strip()[:500]
+        snippet = content.strip()[:2000]
         line = f"[{role}]: {snippet}"
         if total_chars + len(line) > MAX_CHARS:
             break
