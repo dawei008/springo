@@ -144,36 +144,37 @@
             border-radius: 50%;
             flex-shrink: 0;
         }
+        /* Session status dots — ordered by visual priority */
         .conversation-status.idle {
             background: var(--text-tertiary);
-            opacity: 0.4;
+            opacity: 0.3;
         }
-        /* Today's idle sessions: accent-tinted dot to distinguish from older sessions */
-        .conversation-item.today .conversation-status.idle {
-            background: var(--accent, #BF5A3C);
-            opacity: 0.5;
+        .conversation-status.recent {
+            background: #22d3ee;  /* cyan-400: recently active */
+            opacity: 0.7;
         }
-        .conversation-status.active {
-            background: var(--success);
+        .conversation-status.current {
+            background: #22c55e;  /* green-500: current session */
+            box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.2);
         }
         .conversation-status.running {
-            background: var(--warning);
+            background: #f59e0b;  /* amber-500: streaming */
             animation: pulse 1.5s ease-in-out infinite;
         }
-        .conversation-status.completed {
-            background: var(--success);
-            opacity: 0.6;
+        .conversation-status.compacting {
+            background: #a78bfa;  /* violet-400: compacting */
+            animation: pulse 1.2s ease-in-out infinite;
         }
         .conversation-status.completed-unseen {
-            background: var(--info, #3B82F6);
+            background: #3b82f6;  /* blue-500: unread completion */
             animation: pulse 2s ease-in-out infinite;
         }
-        .conversation-status.error {
-            background: var(--error);
+        .conversation-status.completed {
+            background: #22c55e;
+            opacity: 0.5;
         }
-        .conversation-status.compacting {
-            background: var(--accent);
-            animation: pulse 1.2s ease-in-out infinite;
+        .conversation-status.error {
+            background: #ef4444;  /* red-500 */
         }
         @keyframes pulse {
             0%, 100% { opacity: 1; transform: scale(1); }

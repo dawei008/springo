@@ -9,10 +9,11 @@ import ToolsPanel from './ToolsPanel';
 function getStatusTitle(visualStatus: string): string {
   const titles: Record<string, string> = {
     idle: 'Inactive',
-    active: 'Active',
+    recent: 'Recent',
+    current: 'Current session',
     running: 'Running...',
     completed: 'Completed',
-    'completed-unseen': 'Completed (new)',
+    'completed-unseen': 'Completed (unread)',
     error: 'Error',
     compacting: 'Compacting...',
   };
@@ -611,12 +612,18 @@ export default function Sidebar() {
               const isActive = session.id === currentSessionId;
               const isRenaming = renamingId === session.id;
 
-              // Derive visual status: running > compacting > error > completed-unseen > active > idle
+              // Derive visual status priority:
+              //   running > compacting > error > completed-unseen > current > recent > idle
               let visualStatus: string = rawStatus;
-              if (rawStatus === 'idle' && unseenCompletedSessions.has(session.id)) {
-                visualStatus = 'completed-unseen';
-              } else if (rawStatus === 'idle' && isActive) {
-                visualStatus = 'active';
+              if (rawStatus === 'idle') {
+                if (unseenCompletedSessions.has(session.id)) {
+                  visualStatus = 'completed-unseen';
+                } else if (isActive) {
+                  visualStatus = 'current';
+                } else if (group.isToday || group.label === 'Yesterday') {
+                  visualStatus = 'recent';
+                }
+                // else stays 'idle' (older sessions)
               }
 
               const itemClasses = [

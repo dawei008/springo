@@ -734,17 +734,20 @@ async def summarize_context(
 # Pre-compaction Memory Flush (OpenClaw pattern)
 # ============================================================================
 
-# Flush prompt: ask a fast model to extract key facts from messages about
-# to be compacted, then persist them via memory_write.
-_MEMORY_FLUSH_PROMPT = """You are a memory extraction assistant. The following conversation messages are about to be compacted (summarized and discarded). Your job is to extract any **important facts, decisions, user preferences, or project context** that should be remembered for future sessions.
+# Flush prompt: write a detailed journal of messages about to be compacted.
+_MEMORY_FLUSH_PROMPT = """You are a session journal writer. The following conversation messages are about to be compacted (summarized and discarded). Your job is to write a **detailed journal** capturing what happened so it can be referenced in future sessions.
 
 Rules:
-- Only extract genuinely important information (decisions, preferences, technical choices, key findings)
-- Skip routine chitchat, greetings, and ephemeral task details
-- If there is nothing worth remembering, respond with exactly: NOTHING_TO_REMEMBER
-- Otherwise, respond with a concise Markdown list of facts to remember (max 10 items)
-- Format each item as: `- [category] fact` where category is one of: decision, preference, finding, context, todo
-- Keep each item under 100 characters
+- If the messages contain only greetings or trivial chitchat, respond with exactly: NOTHING_TO_REMEMBER
+- Otherwise, write a detailed Markdown journal covering:
+  - **What was done**: tasks attempted, tools used, commands run (include actual commands/code snippets)
+  - **Key decisions**: why certain approaches were chosen over others
+  - **Outcomes**: what worked, what failed, error messages encountered
+  - **User preferences**: any stated or implied preferences
+  - **Open items**: unfinished tasks, next steps, blockers
+- Use Markdown headers (###), bullet lists, and fenced code blocks for commands/code
+- Include specific file paths, URLs, model names, config values — concrete details matter
+- Do NOT over-summarize — preserve enough context for future reference
 
 Messages to analyze:
 {messages_text}"""
@@ -830,8 +833,8 @@ async def pre_compaction_memory_flush(
 
         flush_body = {
             "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 1024,
-            "temperature": 0.2,
+            "max_tokens": 4096,
+            "temperature": 0.3,
             "messages": [{"role": "user", "content": flush_prompt}],
         }
 

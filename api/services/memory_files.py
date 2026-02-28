@@ -195,7 +195,7 @@ class MemoryFileManager:
         if recent.strip():
             trimmed = recent.strip()
             if len(trimmed) > 2000:
-                trimmed = trimmed[:2000] + "\n\n... (truncated)"
+                trimmed = "... (earlier entries truncated)\n\n" + trimmed[-2000:]
             parts.append(f"## Recent Memory Notes\n\n{trimmed}")
 
         if not parts:

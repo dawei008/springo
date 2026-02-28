@@ -18,16 +18,21 @@ logger = logging.getLogger(__name__)
 # Archive watermark state file (per-session)
 ARCHIVE_STATE_FILE = ".archive_state.json"
 
-# Prompt for fact extraction from session conversations
-_SESSION_EXTRACT_PROMPT = """You are a memory extraction assistant. A user session has ended. Your job is to extract any **important facts, decisions, user preferences, or project context** that should be remembered for future sessions.
+# Prompt for session journal extraction
+_SESSION_EXTRACT_PROMPT = """You are a session journal writer. A user session has ended. Your job is to write a **detailed session journal** capturing what happened, what was decided, and what was learned.
 
 Rules:
-- Only extract genuinely important information (decisions, preferences, technical choices, key findings)
-- Skip routine chitchat, greetings, and ephemeral task details
-- If there is nothing worth remembering, respond with exactly: NOTHING_TO_REMEMBER
-- Otherwise, respond with a concise Markdown list of facts to remember (max 30 items)
-- Format each item as: `- [category] fact` where category is one of: decision, preference, finding, context, todo
-- Keep each item under 150 characters
+- If the session contains only greetings or trivial chitchat, respond with exactly: NOTHING_TO_REMEMBER
+- Otherwise, write a detailed Markdown journal entry covering:
+  - **What was done**: tasks attempted, tools used, commands run (include actual commands/code snippets)
+  - **Key decisions**: why certain approaches were chosen over others
+  - **Outcomes**: what worked, what failed, error messages encountered
+  - **User preferences**: any stated or implied preferences
+  - **Open items**: unfinished tasks, next steps, blockers
+- Use Markdown headers (###), bullet lists, and fenced code blocks for commands/code
+- Include specific file paths, URLs, model names, config values — concrete details matter
+- Do NOT over-summarize — preserve enough context so a future reader can understand what happened without re-reading the original conversation
+- Aim for 1000-3000 words depending on session complexity
 
 Session messages:
 {messages_text}"""
@@ -205,8 +210,8 @@ async def archive_session(session_id: str, **_kwargs) -> Dict[str, Any]:
         prompt = _SESSION_EXTRACT_PROMPT.format(messages_text=messages_text)
         body = {
             "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": 2048,
-            "temperature": 0.2,
+            "max_tokens": 4096,
+            "temperature": 0.3,
             "messages": [{"role": "user", "content": prompt}],
         }
 
