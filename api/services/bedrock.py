@@ -93,11 +93,13 @@ _TOOL_TIER1 = {
     # User interaction & workflow
     "ask_user", "todo_read", "todo_write", "delegate_task",
     "summarize_context", "tool_search", "use_skill", "scheduler",
+    # Planning & memory (always available)
+    "enter_plan_mode", "exit_plan_mode",
+    "memory_search", "memory_write", "memory_get",
 }
 # Tier 2: Web & knowledge
 _TOOL_TIER2_PREFIXES = (
-    "web-search__", "fetch__", "aws-knowledge__", "context7__",
-    "strands-agents__",
+    "web-search__", "fetch__", "aws-knowledge__",
 )
 # Tier 3: GitHub, AWS tools
 _TOOL_TIER3_PREFIXES = (
@@ -135,6 +137,98 @@ def _prioritize_tools(tools: list, max_tools: int) -> list:
         f"(max_tools={max_tools}, tiers={len(tier1)}/{len(tier2)}/{len(tier3)}/{len(tier4)})"
     )
     return selected
+
+
+# Tool context budget: tools may occupy up to this fraction of the model's
+# context window.  Matches Claude Code's approach — roughly 25%.
+_TOOL_BUDGET_RATIO = 0.25
+
+# Absolute floor: never evict if tools are below this (small model safety net)
+_TOOL_BUDGET_FLOOR = 20_000
+
+
+def _estimate_tools_tokens(tools: list) -> int:
+    """Rough token estimate for a list of tool definitions (~4 chars/token)."""
+    import json as _json
+    return sum(len(_json.dumps(t)) for t in tools) // 4
+
+
+def _get_tool_budget(model: str, extended_context: bool = False) -> int:
+    """Calculate the tool token budget for a model.
+
+    Uses the model's *effective* context window (respects extended_context)
+    and allocates TOOL_BUDGET_RATIO of it for tools.
+
+    budget = max(effective_context * _TOOL_BUDGET_RATIO, _TOOL_BUDGET_FLOOR)
+
+    Examples (standard context, extended_context=False):
+      - Opus 4.6:   200,000 * 0.25 = 50,000
+      - Haiku 4.5:  200,000 * 0.25 = 50,000
+      - Qwen3 128K: 131,072 * 0.25 = 32,768
+      - DeepSeek:   163,840 * 0.25 = 40,960
+    Extended context:
+      - Opus 4.6:  1,000,000 * 0.25 = 250,000  (no eviction needed)
+    """
+    limits = get_model_limits(model, extended_context=extended_context)
+    ctx = limits.get("max_context_tokens", 200000)
+    return max(int(ctx * _TOOL_BUDGET_RATIO), _TOOL_BUDGET_FLOOR)
+
+
+def _auto_unload_tools(tools: list, model: str = "", extended_context: bool = False) -> list:
+    """Evict unused tools to save context tokens.
+
+    Trigger conditions (ALL must be met):
+      1. Past grace period (> TOOL_GRACE_TURNS user messages)
+      2. Total tool tokens exceed the model's dynamic tool budget
+         (effective_context_window * 25%, min 20K)
+
+    When triggered, keeps:
+      - Tier 1 (builtin core tools) — always
+      - Any tool actually used in this session
+
+    Everything else (MCP tools, external tools) gets evicted if unused.
+    Evicted tools remain discoverable via tool_search and can be
+    re-activated on demand (hot-loading already handles this).
+    """
+    from .session_state import get_user_turn, get_used_tools, TOOL_GRACE_TURNS
+
+    current_turn = get_user_turn()
+    if current_turn <= TOOL_GRACE_TURNS:
+        return tools  # Grace period — include everything
+
+    # Calculate dynamic budget based on model's effective context window
+    budget = _get_tool_budget(model, extended_context=extended_context)
+    total_tokens = _estimate_tools_tokens(tools)
+    if total_tokens <= budget:
+        return tools  # Within budget — no eviction needed
+
+    used_tools = get_used_tools()
+    kept = []
+    evicted_names = []
+
+    for t in tools:
+        name = t.get("name", "")
+        # Tier 1 (builtin core) — never evict
+        if name in _TOOL_TIER1:
+            kept.append(t)
+            continue
+        # Actually used this session — keep
+        if name in used_tools:
+            kept.append(t)
+            continue
+        # Evict everything else
+        evicted_names.append(name)
+
+    if evicted_names:
+        kept_tokens = _estimate_tools_tokens(kept)
+        logger.info(
+            f"Auto-unload: evicted {len(evicted_names)} unused tools "
+            f"({total_tokens:,} -> {kept_tokens:,} tokens, "
+            f"budget={budget:,}, model={model}, turn {current_turn}). "
+            f"Evicted: {evicted_names[:5]}{'...' if len(evicted_names) > 5 else ''}"
+        )
+
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +472,51 @@ task(
 
 The task runs in a separate session and results are returned when complete.
 
+## Proactive Task Completion (IMPORTANT)
+
+You are an autonomous problem-solver. When given a task, drive it to completion without waiting for the user to point out next steps.
+
+### Core Principles
+
+1. **Complete the loop**: Every task has a natural completion cycle. Follow it:
+   - Code change: read -> understand -> edit -> verify (run/test) -> fix if needed
+   - Bug fix: reproduce -> diagnose root cause -> fix -> verify fix -> check for regressions
+   - Research: search -> read -> synthesize -> present findings
+   - Don't stop at "I've made the change" — verify it works.
+
+2. **Self-diagnose errors**: When a command fails or code breaks:
+   - Read the FULL error message carefully
+   - Identify the root cause (don't guess — trace it)
+   - Fix the underlying issue, not the symptom
+   - Never retry the exact same command hoping for a different result
+   - If blocked after 2 attempts, try a different approach
+
+3. **Track what you've tried**: Maintain awareness across iterations:
+   - Remember which approaches failed and why
+   - Don't repeat failed strategies
+   - Build on partial progress rather than starting over
+   - If context was compacted, check `todo_write` items for prior state
+
+4. **Continue until done**: Don't stop prematurely:
+   - If a build has errors, fix them — don't just report them
+   - If a test fails, debug it — don't just show the output
+   - If one file needs changes, check if related files also need updates
+   - Only stop when the user's goal is fully achieved, or you need user input to proceed
+
+5. **Ask only when truly blocked**: Prefer action over questions:
+   - If you can infer the answer from context, code, or conventions — just do it
+   - If multiple approaches are valid and low-risk, pick the best one and proceed
+   - Only use `ask_user` when the choice materially affects the outcome and you can't determine the user's preference
+
+### Anti-Patterns to Avoid
+
+- Reporting an error without attempting to fix it
+- Saying "I've updated the file" without verifying the change works
+- Stopping after one failed attempt without trying alternatives
+- Asking "should I continue?" when the answer is obviously yes
+- Losing track of the overall goal after multiple tool calls
+- Fragmenting a simple task into multiple back-and-forth exchanges
+
 ## Safety
 
 - Commands are checked for dangerous patterns
@@ -559,6 +698,9 @@ class BedrockService:
         if include_tools and model_supports_tools(model):
             raw_tools = request.get("tools") or tools or []
             if raw_tools:
+                # Auto-unload: evict unused tools after grace period
+                _ext_ctx = request.get("extended_context") or False
+                raw_tools = _auto_unload_tools(raw_tools, model=model, extended_context=bool(_ext_ctx))
                 # Apply tool limit for Converse models with max_tools set
                 max_t = get_max_tools(model)
                 if max_t > 0 and len(raw_tools) > max_t:

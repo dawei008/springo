@@ -403,16 +403,17 @@ def prepare_structured_summary_prompt(
 
     structured_text = "\n".join(info_parts) if info_parts else "无额外结构化信息"
 
-    prompt = f"""请对以下对话进行结构化摘要。请用中文回答，按以下 8 个维度进行总结：
+    prompt = f"""请对以下对话进行结构化摘要。请用中文回答，按以下 9 个维度进行总结：
 
 1. **主要任务**: 用户的核心目标和任务描述
-2. **关键决策**: 在对话中做出的重要技术决策
-3. **涉及文件**: 讨论、修改或创建的文件列表
-4. **代码变更**: 主要的代码修改内容摘要
-5. **工具使用**: 使用了哪些工具，执行了什么操作
-6. **遇到的问题**: 遇到的错误、问题及其解决方案
-7. **当前状态**: 任务的当前进展状态
-8. **待办事项**: 尚未完成的任务或后续步骤
+2. **用户指令与约束**: 用户明确要求的工作方式（如"用team模式"、"开N个worker"、"不要用XX"、"必须先做XX再做YY"等执行方式、流程约束、禁止事项）。这些指令在后续对话中必须持续遵守，不可遗忘。
+3. **关键决策**: 在对话中做出的重要技术决策
+4. **涉及文件**: 讨论、修改或创建的文件列表
+5. **代码变更**: 主要的代码修改内容摘要
+6. **工具使用**: 使用了哪些工具，执行了什么操作
+7. **遇到的问题**: 遇到的错误、问题及其解决方案
+8. **当前状态**: 任务的当前进展状态
+9. **待办事项**: 尚未完成的任务或后续步骤
 
 ## 结构化信息
 {structured_text}
@@ -420,7 +421,8 @@ def prepare_structured_summary_prompt(
 ## 对话内容
 {conversation_text}
 
-请按以上 8 个维度输出简洁的摘要，每个维度 1-3 句话。如果某个维度没有相关内容，写"无"。"""
+请按以上 9 个维度输出简洁的摘要，每个维度 1-3 句话。如果某个维度没有相关内容，写"无"。
+重要：第 2 维度（用户指令与约束）必须完整保留用户的原始措辞，不要改写或省略。"""
 
     return prompt
 
@@ -440,9 +442,21 @@ def create_summary_messages(
     If recent_messages starts with an assistant message, skip the ack
     to avoid consecutive assistant messages (API requires alternating roles).
     """
+    # Inject persistent todos into the summary so they survive compaction
+    todo_block = ""
+    try:
+        from .session_state import format_todos_for_context
+        todo_block = format_todos_for_context()
+    except Exception:
+        pass
+
+    summary_content = f"[Context Summary - 对话历史已压缩]\n\n{summary}"
+    if todo_block:
+        summary_content += f"\n\n{todo_block}"
+
     summary_user = {
         "role": "user",
-        "content": f"[Context Summary - 对话历史已压缩]\n\n{summary}"
+        "content": summary_content
     }
     summary_ack = {
         "role": "assistant",

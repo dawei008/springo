@@ -241,7 +241,23 @@ async def messages_auto_api(
         
         original_model = msg_request.model
         max_iterations = msg_request.max_tool_iterations
-        
+
+        # Track user turn + session for auto-unload and todo persistence
+        if session_id:
+            try:
+                from api.services.session_state import (
+                    set_current_session_id, load_todos, set_todos,
+                    increment_user_turn,
+                )
+                set_current_session_id(session_id)
+                saved_todos = load_todos(session_id)
+                if saved_todos:
+                    set_todos(saved_todos)
+                turn = increment_user_turn()
+                logger.debug(f"[{session_id}] User turn {turn} (auto-unload tracking)")
+            except Exception:
+                pass
+
         if msg_request.stream:
             # Streaming auto-tool execution
             async def auto_stream_generator() -> AsyncGenerator[str, None]:
@@ -255,6 +271,8 @@ async def messages_auto_api(
                         get_session_state()["session_id"] = session_id
                     except Exception:
                         pass
+                    # Note: session tracking + todo restore + user turn increment
+                    # now handled before the stream/non-stream branch (above)
 
                 messages = [m.model_dump() if hasattr(m, 'model_dump') else m for m in msg_request.messages]
                 iteration = 0
@@ -741,6 +759,14 @@ async def messages_auto_api(
                     batch_elapsed = asyncio.get_event_loop().time() - batch_start
                     yield SSEEventBuilder.tool_execution_complete(len(tool_uses), batch_elapsed)
 
+                    # Record tool usage for auto-unload tracking
+                    try:
+                        from api.services.session_state import record_tool_usage
+                        for t in tool_uses:
+                            record_tool_usage(t["name"])
+                    except Exception:
+                        pass
+
                     # Build assistant message from ALL content blocks (text + tool_use)
                     assistant_content = []
                     for block in content_blocks:
@@ -938,6 +964,14 @@ async def messages_auto_api(
                         "content": result_str,
                         "is_error": is_error
                     })
+
+                # Record tool usage for auto-unload tracking (non-streaming)
+                try:
+                    from api.services.session_state import record_tool_usage
+                    for t in tool_uses:
+                        record_tool_usage(t.get("name", ""))
+                except Exception:
+                    pass
 
                 messages.append({"role": "assistant", "content": content})
                 messages.append({"role": "user", "content": tool_results})

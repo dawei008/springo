@@ -23,6 +23,13 @@ def todo_write(todos: List[Dict[str, Any]]) -> Dict[str, Any]:
     state = get_session_state()
     state["todos"] = todos
 
+    # Persist to disk so todos survive context compaction
+    try:
+        from api.services.session_state import persist_todos
+        persist_todos(todos=todos)
+    except Exception:
+        pass
+
     completed = sum(1 for t in todos if t.get("status") == "completed")
     in_progress = sum(1 for t in todos if t.get("status") == "in_progress")
     pending = sum(1 for t in todos if t.get("status") == "pending")
@@ -172,6 +179,13 @@ def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) ->
 
         def activate_tool_with_server(tool_name: str) -> Dict[str, Any]:
             """Activate a tool by starting its server if needed"""
+            # Record usage so auto-unload keeps this tool alive
+            try:
+                from api.services.session_state import record_tool_usage
+                record_tool_usage(tool_name)
+            except Exception:
+                pass
+
             # Already active?
             if registry.is_active(tool_name):
                 return {

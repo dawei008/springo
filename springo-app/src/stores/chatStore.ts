@@ -18,6 +18,11 @@ import { useScheduleStore } from '@/stores/scheduleStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
+// Per-session send epoch — incremented on each sendMessage() call.
+// Used by the finally-block backend sync to detect if a newer send started
+// during its async fetch, preventing stale overwrites.
+const _sendEpoch: Record<string, number> = {};
+
 // ---------------------------------------------------------------------------
 // Tool result UI handler — ported from legacy handleToolResultUI()
 // ---------------------------------------------------------------------------
@@ -477,12 +482,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   loadMessages: async (convId: string) => {
     try {
+      // Guard: skip if session is actively streaming — backend state is stale
+      const currentRt = get().runtimes[convId];
+      if (currentRt?.isStreaming) {
+        console.log(`[${convId}] loadMessages skipped — session is streaming`);
+        return currentRt.messages;
+      }
+
       const response = await fetch(`${BASE_URL}/v1/sessions/${convId}`);
       if (response.ok) {
         const data = await response.json();
         const rawMessages = (data.messages || []) as Message[];
         // Validate and clean messages (remove orphaned tool_results, etc.)
         const messages = validateConversationMessages(rawMessages);
+
+        // Re-check streaming after async fetch — another sendMessage() may have started
+        const rtAfterFetch = get().runtimes[convId];
+        if (rtAfterFetch?.isStreaming) {
+          console.log(`[${convId}] loadMessages discarded — streaming started during fetch`);
+          return rtAfterFetch.messages;
+        }
+
         const runtime = get().getRuntime(convId);
         set((state) => ({
           runtimes: {
@@ -501,6 +521,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   // ─── Streaming / Send ───
 
   sendMessage: async (convId, content, attachments = [], options = {}) => {
+    // Bump send epoch so concurrent finally-block syncs can detect stale state
+    _sendEpoch[convId] = (_sendEpoch[convId] || 0) + 1;
+    const epochAtStart = _sendEpoch[convId];
+
     const store = get();
     const runtime = store.getRuntime(convId);
 
@@ -870,7 +894,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
       // frontend's accumulated message (with orphaned tool_uses) would
       // be sanitized, flattening all iteration text into one plain string
       // and permanently corrupting the session JSONL.
-      const hasToolUse = finalRuntime.messages.some((m) => m.hasToolUse);
+      //
+      // Guard: skip sync if a NEWER sendMessage() has started for this session.
+      // The newer send already pushed a user message + thinking indicator;
+      // overwriting with stale backend data would delete those messages.
+      const epochNow = _sendEpoch[convId] || 0;
+      const epochStale = epochNow !== epochAtStart;
+      const hasToolUse = !epochStale && finalRuntime.messages.some((m) => m.hasToolUse);
       if (hasToolUse) {
         // Save the accumulated toolUses from streaming before backend sync overwrites them
         const streamingToolUses = finalRuntime.messages
@@ -911,16 +941,21 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 }
               }
 
-              // Update runtime with synced messages (re-read to get latest state)
-              const rt = get().getRuntime(convId);
-              rt.messages = synced;
-              set((state) => ({
-                runtimes: {
-                  ...state.runtimes,
-                  [convId]: { ...rt, messages: [...synced] },
-                },
-              }));
-              console.log(`[${convId}] AUTO mode: synced ${synced.length} messages from backend (${streamingToolUses.length} tools preserved)`);
+              // Re-check epoch after async fetch — a new send may have started
+              if ((_sendEpoch[convId] || 0) !== epochAtStart) {
+                console.log(`[${convId}] AUTO mode: sync discarded — new sendMessage started during fetch`);
+              } else {
+                // Update runtime with synced messages (re-read to get latest state)
+                const rt = get().getRuntime(convId);
+                rt.messages = synced;
+                set((state) => ({
+                  runtimes: {
+                    ...state.runtimes,
+                    [convId]: { ...rt, messages: [...synced] },
+                  },
+                }));
+                console.log(`[${convId}] AUTO mode: synced ${synced.length} messages from backend (${streamingToolUses.length} tools preserved)`);
+              }
             }
           }
         } catch (syncErr) {

@@ -93,7 +93,8 @@ export default function ChatArea() {
   useEffect(() => {
     if (currentSessionId) {
       const runtime = useChatStore.getState().runtimes[currentSessionId];
-      if (!runtime || runtime.messages.length === 0) {
+      // Skip if already has messages or is actively streaming (backend state is stale)
+      if (!runtime || (runtime.messages.length === 0 && !runtime.isStreaming)) {
         useChatStore.getState().loadMessages(currentSessionId);
       }
     }
