@@ -5,9 +5,25 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useToolsStore } from '@/stores/toolsStore';
 import { api } from '@/services/api';
-import type { Attachment, Skill } from '@/types';
+import type { Attachment, Skill, UsageData } from '@/types';
 
 const BASE_URL = 'http://127.0.0.1:8081';
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function computeCacheHitRate(usage: UsageData): number | null {
+  const { cache_read_input_tokens, cache_creation_input_tokens, input_tokens } = usage;
+  // No cache data at all — model doesn't support caching
+  if (cache_read_input_tokens === 0 && cache_creation_input_tokens === 0) return null;
+  // Anthropic API: input_tokens = non-cached tokens, so total = all three fields
+  const total = input_tokens + cache_creation_input_tokens + cache_read_input_tokens;
+  if (total === 0) return null;
+  return Math.round((cache_read_input_tokens / total) * 100);
+}
 
 const FILE_ACCEPT =
   'image/*,.pdf,.txt,.md,.json,.csv,.pptx,.ppt,.xlsx,.xls,.docx,.doc,.html,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.css,.scss,.sql,.sh,.bash,.zsh,.r,.rb,.php,.swift,.kt,.scala,.lua,.m,.mm';
@@ -54,6 +70,18 @@ export default function MessageInput() {
   const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
   const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
   const activeTeamId = useUIStore((s) => s.activeTeamId);
+
+  // Token usage tracking
+  const sessionUsage = useChatStore((s) =>
+    currentSessionId ? s.sessionUsage[currentSessionId] : undefined,
+  );
+
+  // Load persisted usage from backend when session changes
+  useEffect(() => {
+    if (currentSessionId) {
+      useChatStore.getState().loadUsage(currentSessionId);
+    }
+  }, [currentSessionId]);
 
   // Model selector data
   const models = useSettingsStore((s) => s.models);
@@ -928,6 +956,29 @@ export default function MessageInput() {
               />
             </div>
           </div>
+
+          {sessionUsage && (sessionUsage.input_tokens > 0 || sessionUsage.output_tokens > 0) && (() => {
+            const cacheRate = computeCacheHitRate(sessionUsage);
+            const title =
+              `Input: ${sessionUsage.input_tokens.toLocaleString()} tokens\n` +
+              `Output: ${sessionUsage.output_tokens.toLocaleString()} tokens\n` +
+              (cacheRate !== null
+                ? `Cache Read: ${sessionUsage.cache_read_input_tokens.toLocaleString()}\n` +
+                  `Cache Create: ${sessionUsage.cache_creation_input_tokens.toLocaleString()}\n` +
+                  `Cache Hit: ${cacheRate}%`
+                : 'No cache data');
+            return (
+              <div className="token-usage-indicator" title={title}>
+                <span className="token-icon">&bull;</span>
+                <span>
+                  {'\u2191'}{formatTokenCount(sessionUsage.input_tokens)}
+                  {' '}
+                  {'\u2193'}{formatTokenCount(sessionUsage.output_tokens)}
+                  {cacheRate !== null && ` | Cache ${cacheRate}%`}
+                </span>
+              </div>
+            );
+          })()}
 
           <div
             className="memory-sync-status"

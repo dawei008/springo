@@ -7,6 +7,7 @@ import type {
   ToolUseBlock,
   ConvRuntime,
   ToolUse,
+  UsageData,
 } from '@/types';
 import { processStreamingResponse } from '@/services/sse';
 import { api } from '@/services/api';
@@ -22,6 +23,26 @@ const BASE_URL = 'http://127.0.0.1:8081';
 // Used by the finally-block backend sync to detect if a newer send started
 // during its async fetch, preventing stale overwrites.
 const _sendEpoch: Record<string, number> = {};
+
+// Debounced usage persistence — persists to backend metadata at most once per 2 seconds per session
+const _usagePersistTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+function _scheduleUsagePersist(sessionId: string, usage: UsageData) {
+  if (_usagePersistTimers[sessionId]) {
+    clearTimeout(_usagePersistTimers[sessionId]);
+  }
+  _usagePersistTimers[sessionId] = setTimeout(async () => {
+    delete _usagePersistTimers[sessionId];
+    try {
+      await fetch(`${BASE_URL}/v1/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata: { usage } }),
+      });
+    } catch {
+      // Ignore persist errors
+    }
+  }, 2000);
+}
 
 // ---------------------------------------------------------------------------
 // Tool result UI handler — ported from legacy handleToolResultUI()
@@ -286,6 +307,7 @@ interface ChatState {
   runtimes: Record<string, ConvRuntime>;
   abortControllers: Record<string, AbortController>;
   recentlyAccessedSessions: string[];
+  sessionUsage: Record<string, UsageData>;
 
   // Core accessors
   getRuntime: (convId: string) => ConvRuntime;
@@ -331,6 +353,10 @@ interface ChatState {
   ) => Promise<void>;
   stopTask: (convId: string) => void;
 
+  // Usage tracking
+  accumulateUsage: (sessionId: string, usage: UsageData) => void;
+  loadUsage: (sessionId: string) => Promise<void>;
+
   // Cleanup
   resetStuckConversations: () => number;
   cleanupInactiveRuntimes: (currentSessionId: string | null) => number;
@@ -357,6 +383,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   runtimes: {},
   abortControllers: {},
   recentlyAccessedSessions: [],
+  sessionUsage: {},
 
   // ─── Accessors ───
 
@@ -709,6 +736,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
               rafId = requestAnimationFrame(flushPendingUpdate);
             }
           }
+        },
+        onUsageUpdate: (usage) => {
+          store.accumulateUsage(convId, usage);
         },
         onToolUse: () => {
           // Tool-use blocks are already accumulated by the parser and
@@ -1086,6 +1116,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 }
               }
             },
+            onUsageUpdate: (usage) => {
+              store.accumulateUsage(convId, usage);
+            },
             onToolUse: () => {},
             onToolExecutionStart: () => {},
             onToolResult: (evt) => {
@@ -1228,6 +1261,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (curId && curId !== convId) {
         markUnseen(convId);
       }
+    }
+  },
+
+  // ─── Usage Tracking ───
+
+  accumulateUsage: (sessionId: string, usage: UsageData) => {
+    const { sessionUsage } = get();
+    const prev = sessionUsage[sessionId] || {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    };
+    const updated: UsageData = {
+      input_tokens: prev.input_tokens + usage.input_tokens,
+      output_tokens: prev.output_tokens + usage.output_tokens,
+      cache_creation_input_tokens: prev.cache_creation_input_tokens + usage.cache_creation_input_tokens,
+      cache_read_input_tokens: prev.cache_read_input_tokens + usage.cache_read_input_tokens,
+    };
+    set((state) => ({
+      sessionUsage: { ...state.sessionUsage, [sessionId]: updated },
+    }));
+    // Debounced persist to backend metadata
+    _scheduleUsagePersist(sessionId, updated);
+  },
+
+  loadUsage: async (sessionId: string) => {
+    // Already loaded
+    if (get().sessionUsage[sessionId]) return;
+    try {
+      const res = await fetch(`${BASE_URL}/v1/sessions/${sessionId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      const usage = data.metadata?.usage as UsageData | undefined;
+      if (usage && (usage.input_tokens > 0 || usage.output_tokens > 0)) {
+        set((state) => ({
+          sessionUsage: { ...state.sessionUsage, [sessionId]: usage },
+        }));
+      }
+    } catch {
+      // Ignore
     }
   },
 

@@ -9,6 +9,7 @@ import type {
   SSEFrame,
   SSEEventType,
   ToolUse,
+  UsageData,
   ToolResultEvent,
   HeartbeatEvent,
   ToolExecutionStartEvent,
@@ -176,6 +177,9 @@ export interface StreamCallbacks {
   onTeamTaskUpdated?: (event: TeamTaskUpdatedEvent) => void;
   onTeamTaskUnblocked?: (event: TeamTaskUnblockedEvent) => void;
 
+  // --- Usage tracking ---
+  onUsageUpdate?: (usage: UsageData) => void;
+
   // --- Lifecycle ---
   onComplete: (text: string, toolUses: ToolUse[]) => void;
   onError?: (error: Error) => void;
@@ -217,8 +221,19 @@ export async function processStreamingResponse(
       switch (eventType) {
         // ---- Core message events ----
 
-        case 'message_start':
+        case 'message_start': {
+          const msg = (data as Record<string, unknown>).message as Record<string, unknown> | undefined;
+          const msUsage = msg?.usage as Record<string, number> | undefined;
+          if (msUsage && callbacks.onUsageUpdate) {
+            callbacks.onUsageUpdate({
+              input_tokens: msUsage.input_tokens || 0,
+              output_tokens: 0,
+              cache_creation_input_tokens: msUsage.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: msUsage.cache_read_input_tokens || 0,
+            });
+          }
           break;
+        }
 
         case 'content_block_start': {
           const block = (data as Record<string, unknown>).content_block as {
@@ -258,6 +273,19 @@ export async function processStreamingResponse(
             currentToolUse = null;
             currentToolInput = '';
             callbacks.onTextUpdate(textContent, toolUses, false);
+          }
+          break;
+        }
+
+        case 'message_delta': {
+          const mdUsage = (data as Record<string, unknown>).usage as Record<string, number> | undefined;
+          if (mdUsage && callbacks.onUsageUpdate) {
+            callbacks.onUsageUpdate({
+              input_tokens: 0,
+              output_tokens: mdUsage.output_tokens || 0,
+              cache_creation_input_tokens: 0,
+              cache_read_input_tokens: 0,
+            });
           }
           break;
         }

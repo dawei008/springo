@@ -481,6 +481,7 @@ export type SSEEventType =
   | 'team_task_created'
   | 'team_task_updated'
   | 'team_task_unblocked'
+  | 'message_delta'
   | 'error';
 
 // ==================== API Request / Response Shapes ====================
@@ -521,6 +522,13 @@ export interface MessageResponse {
 export interface Usage {
   input_tokens: number;
   output_tokens: number;
+}
+
+export interface UsageData {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
 }
 
 // ==================== Session API shapes ====================
