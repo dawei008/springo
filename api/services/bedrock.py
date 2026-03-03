@@ -692,7 +692,16 @@ class BedrockService:
                     system_prompt += "\n" + memory_context
         except Exception as e:
             logger.debug(f"Memory injection skipped: {e}")
-        bedrock_body["system"] = system_prompt
+        if api_format == "anthropic":
+            bedrock_body["system"] = [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        else:
+            bedrock_body["system"] = system_prompt
         
         # Handle tools (skip for models that don't support tool use)
         if include_tools and model_supports_tools(model):
@@ -705,6 +714,8 @@ class BedrockService:
                 max_t = get_max_tools(model)
                 if max_t > 0 and len(raw_tools) > max_t:
                     raw_tools = _prioritize_tools(raw_tools, max_t)
+                if api_format == "anthropic" and raw_tools:
+                    raw_tools[-1]["cache_control"] = {"type": "ephemeral"}
                 bedrock_body["tools"] = raw_tools
         
         # Inject current time into last user message
