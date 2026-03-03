@@ -17,7 +17,7 @@ from .bedrock import get_bedrock_service, BedrockService
 from .vendor_router import get_vendor_router
 from .model_registry import get_model_info, get_model_limits
 from .session_state import get_working_dir
-from .mcp_manager import get_mcp_manager
+from .tool_manager import get_tool_manager
 from .context_manager import (
     truncate_tool_results, prepare_messages_for_api,
     count_messages_tokens, MAX_INLINE_OUTPUT_SIZE,
@@ -780,8 +780,8 @@ class AgentTeamManager:
         _ORCH_ALLOWED_TOOLS = {"execute_command", "list_directory"}
         tools = []
         try:
-            mcp_mgr = await get_mcp_manager()
-            tool_defs = mcp_mgr.get_tool_definitions()
+            tool_mgr = await get_tool_manager()
+            tool_defs = tool_mgr.get_tool_definitions()
             if tool_defs:
                 tools = [
                     t.model_dump() if hasattr(t, "model_dump") else t
@@ -844,9 +844,9 @@ class AgentTeamManager:
                         )
 
                     try:
-                        mcp_mgr = await get_mcp_manager()
+                        tool_mgr = await get_tool_manager()
                         result = await asyncio.wait_for(
-                            mcp_mgr.execute_tool(tool_name, tool_input),
+                            tool_mgr.execute_tool(tool_name, tool_input),
                             timeout=60.0,
                         )
                         result_str = (
@@ -960,11 +960,11 @@ class AgentTeamManager:
             }
         ]
 
-        # ---- Load tools from MCPManager ----
+        # ---- Load tools from Tool Manager ----
         tools = []
         try:
-            mcp_mgr = await get_mcp_manager()
-            tool_defs = mcp_mgr.get_tool_definitions()
+            tool_mgr = await get_tool_manager()
+            tool_defs = tool_mgr.get_tool_definitions()
             if tool_defs:
                 tools = [t.model_dump() if hasattr(t, "model_dump") else t for t in tool_defs]
                 logger.info(f"Agent {agent.role.name}: loaded {len(tools)} tools")
@@ -1094,7 +1094,7 @@ class AgentTeamManager:
                             tool["input"] = {}
 
                 # ---- Execute tools ----
-                mcp_manager = await get_mcp_manager()
+                tool_manager = await get_tool_manager()
                 tool_results = []
 
                 for tool in tool_uses:
@@ -1108,7 +1108,7 @@ class AgentTeamManager:
                     t0 = asyncio.get_event_loop().time()
                     try:
                         result = await asyncio.wait_for(
-                            mcp_manager.execute_tool(tool_name, tool.get("input", {})),
+                            tool_manager.execute_tool(tool_name, tool.get("input", {})),
                             timeout=settings.tool_execution_timeout,
                         )
                         is_error = "error" in result

@@ -24,7 +24,7 @@ from .team_task_manager import TeamTaskManager
 from .bedrock import BedrockService
 from .model_registry import get_model_info, get_model_limits
 from .session_state import get_working_dir
-from .mcp_manager import get_mcp_manager
+from .tool_manager import get_tool_manager
 from .context_manager import (
     truncate_tool_results, prepare_messages_for_api,
     count_messages_tokens, repair_orphan_tool_uses,
@@ -529,7 +529,7 @@ async def _run_tool_loop(
                     tool["input"] = {}
 
         # Execute tools
-        mcp_manager = await get_mcp_manager()
+        tool_manager = await get_tool_manager()
         tool_results = []
 
         for tool in tool_uses:
@@ -558,7 +558,7 @@ async def _run_tool_loop(
             else:
                 try:
                     result = await asyncio.wait_for(
-                        mcp_manager.execute_tool(tool_name, tool_input),
+                        tool_manager.execute_tool(tool_name, tool_input),
                         timeout=settings.tool_execution_timeout,
                     )
                     is_error = "error" in result
@@ -1295,8 +1295,8 @@ async def _load_team_tools() -> List[Dict[str, Any]]:
     tools = []
     seen_names: set = set()
     try:
-        mcp_mgr = await get_mcp_manager()
-        tool_defs = mcp_mgr.get_tool_definitions()
+        tool_mgr = await get_tool_manager()
+        tool_defs = tool_mgr.get_tool_definitions()
         if tool_defs:
             for t in tool_defs:
                 td = t.model_dump() if hasattr(t, "model_dump") else t

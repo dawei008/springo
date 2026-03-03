@@ -1,6 +1,6 @@
 """
-MCP Tools Manager for FastAPI
-异步 MCP 工具管理器，使用 ThreadPoolExecutor 隔离同步操作
+Tool Manager for FastAPI
+异步工具管理器，使用 ThreadPoolExecutor 隔离同步操作
 """
 import asyncio
 import logging
@@ -18,11 +18,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 logger = logging.getLogger(__name__)
 
 
-class MCPManager:
+class ToolManager:
     """
-    异步 MCP 工具管理器
+    异步工具管理器
 
-    使用 ThreadPoolExecutor 将同步的 MCP 工具调用隔离到线程池中，
+    使用 ThreadPoolExecutor 将同步的工具调用隔离到线程池中，
     避免阻塞 asyncio 事件循环。
     """
 
@@ -54,9 +54,9 @@ class MCPManager:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(self.executor, self._load_tools_sync)
             self._tools_loaded = True
-            logger.info(f"MCP Manager initialized with {len(self._tool_definitions)} tools")
+            logger.info(f"Tool Manager initialized with {len(self._tool_definitions)} tools")
         except Exception as e:
-            logger.error(f"Failed to initialize MCP Manager: {e}")
+            logger.error(f"Failed to initialize Tool Manager: {e}")
             raise
     
     def _load_tools_sync(self) -> None:
@@ -297,25 +297,25 @@ class MCPManager:
     async def close(self) -> None:
         """关闭管理器，清理资源"""
         self.executor.shutdown(wait=True)
-        logger.info("MCP Manager closed")
+        logger.info("Tool Manager closed")
 
 
 # 全局单例
-_mcp_manager: Optional[MCPManager] = None
+_tool_manager: Optional[ToolManager] = None
 
 
-async def get_mcp_manager() -> MCPManager:
-    """获取 MCP 管理器单例"""
-    global _mcp_manager
-    if _mcp_manager is None:
-        _mcp_manager = MCPManager()
-        await _mcp_manager.initialize()
-    return _mcp_manager
+async def get_tool_manager() -> ToolManager:
+    """获取工具管理器单例"""
+    global _tool_manager
+    if _tool_manager is None:
+        _tool_manager = ToolManager()
+        await _tool_manager.initialize()
+    return _tool_manager
 
 
-async def close_mcp_manager() -> None:
-    """关闭 MCP 管理器"""
-    global _mcp_manager
-    if _mcp_manager is not None:
-        await _mcp_manager.close()
-        _mcp_manager = None
+async def close_tool_manager() -> None:
+    """关闭工具管理器"""
+    global _tool_manager
+    if _tool_manager is not None:
+        await _tool_manager.close()
+        _tool_manager = None

@@ -35,7 +35,7 @@ Key files in the multi-vendor stack:
 ├─────────────────────────────────────────────────────────────┤
 │  Services                                                    │
 │  ├── bedrock.py     → Async Bedrock client (aioboto3)       │
-│  ├── mcp_manager.py → Async MCP tool execution              │
+│  ├── tool_manager.py → Async tool execution              │
 │  └── session_store.py → Session persistence                 │
 ├─────────────────────────────────────────────────────────────┤
 │  Models (Pydantic)                                           │
@@ -54,7 +54,7 @@ Key files in the multi-vendor stack:
 | `api/main.py` | FastAPI app entry point, lifespan management |
 | `api/config.py` | Pydantic Settings configuration |
 | `api/services/bedrock.py` | Async Bedrock API client |
-| `api/services/mcp_manager.py` | Async MCP tool manager with ThreadPoolExecutor |
+| `api/services/tool_manager.py` | Async tool manager with ThreadPoolExecutor |
 | `api/routers/messages.py` | Core message handling with SSE streaming |
 
 ## Development Patterns
@@ -63,7 +63,7 @@ Key files in the multi-vendor stack:
 All I/O operations use async/await:
 ```python
 async def execute_tool(tool_name: str, tool_input: dict) -> dict:
-    result = await mcp_manager.execute_tool(tool_name, tool_input)
+    result = await tool_manager.execute_tool(tool_name, tool_input)
     return result
 ```
 
@@ -73,7 +73,7 @@ Use FastAPI's Depends for services:
 @router.post("/tools/execute")
 async def execute_tool(
     request: ToolExecuteRequest,
-    mcp_manager: MCPManager = Depends(get_mcp_manager)
+    tool_manager: ToolManager = Depends(get_tool_manager)
 ):
     ...
 ```

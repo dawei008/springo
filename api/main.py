@@ -45,15 +45,15 @@ async def lifespan(app: FastAPI):
     logger.info(f"AWS Region: {settings.aws_region}")
     logger.info(f"Bedrock Model: {settings.bedrock_model_id}")
 
-    # Initialize MCP Manager (built-in tools)
+    # Initialize Tool Manager (built-in tools)
     global _mcp_initialized
     try:
-        from .services.mcp_manager import get_mcp_manager, close_mcp_manager
-        mcp_manager = await get_mcp_manager()
+        from .services.tool_manager import get_tool_manager, close_tool_manager
+        tool_manager = await get_tool_manager()
         _mcp_initialized = True
-        logger.info(f"MCP Manager initialized with {len(mcp_manager.get_tool_definitions())} tools")
+        logger.info(f"Tool Manager initialized with {len(tool_manager.get_tool_definitions())} tools")
     except Exception as e:
-        logger.warning(f"Failed to initialize MCP Manager: {e}")
+        logger.warning(f"Failed to initialize Tool Manager: {e}")
 
     # Initialize External MCP Servers (lazy)
     try:
@@ -177,10 +177,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down Springo FastAPI...")
     try:
-        from .services.mcp_manager import close_mcp_manager
-        await close_mcp_manager()
+        from .services.tool_manager import close_tool_manager
+        await close_tool_manager()
     except Exception as e:
-        logger.warning(f"Error closing MCP Manager: {e}")
+        logger.warning(f"Error closing Tool Manager: {e}")
     try:
         from .services.mcp_client import shutdown_external_mcp
         shutdown_external_mcp()
@@ -252,8 +252,8 @@ class MCPLazyInitMiddleware(BaseHTTPMiddleware):
         global _mcp_initialized
         if not _mcp_initialized:
             try:
-                from .services.mcp_manager import get_mcp_manager
-                await get_mcp_manager()
+                from .services.tool_manager import get_tool_manager
+                await get_tool_manager()
                 _mcp_initialized = True
             except Exception as e:
                 logger.warning(f"MCP lazy init on request failed: {e}")

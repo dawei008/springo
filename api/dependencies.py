@@ -54,13 +54,13 @@ ApiKeyDep = Annotated[bool, Depends(verify_api_key)]
 # BedrockDep = Annotated[BedrockService, Depends(get_bedrock_client)]
 
 
-# MCP Manager dependency (will be implemented in Phase 3)
-# async def get_mcp_manager():
+# Tool Manager dependency (will be implemented in Phase 3)
+# async def get_tool_manager():
 #     """Get MCP manager instance"""
-#     from .services.mcp_manager import MCPManager
-#     return MCPManager()
+#     from .services.tool_manager import ToolManager
+#     return ToolManager()
 # 
-# MCPManagerDep = Annotated[MCPManager, Depends(get_mcp_manager)]
+# ToolManagerDep = Annotated[ToolManager, Depends(get_tool_manager)]
 
 
 # Session store dependency (will be implemented in Phase 5)

@@ -132,7 +132,7 @@ springo-fastapi/
 │   │   └── health.py        # Health endpoints
 │   ├── services/
 │   │   ├── bedrock.py       # Bedrock async client
-│   │   ├── mcp_manager.py   # MCP tools manager
+│   │   ├── tool_manager.py   # Tool manager
 │   │   └── session_store.py # Session persistence
 │   ├── models/
 │   │   ├── requests.py      # Request models

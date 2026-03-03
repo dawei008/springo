@@ -19,7 +19,7 @@ from ..models.responses import MessageResponse, ErrorResponse, Usage
 from ..services.bedrock import get_bedrock_service, BedrockService, get_model_limits
 from ..services.vendor_router import get_vendor_router, VendorRouter
 from ..services.model_registry import MODEL_REGISTRY
-from ..services.mcp_manager import get_mcp_manager, MCPManager
+from ..services.tool_manager import get_tool_manager, ToolManager
 from ..services.context_manager import (
     count_messages_tokens, should_summarize, summarize_context,
     prepare_messages_for_api, truncate_tool_results, repair_orphan_tool_uses,
@@ -227,17 +227,17 @@ async def messages_auto_api(
         from ..services.session_state import get_working_dir
         working_dir = msg_request.working_directory or get_working_dir() or None
 
-        # Get tools: use request tools if provided, otherwise load from MCPManager
+        # Get tools: use request tools if provided, otherwise load from Tool Manager
         tools = msg_request.tools or []
         if not tools:
             try:
-                mcp_mgr = await get_mcp_manager()
-                tool_defs = mcp_mgr.get_tool_definitions()
+                tool_mgr = await get_tool_manager()
+                tool_defs = tool_mgr.get_tool_definitions()
                 if tool_defs:
                     tools = tool_defs
-                    logger.info(f"Loaded {len(tools)} tools from MCPManager")
+                    logger.info(f"Loaded {len(tools)} tools from Tool Manager")
             except Exception as e:
-                logger.warning(f"Failed to load tools from MCPManager: {e}")
+                logger.warning(f"Failed to load tools from Tool Manager: {e}")
         
         original_model = msg_request.model
         max_iterations = msg_request.max_tool_iterations
@@ -574,8 +574,8 @@ async def messages_auto_api(
                         logger.info(f"[Auto] Cancelled before tool execution at iteration {iteration}")
                         break
 
-                    # Execute tools via MCPManager (parallel with batch SSE events)
-                    mcp_manager = await get_mcp_manager()
+                    # Execute tools via ToolManager (parallel with batch SSE events)
+                    tool_manager = await get_tool_manager()
                     tool_results = []
                     batch_start = asyncio.get_event_loop().time()
 
@@ -606,7 +606,7 @@ async def messages_auto_api(
 
                         pending = {
                             asyncio.create_task(
-                                _exec_tool_parallel(t, mcp_manager, settings.tool_execution_timeout)
+                                _exec_tool_parallel(t, tool_manager, settings.tool_execution_timeout)
                             )
                             for t in tool_uses
                         }
@@ -620,7 +620,7 @@ async def messages_auto_api(
                                     p.cancel()
                                 # Also kill active subprocesses
                                 if session_id:
-                                    await mcp_manager.cancel_session_tools(session_id)
+                                    await tool_manager.cancel_session_tools(session_id)
                                 _cancelled_tools = True
                                 break
 
@@ -670,7 +670,7 @@ async def messages_auto_api(
                             if cancel_event and cancel_event.is_set():
                                 logger.info(f"[Auto] Cancelled before executing tool {tool['name']}")
                                 if session_id:
-                                    await mcp_manager.cancel_session_tools(session_id)
+                                    await tool_manager.cancel_session_tools(session_id)
                                 _seq_cancelled = True
                                 break
 
@@ -692,7 +692,7 @@ async def messages_auto_api(
                             # Wrap tool execution in a task so we can cancel it
                             _tool_task = asyncio.create_task(
                                 asyncio.wait_for(
-                                    mcp_manager.execute_tool(tool["name"], tool.get("input", {})),
+                                    tool_manager.execute_tool(tool["name"], tool.get("input", {})),
                                     timeout=settings.tool_execution_timeout,
                                 )
                             )
@@ -704,7 +704,7 @@ async def messages_auto_api(
                                         logger.info(f"[Auto] Cancelling running tool {tool['name']}")
                                         _tool_task.cancel()
                                         if session_id:
-                                            await mcp_manager.cancel_session_tools(session_id)
+                                            await tool_manager.cancel_session_tools(session_id)
                                         break
                                     await asyncio.sleep(0.1)
 
@@ -931,13 +931,13 @@ async def messages_auto_api(
                     final_response = bedrock_response
                     break
 
-                # Execute tools via MCPManager (parallel with timeout)
-                mcp_manager = await get_mcp_manager()
+                # Execute tools via ToolManager (parallel with timeout)
+                tool_manager = await get_tool_manager()
 
                 async def _exec_one(t):
                     try:
                         r = await asyncio.wait_for(
-                            mcp_manager.execute_tool(t["name"], t.get("input", {})),
+                            tool_manager.execute_tool(t["name"], t.get("input", {})),
                             timeout=settings.tool_execution_timeout
                         )
                         err = "error" in r
@@ -1076,7 +1076,7 @@ async def cancel_session(session_id: str):
         evt.set()
         # Also kill any active tool subprocesses for this session
         try:
-            mgr = await get_mcp_manager()
+            mgr = await get_tool_manager()
             killed = await mgr.cancel_session_tools(session_id)
         except Exception as e:
             logger.warning(f"[Cancel] Failed to kill tools for {session_id}: {e}")
@@ -1084,7 +1084,7 @@ async def cancel_session(session_id: str):
         return {"status": "cancelled", "session_id": session_id, "tools_killed": killed}
     # Even without a cancel event, try to kill subprocesses (e.g. from non-streaming calls)
     try:
-        mgr = await get_mcp_manager()
+        mgr = await get_tool_manager()
         killed = await mgr.cancel_session_tools(session_id)
     except Exception:
         pass

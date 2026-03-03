@@ -211,7 +211,7 @@ class MCPServerConnection:
         return definitions
 
 
-class ExternalMCPManager:
+class ExternalToolManager:
     """Manages multiple external MCP server connections"""
 
     def __init__(self, config_path: str = None):
@@ -617,13 +617,13 @@ class ExternalMCPManager:
 
 
 # Singleton
-_external_mcp_manager: Optional[ExternalMCPManager] = None
+_external_mcp_manager: Optional[ExternalToolManager] = None
 
 
-def get_external_mcp_manager() -> ExternalMCPManager:
+def get_external_mcp_manager() -> ExternalToolManager:
     global _external_mcp_manager
     if _external_mcp_manager is None:
-        _external_mcp_manager = ExternalMCPManager()
+        _external_mcp_manager = ExternalToolManager()
     return _external_mcp_manager
 
 
@@ -668,7 +668,7 @@ def call_mcp_tool(tool_name: str, arguments: Dict[str, Any], timeout: float = 60
 
 
 __all__ = [
-    'MCPServerConnection', 'ExternalMCPManager',
+    'MCPServerConnection', 'ExternalToolManager',
     'get_external_mcp_manager', 'initialize_external_mcp', 'shutdown_external_mcp',
     'start_all_mcp_servers', 'get_mcp_tools', 'call_mcp_tool',
 ]

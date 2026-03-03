@@ -447,10 +447,10 @@ async def search_news(request: NewsSearchRequest):
     """搜索新闻"""
     try:
         try:
-            from ..services.mcp_manager import get_mcp_manager
+            from ..services.tool_manager import get_tool_manager
 
-            mcp_manager = await get_mcp_manager()
-            result = await mcp_manager.execute_tool(
+            tool_manager = await get_tool_manager()
+            result = await tool_manager.execute_tool(
                 "web-search__brave_news_search",
                 {
                     "query": request.query,

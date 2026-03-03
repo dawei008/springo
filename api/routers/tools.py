@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 import logging
 
-from ..services.mcp_manager import get_mcp_manager, MCPManager
+from ..services.tool_manager import get_tool_manager, ToolManager
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class ToolsListResponse(BaseModel):
 @router.post("/tools/execute", response_model=ToolExecuteResponse)
 async def execute_tool(
     request: ToolExecuteRequest,
-    mcp_manager: MCPManager = Depends(get_mcp_manager)
+    tool_manager: ToolManager = Depends(get_tool_manager)
 ):
     """
     执行单个工具
@@ -75,7 +75,7 @@ async def execute_tool(
         # Validate required params for known tools to detect truncated model responses
         _validate_tool_params(request.name, request.input)
 
-        result = await mcp_manager.execute_tool(request.name, request.input)
+        result = await tool_manager.execute_tool(request.name, request.input)
 
         # Truncate large results
         result = _truncate_result(result)
@@ -100,7 +100,7 @@ async def execute_tool(
 @router.post("/tools/batch", response_model=ToolsBatchResponse)
 async def execute_tools_batch(
     request: ToolsBatchRequest,
-    mcp_manager: MCPManager = Depends(get_mcp_manager)
+    tool_manager: ToolManager = Depends(get_tool_manager)
 ):
     """
     批量执行工具
@@ -114,12 +114,12 @@ async def execute_tools_batch(
         ]
         
         if request.parallel:
-            results = await mcp_manager.execute_tools_parallel(tool_calls)
+            results = await tool_manager.execute_tools_parallel(tool_calls)
         else:
             # 串行执行
             results = []
             for tc in tool_calls:
-                result = await mcp_manager.execute_tool(tc["name"], tc["input"])
+                result = await tool_manager.execute_tool(tc["name"], tc["input"])
                 results.append({
                     "tool_use_id": tc["id"],
                     "name": tc["name"],
@@ -145,7 +145,7 @@ async def execute_tools_batch(
 @router.get("/tools", response_model=ToolsListResponse)
 @router.get("/tools/list", response_model=ToolsListResponse, include_in_schema=False)
 async def list_tools(
-    mcp_manager: MCPManager = Depends(get_mcp_manager)
+    tool_manager: ToolManager = Depends(get_tool_manager)
 ):
     """
     获取所有可用工具列表
@@ -153,7 +153,7 @@ async def list_tools(
     Get list of all available tools with their definitions.
     """
     try:
-        definitions = mcp_manager.get_tool_definitions()
+        definitions = tool_manager.get_tool_definitions()
         
         tools = [
             ToolDefinition(
@@ -176,7 +176,7 @@ async def list_tools(
 @router.get("/tools/{tool_name}")
 async def get_tool_info(
     tool_name: str,
-    mcp_manager: MCPManager = Depends(get_mcp_manager)
+    tool_manager: ToolManager = Depends(get_tool_manager)
 ):
     """
     获取单个工具的详细信息
@@ -184,7 +184,7 @@ async def get_tool_info(
     Get detailed information about a specific tool.
     """
     try:
-        definitions = mcp_manager.get_tool_definitions()
+        definitions = tool_manager.get_tool_definitions()
         
         for tool in definitions:
             if tool.get("name") == tool_name:

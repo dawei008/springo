@@ -72,10 +72,10 @@ async def detailed_health_check():
     except Exception as e:
         services["bedrock"] = {"status": "error", "error": str(e)}
     
-    # 检查 MCP Manager
+    # 检查 Tool Manager
     try:
-        from ..services.mcp_manager import get_mcp_manager
-        mcp = await get_mcp_manager()
+        from ..services.tool_manager import get_tool_manager
+        mcp = await get_tool_manager()
         tools_count = len(mcp.get_tool_definitions())
         services["mcp"] = {"status": "available", "tools": tools_count}
     except Exception as e:
@@ -122,8 +122,8 @@ async def readiness_check():
     """
     try:
         # 检查核心服务是否就绪
-        from ..services.mcp_manager import get_mcp_manager
-        await get_mcp_manager()
+        from ..services.tool_manager import get_tool_manager
+        await get_tool_manager()
         
         return {"ready": True}
     except Exception as e:
