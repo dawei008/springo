@@ -340,8 +340,12 @@ async def messages_auto_api(
                     except Exception as e:
                         logger.error(f"Auto-save session {session_id} failed: {e}")
 
+                content_blocks = []  # initialized before loop to avoid NameError on early break
+                _content_saved_this_iter = False
+
                 while iteration < max_iterations:
                     iteration += 1
+                    _content_saved_this_iter = False
 
                     # Check client disconnect or cancellation
                     if cancel_event and cancel_event.is_set():
@@ -789,14 +793,17 @@ async def messages_auto_api(
 
                     # Auto-save after each tool execution iteration
                     _auto_save_session(messages, {"iteration": iteration})
+                    _content_saved_this_iter = True
+                    content_blocks = []  # clear so stale blocks aren't re-saved after loop
 
                     # Break loop if ask_user was called — let user respond
                     if any(t["name"] == "ask_user" for t in tool_uses):
                         logger.info(f"[Auto] ask_user called at iteration {iteration}, yielding for user reply")
                         break
 
-                # Save final assistant response (when loop ends without tool_use)
-                if content_blocks:
+                # Save final assistant response (only for normal end_turn, not after
+                # tool-execution saves or cancellation where content_blocks is stale)
+                if content_blocks and not _content_saved_this_iter:
                     final_assistant = []
                     for block in content_blocks:
                         if block.get("type") == "text" and block.get("text"):
