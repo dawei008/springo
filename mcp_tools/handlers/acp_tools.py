@@ -10,14 +10,19 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 
-def _run_async(coro):
-    """Run an async coroutine from a sync context (ThreadPoolExecutor)."""
+def _run_async(coro, timeout: float = 660):
+    """Run an async coroutine from a sync context (ThreadPoolExecutor).
+
+    Args:
+        timeout: Max seconds to wait. Should exceed the ACP prompt timeout (600s)
+                 to avoid cutting off in-progress ACP calls.
+    """
     try:
         asyncio.get_running_loop()
         # Already in an async context — schedule in a new thread
         import concurrent.futures
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result(timeout=300)
+            return pool.submit(asyncio.run, coro).result(timeout=timeout)
     except RuntimeError:
         # No running loop — safe to use asyncio.run
         return asyncio.run(coro)

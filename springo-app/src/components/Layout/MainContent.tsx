@@ -362,16 +362,18 @@ export default function MainContent() {
     }
     const teamId = useUIStore.getState().getSessionTeam(currentSessionId);
     if (teamId) {
-      // Load historical team data from backend API
+      // Load historical team data from backend API and restore team mode
       useTeamStore.getState().loadTeamFromAPI(teamId).then((loaded) => {
         if (loaded) {
           useUIStore.getState().setActiveTeamId(teamId);
+          useUIStore.getState().setTeamModeEnabled(true);
         }
       });
     } else {
-      // No team for this session — reset
+      // No team for this session — reset team state and disable team mode
       useTeamStore.getState().resetTeam();
       useUIStore.getState().setActiveTeamId(null);
+      useUIStore.getState().setTeamModeEnabled(false);
     }
   }, [currentSessionId]);
 

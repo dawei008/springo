@@ -96,6 +96,8 @@ _TOOL_TIER1 = {
     # Planning & memory (always available)
     "enter_plan_mode", "exit_plan_mode",
     "memory_search", "memory_write", "memory_get",
+    # ACP agents (delegate to external AI agents)
+    "acp_prompt", "acp_list_agents", "acp_new_session",
 }
 # Tier 2: Web & knowledge
 _TOOL_TIER2_PREFIXES = (
@@ -303,6 +305,7 @@ This applies to ALL complex tasks: document creation/editing, data processing, b
 | Long-running tasks | `execute_command` with run_in_background=true | - |
 | Complex multi-step tasks | `task` (launches background agent) | blocking main session |
 | Deep code exploration | `task` with agent_type="explore" | manual grep/read loops |
+| Delegate to external AI agent | `acp_prompt` (Kiro, Gemini, OpenClaw, etc.) | SSH/manual CLI |
 | Track complex tasks | `todo_write` | - |
 | Ask user questions | `ask_user` | - |
 | Plan before coding | `enter_plan_mode` | - |

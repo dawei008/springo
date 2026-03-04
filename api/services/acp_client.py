@@ -7,6 +7,7 @@ Follows the same patterns as mcp_client.py (subprocess management, JSON-RPC 2.0)
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import threading
 import queue
@@ -83,16 +84,26 @@ class AcpAgentConnection:
             return False
 
     async def stop(self):
-        """Terminate connection."""
+        """Terminate connection, killing entire process group to avoid orphans."""
         self._running = False
         self._initialized = False
         if self.process:
+            pid = self.process.pid
             try:
-                self.process.terminate()
+                # Kill entire process group to avoid orphaned child processes
+                # (e.g., openclaw-acp spawns node children that survive SIGTERM)
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
                 self.process.wait(timeout=5)
+            except (ProcessLookupError, PermissionError):
+                pass
             except Exception:
                 try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except Exception:
+                    pass
+                try:
                     self.process.kill()
+                    self.process.wait(timeout=3)
                 except Exception:
                     pass
             self.process = None
@@ -134,6 +145,7 @@ class AcpAgentConnection:
             [self.command] + self.args,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=process_env, text=True, bufsize=1,
+            preexec_fn=os.setsid,  # Create new process group for clean shutdown
         )
         self._running = True
         self._reader_thread = threading.Thread(target=self._read_responses, daemon=True)
