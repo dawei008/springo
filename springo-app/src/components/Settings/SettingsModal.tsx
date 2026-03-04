@@ -28,6 +28,20 @@ export default function SettingsModal() {
   // General tab state
   const [localDefaultWorkdir, setLocalDefaultWorkdir] = useState(defaultWorkingFolder || '~/Downloads')
 
+  // ACP Agents state (General tab)
+  const [acpAgents, setAcpAgents] = useState<Array<{
+    name: string; transport: string; description: string;
+    enabled: boolean; status: string; running: boolean;
+    initialized: boolean; error?: string | null;
+  }>>([])
+  const [acpAddFormOpen, setAcpAddFormOpen] = useState(false)
+  const [acpNewName, setAcpNewName] = useState('')
+  const [acpNewTransport, setAcpNewTransport] = useState<'stdio' | 'http'>('stdio')
+  const [acpNewCommand, setAcpNewCommand] = useState('')
+  const [acpNewArgs, setAcpNewArgs] = useState('')
+  const [acpNewUrl, setAcpNewUrl] = useState('')
+  const [acpNewDescription, setAcpNewDescription] = useState('')
+
   // Models tab state
   const [awsAccessKey, setAwsAccessKey] = useState('')
   const [awsSecretKey, setAwsSecretKey] = useState('')
@@ -118,6 +132,7 @@ export default function SettingsModal() {
     loadPlugins()
     loadSkills()
     loadMcpServers()
+    loadAcpAgents()
   }, [])
 
   // Clamp maxTokens when model changes
@@ -453,6 +468,64 @@ export default function SettingsModal() {
     } catch { /* ignore */ }
   }
 
+  // --- General tab: ACP Agents ---
+  async function loadAcpAgents() {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/acp/agents`)
+      const data = await res.json()
+      setAcpAgents(data.agents || [])
+    } catch { /* ignore */ }
+  }
+
+  function toggleAcpAddForm() {
+    setAcpAddFormOpen(!acpAddFormOpen)
+  }
+
+  async function addAcpAgent() {
+    if (!acpNewName) return
+    if (acpNewTransport === 'stdio' && !acpNewCommand) return
+    if (acpNewTransport === 'http' && !acpNewUrl) return
+    const args = acpNewArgs ? acpNewArgs.split(',').map((s) => s.trim()) : []
+    try {
+      await fetch(`${BASE_URL}/v1/acp/agents`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: acpNewName,
+          transport: acpNewTransport,
+          command: acpNewTransport === 'stdio' ? acpNewCommand : undefined,
+          args: acpNewTransport === 'stdio' ? args : [],
+          url: acpNewTransport === 'http' ? acpNewUrl : undefined,
+          description: acpNewDescription,
+        }),
+      })
+      setAcpNewName('')
+      setAcpNewCommand('')
+      setAcpNewArgs('')
+      setAcpNewUrl('')
+      setAcpNewDescription('')
+      setAcpAddFormOpen(false)
+      loadAcpAgents()
+      showToast(`Added ACP agent: ${acpNewName}`, 'success')
+    } catch { /* ignore */ }
+  }
+
+  async function removeAcpAgent(name: string) {
+    try {
+      await fetch(`${BASE_URL}/v1/acp/agents/${name}`, { method: 'DELETE' })
+      loadAcpAgents()
+      showToast(`Removed ACP agent: ${name}`, 'info')
+    } catch { /* ignore */ }
+  }
+
+  async function refreshAcpAgent(name: string) {
+    try {
+      await fetch(`${BASE_URL}/v1/acp/agents/${name}/refresh`, { method: 'POST' })
+      loadAcpAgents()
+      showToast(`Restarted ACP agent: ${name}`, 'info')
+    } catch { /* ignore */ }
+  }
+
   // --- Memory tab: save & LTM ---
   async function saveMemorySettings() {
     try {
@@ -657,6 +730,119 @@ export default function SettingsModal() {
                 </div>
                 <div className="hint">Default folder for new chats. Use absolute path (e.g., ~/Downloads)</div>
               </div>
+
+              <div className="setting-divider"></div>
+
+              {/* ---- ACP Agents ---- */}
+              <div className="settings-section-header">
+                <h3>ACP Agents</h3>
+                <button onClick={toggleAcpAddForm}>+ Add</button>
+              </div>
+              <div className="hint" style={{ marginBottom: '8px' }}>
+                Connect to external AI coding agents (Kiro, Gemini, OpenClaw, etc.) via <a href="https://github.com/nichochar/agent-client-protocol" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>Agent Client Protocol</a>.
+                Each agent uses its own LLM subscription.
+              </div>
+              <div className="settings-list" id="acp-agents-list">
+                {acpAgents.length === 0 ? (
+                  <div className="settings-list-empty">No ACP agents configured</div>
+                ) : (
+                  acpAgents.map((agent) => {
+                    let statusClass = 'stopped'
+                    let statusText = 'Configured'
+                    if (!agent.enabled) {
+                      statusClass = 'disabled'
+                      statusText = 'Disabled'
+                    } else if (agent.running && agent.initialized) {
+                      statusClass = 'running'
+                      statusText = 'Running'
+                    } else if (agent.status === 'error') {
+                      statusClass = 'error'
+                      statusText = agent.error ? `Error: ${agent.error}` : 'Error'
+                    }
+                    return (
+                      <div key={agent.name} className={`settings-list-item${!agent.enabled ? ' disabled' : ''}`}>
+                        <div className="item-icon">
+                          <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                            <circle cx="12" cy="8" r="4" />
+                            <path d="M6 20v-2a4 4 0 014-4h4a4 4 0 014 4v2" />
+                          </svg>
+                        </div>
+                        <div className="item-info">
+                          <div className="item-name">{agent.name}</div>
+                          <div className="item-desc">{agent.description || agent.transport}</div>
+                        </div>
+                        <span className={`item-status ${statusClass}`}>{statusText}</span>
+                        <div className="item-actions">
+                          {agent.enabled && (
+                            <button onClick={() => refreshAcpAgent(agent.name)} title="Restart connection">Restart</button>
+                          )}
+                          <button className="danger" onClick={() => removeAcpAgent(agent.name)}>Remove</button>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+              {acpAddFormOpen && (
+                <div className="settings-add-form">
+                  <div className="form-row">
+                    <input
+                      type="text"
+                      placeholder="Agent name (e.g., kiro, gemini)"
+                      value={acpNewName}
+                      onChange={(e) => setAcpNewName(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-row">
+                    <select value={acpNewTransport} onChange={(e) => setAcpNewTransport(e.target.value as 'stdio' | 'http')}>
+                      <option value="stdio">stdio (local agent)</option>
+                      <option value="http">HTTP (remote agent)</option>
+                    </select>
+                  </div>
+                  {acpNewTransport === 'stdio' ? (
+                    <>
+                      <div className="form-row">
+                        <input
+                          type="text"
+                          placeholder="Command (e.g., /path/to/kiro-cli)"
+                          value={acpNewCommand}
+                          onChange={(e) => setAcpNewCommand(e.target.value)}
+                        />
+                      </div>
+                      <div className="form-row">
+                        <input
+                          type="text"
+                          placeholder="Arguments (comma separated, e.g., acp)"
+                          value={acpNewArgs}
+                          onChange={(e) => setAcpNewArgs(e.target.value)}
+                        />
+                      </div>
+                    </>
+                  ) : (
+                    <div className="form-row">
+                      <input
+                        type="text"
+                        placeholder="Agent URL (e.g., https://agent.example.com/acp)"
+                        value={acpNewUrl}
+                        onChange={(e) => setAcpNewUrl(e.target.value)}
+                      />
+                    </div>
+                  )}
+                  <div className="form-row">
+                    <input
+                      type="text"
+                      placeholder="Description (optional)"
+                      value={acpNewDescription}
+                      onChange={(e) => setAcpNewDescription(e.target.value)}
+                    />
+                  </div>
+                  <div className="form-actions">
+                    <button className="btn-cancel" onClick={toggleAcpAddForm}>Cancel</button>
+                    <button className="btn-add" onClick={addAcpAgent}>Add Agent</button>
+                  </div>
+                </div>
+              )}
+              <div className="hint">Config file: <code>~/.springo/acp_agents.json</code></div>
             </div>
 
             {/* ====== Models Tab ====== */}

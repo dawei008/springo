@@ -37,6 +37,8 @@ from .handlers import (
     lsp_document_symbols, lsp_workspace_symbol, lsp_diagnostics,
     # Memory tools
     memory_search, memory_get, memory_write,
+    # ACP agent tools
+    acp_prompt, acp_list_agents, acp_new_session,
 )
 
 # Skill loader import
@@ -119,6 +121,10 @@ TOOL_HANDLERS = {
     "memory_search": memory_search,
     "memory_get": memory_get,
     "memory_write": memory_write,
+    # ACP agent tools
+    "acp_prompt": acp_prompt,
+    "acp_list_agents": acp_list_agents,
+    "acp_new_session": acp_new_session,
 }
 
 

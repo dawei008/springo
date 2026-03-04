@@ -90,3 +90,9 @@ from .memory_tools import (
     memory_get,
     memory_write,
 )
+
+from .acp_tools import (
+    acp_prompt,
+    acp_list_agents,
+    acp_new_session,
+)

@@ -170,6 +170,14 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"Feishu bot not started: {e}")
 
+    # Initialize ACP Client (lazy — agents start on first use)
+    try:
+        from .services.acp_client import initialize_acp_client
+        initialize_acp_client()
+        logger.info("ACP Client config loaded (lazy mode)")
+    except Exception as e:
+        logger.debug(f"ACP Client not started: {e}")
+
     # Initialize LSP Manager (lazy — servers start on first tool call)
     try:
         from .services.lsp_manager import get_lsp_manager
@@ -221,6 +229,11 @@ async def lifespan(app: FastAPI):
         await shutdown_lsp_manager()
     except Exception as e:
         logger.warning(f"Error closing LSP Manager: {e}")
+    try:
+        from .services.acp_client import shutdown_acp_client
+        await shutdown_acp_client()
+    except Exception as e:
+        logger.warning(f"Error closing ACP Client: {e}")
 
 
 # Create FastAPI application
@@ -299,7 +312,7 @@ async def root():
 # Import and include routers
 from .routers import messages, tools, sessions, context, news, images, health
 from .routers import config, memory, skills, tool_results
-from .routers import models, mcp, terminal, teams, schedules, plugins
+from .routers import models, mcp, terminal, teams, schedules, plugins, acp
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
 app.include_router(tools.router, prefix="/v1", tags=["tools"])
@@ -320,6 +333,7 @@ app.include_router(terminal.router, prefix="/v1", tags=["terminal"])
 app.include_router(teams.router, prefix="/v1", tags=["teams"])
 app.include_router(schedules.router, prefix="/v1", tags=["schedules"])
 app.include_router(plugins.router, prefix="/v1", tags=["plugins"])
+app.include_router(acp.router, prefix="/v1", tags=["acp"])
 
 
 from fastapi.responses import JSONResponse

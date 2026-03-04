@@ -620,4 +620,47 @@ Base path: `~/.springo/workspace/`. Pass relative paths like 'MEMORY.md' or 'mem
             "required": ["path"]
         }
     },
+    # ──────── ACP Agent Tools ────────
+    {
+        "name": "acp_prompt",
+        "description": """Delegate a task to an external ACP-compatible AI agent (Kiro, Gemini, Cline, OpenClaw, etc.).
+
+Each ACP agent uses its own LLM/subscription. Use this to:
+- Get a second opinion from another AI
+- Leverage specialized agents for specific tasks
+- Delegate sub-tasks to agents with different capabilities
+
+Available agents are configured in ~/.springo/acp_agents.json.
+Use acp_list_agents first to see what's available.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "description": "Name of the ACP agent (e.g., 'kiro', 'gemini')"},
+                "prompt": {"type": "string", "description": "The task/prompt to send to the agent"},
+                "cwd": {"type": "string", "description": "Working directory for the agent session", "default": "/tmp"},
+                "timeout": {"type": "number", "description": "Max seconds to wait for response", "default": 300}
+            },
+            "required": ["agent", "prompt"]
+        }
+    },
+    {
+        "name": "acp_list_agents",
+        "description": "List all configured ACP agents and their status (running, enabled, capabilities).",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "acp_new_session",
+        "description": "Pre-warm a session on an ACP agent for faster subsequent prompts (optional).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "agent": {"type": "string", "description": "Name of the ACP agent"},
+                "cwd": {"type": "string", "description": "Working directory for the session", "default": "/tmp"}
+            },
+            "required": ["agent"]
+        }
+    },
 ]

@@ -68,6 +68,8 @@ from .handlers import (
     scheduler,
     # Memory tools
     memory_search, memory_get,
+    # ACP agent tools
+    acp_prompt, acp_list_agents, acp_new_session,
 )
 
 __all__ = [
@@ -104,4 +106,6 @@ __all__ = [
     "scheduler",
     # Memory tools
     "memory_search", "memory_get",
+    # ACP agent tools
+    "acp_prompt", "acp_list_agents", "acp_new_session",
 ]
