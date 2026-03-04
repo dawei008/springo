@@ -602,14 +602,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // IMPORTANT: skill instructions go into API content only, NOT the UI display message.
     const activeSkill = useUIStore.getState().activeSkill;
     let skillWrappedContent = '';
-    if (activeSkill && textContent) {
+    if (activeSkill) {
       try {
         const resp = await fetch(`${BASE_URL}/v1/skills/${activeSkill.name}/instructions`);
         if (resp.ok) {
           const data = await resp.json();
           const instructions = data.instructions || data.content || '';
           if (instructions) {
-            skillWrappedContent = `<skill name="${activeSkill.name}">\n${instructions}\n</skill>\n\nUser request: ${textContent}\n\nPlease follow the skill instructions above to complete this task.`;
+            if (textContent) {
+              skillWrappedContent = `<skill name="${activeSkill.name}">\n${instructions}\n</skill>\n\nUser request: ${textContent}\n\nPlease follow the skill instructions above to complete this task.`;
+            } else {
+              skillWrappedContent = `<skill name="${activeSkill.name}">\n${instructions}\n</skill>\n\nPlease follow the skill instructions above to complete this task.`;
+            }
           }
         }
       } catch (e) {
@@ -620,9 +624,13 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     // Add user message (display version — shows original text, not skill-wrapped)
+    // If skill is active but no text, show the skill name as display content
+    const displayContent = messageContent.length > 0
+      ? messageContent
+      : (textContent || (activeSkill ? `/${activeSkill.name}` : content));
     const userMsg: Message = {
       role: 'user',
-      content: messageContent.length > 0 ? messageContent : (textContent || content),
+      content: displayContent,
       timestamp: Date.now(),
     };
     runtime.messages.push(userMsg);

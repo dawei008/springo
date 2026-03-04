@@ -89,6 +89,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.debug(f"Memory files not started: {e}")
 
+    # Initialize Plugin System (hooks, skills, MCP, agent templates)
+    try:
+        from .services.plugin_system import get_plugin_manager, get_agent_template_manager
+        plugin_mgr = get_plugin_manager()
+        plugin_count = plugin_mgr.load_plugins()
+        tmpl_count = get_agent_template_manager().load_templates()
+        logger.info(f"Plugin system: {plugin_count} plugin(s), {tmpl_count} agent template(s)")
+    except Exception as e:
+        logger.warning(f"Failed to initialize plugin system: {e}")
+
     # Initialize S3 Sync (if configured)
     try:
         from .services.s3_sync import init_s3_sync
@@ -289,7 +299,7 @@ async def root():
 # Import and include routers
 from .routers import messages, tools, sessions, context, news, images, health
 from .routers import config, memory, skills, tool_results
-from .routers import models, mcp, terminal, teams, schedules
+from .routers import models, mcp, terminal, teams, schedules, plugins
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
 app.include_router(tools.router, prefix="/v1", tags=["tools"])
@@ -309,6 +319,7 @@ app.include_router(mcp.router, prefix="/v1", tags=["mcp"])
 app.include_router(terminal.router, prefix="/v1", tags=["terminal"])
 app.include_router(teams.router, prefix="/v1", tags=["teams"])
 app.include_router(schedules.router, prefix="/v1", tags=["schedules"])
+app.include_router(plugins.router, prefix="/v1", tags=["plugins"])
 
 
 from fastapi.responses import JSONResponse

@@ -47,6 +47,10 @@ export default function SettingsModal() {
   const [localCompactModel, setLocalCompactModel] = useState(settings.compactModel || defaultCompactModel)
 
   // Tools tab state
+  const [plugins, setPlugins] = useState<Array<{
+    name: string; version: string; description: string; author: string;
+    enabled: boolean; path: string; hooks: Array<{ hook_point: string; priority: number }>;
+  }>>([])
   const [skills, setSkills] = useState<Array<{ name: string; description?: string }>>([])
   const [mcpServers, setMcpServers] = useState<Array<{
     name: string; running: boolean; enabled: boolean;
@@ -111,6 +115,7 @@ export default function SettingsModal() {
   useEffect(() => {
     loadMemorySettings()
     loadFeishuSettings()
+    loadPlugins()
     loadSkills()
     loadMcpServers()
   }, [])
@@ -349,6 +354,35 @@ export default function SettingsModal() {
     } finally {
       setMinimaxTesting(false)
     }
+  }
+
+  // --- Tools tab: Plugins ---
+  async function loadPlugins() {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/plugins/list`)
+      const data = await res.json()
+      setPlugins(data.plugins || [])
+    } catch { /* ignore */ }
+  }
+
+  async function openPluginsFolder() {
+    try {
+      const res = await fetch(`${BASE_URL}/v1/plugins/path`)
+      const data = await res.json()
+      if (data.path) {
+        if (window.electronAPI?.openPath) {
+          window.electronAPI.openPath(data.path)
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function reloadPlugins() {
+    setPlugins([])
+    try {
+      await fetch(`${BASE_URL}/v1/plugins/reload`, { method: 'POST' })
+      await loadPlugins()
+    } catch { /* ignore */ }
   }
 
   // --- Tools tab: Skills ---
@@ -784,6 +818,41 @@ export default function SettingsModal() {
 
             {/* ====== Tools Tab ====== */}
             <div className={`settings-tab-panel${activeTab === 'tools' ? ' active' : ''}`} id="tab-tools">
+              <div className="settings-section-header">
+                <h3>Plugins</h3>
+                <div style={{ display: 'flex', gap: '6px' }}>
+                  <button onClick={openPluginsFolder}>Open Folder</button>
+                  <button onClick={reloadPlugins}>Reload</button>
+                </div>
+              </div>
+              <div className="settings-list" id="plugins-list">
+                {plugins.length === 0 ? (
+                  <div className="settings-list-empty">No plugins found in plugins/ directory</div>
+                ) : (
+                  plugins.map((plugin) => (
+                    <div key={plugin.name} className="settings-list-item">
+                      <div className="item-icon">
+                        <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                          <path d="M12 2v6m0 0a4 4 0 100 8 4 4 0 000-8zm-2 14h4m-6 0a2 2 0 01-2-2v-1h12v1a2 2 0 01-2 2H6z" />
+                        </svg>
+                      </div>
+                      <div className="item-info">
+                        <div className="item-name">{plugin.name} <span style={{ opacity: 0.5, fontSize: '0.85em' }}>v{plugin.version}</span></div>
+                        <div className="item-desc">{plugin.description || 'No description'}</div>
+                      </div>
+                      {plugin.hooks.length > 0 && (
+                        <span className="item-status running">{plugin.hooks.length} hook{plugin.hooks.length > 1 ? 's' : ''}</span>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+              <div className="hint">
+                Drop Claude Code plugins into <code>~/.springo/plugins/</code>. Each plugin needs a <code>.claude-plugin/plugin.json</code> manifest.
+              </div>
+
+              <div className="setting-divider"></div>
+
               <div className="settings-section-header">
                 <h3>Skills</h3>
                 <div style={{ display: 'flex', gap: '6px' }}>

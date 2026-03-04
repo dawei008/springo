@@ -343,6 +343,19 @@ async def messages_auto_api(
                 content_blocks = []  # initialized before loop to avoid NameError on early break
                 _content_saved_this_iter = False
 
+                # === Session start plugin hook (first message in session) ===
+                if session_id and iteration == 0:
+                    try:
+                        from api.services.plugin_system.hook_pipeline import get_hook_pipeline, HookContext
+                        _ss_ctx = HookContext(
+                            hook_point="session_start",
+                            data={"session_id": session_id, "model": original_model},
+                            session_id=session_id,
+                        )
+                        get_hook_pipeline().execute("session_start", _ss_ctx)
+                    except Exception:
+                        pass  # session_start hooks are observational
+
                 while iteration < max_iterations:
                     iteration += 1
                     _content_saved_this_iter = False
@@ -468,6 +481,55 @@ async def messages_auto_api(
                     if system_extra:
                         existing_system = request_body.get("system", "")
                         request_body["system"] = (existing_system or "") + system_extra
+
+                    # === User prompt submit plugin hook (first iteration only) ===
+                    if iteration == 1:
+                        try:
+                            from api.services.plugin_system.hook_pipeline import get_hook_pipeline, HookContext
+                            # Extract last user message text
+                            _last_user_msg = ""
+                            for _m in reversed(request_body["messages"]):
+                                if _m.get("role") == "user":
+                                    _c = _m.get("content", "")
+                                    if isinstance(_c, str):
+                                        _last_user_msg = _c
+                                    break
+                            _ups_ctx = HookContext(
+                                hook_point="user_prompt_submit",
+                                data={
+                                    "user_message": _last_user_msg,
+                                    "model": original_model,
+                                },
+                                session_id=session_id,
+                            )
+                            _ups_ctx = get_hook_pipeline().execute("user_prompt_submit", _ups_ctx)
+                            if _ups_ctx.stop_pipeline:
+                                yield SSEEventBuilder.error(f"Request blocked by plugin: {_ups_ctx.stopped_by}")
+                                break
+                        except Exception:
+                            pass
+
+                    # === Pre-message plugin hook ===
+                    try:
+                        from api.services.plugin_system.hook_pipeline import get_hook_pipeline, HookContext
+                        _hook_ctx = HookContext(
+                            hook_point="pre_message",
+                            data={
+                                "messages": request_body["messages"],
+                                "system": request_body.get("system", ""),
+                                "model": original_model,
+                            },
+                            session_id=session_id,
+                        )
+                        _hook_ctx = get_hook_pipeline().execute("pre_message", _hook_ctx)
+                        if _hook_ctx.stop_pipeline:
+                            yield SSEEventBuilder.error(f"Request blocked by plugin: {_hook_ctx.stopped_by}")
+                            break
+                        request_body["messages"] = _hook_ctx.data.get("messages", request_body["messages"])
+                        request_body["system"] = _hook_ctx.data.get("system", request_body.get("system", ""))
+                    except Exception as _hook_err:
+                        logger.debug(f"Pre-message hook skipped: {_hook_err}")
+
                     _, bedrock_body = bedrock.convert_request_to_bedrock(
                         request_body,
                         include_tools=bool(tools),
@@ -567,8 +629,45 @@ async def messages_auto_api(
                             except:
                                 tool["input"] = {}
 
+                    # === Post-message plugin hook ===
+                    try:
+                        from api.services.plugin_system.hook_pipeline import get_hook_pipeline, HookContext
+                        _text = "".join(b.get("text", "") for b in content_blocks if b.get("type") == "text")
+                        _pm_ctx = HookContext(
+                            hook_point="post_message",
+                            data={
+                                "text": _text,
+                                "tool_uses": tool_uses,
+                                "stop_reason": stop_reason,
+                                "model": original_model,
+                            },
+                            session_id=session_id,
+                        )
+                        get_hook_pipeline().execute("post_message", _pm_ctx)
+                    except Exception:
+                        pass  # post_message hooks are observational
+
                     # Check if we need to execute tools (or if cancelled)
                     if stop_reason != "tool_use" or not tool_uses:
+                        # === Stop plugin hook (model finished, end_turn) ===
+                        if stop_reason and stop_reason != "cancelled":
+                            try:
+                                from api.services.plugin_system.hook_pipeline import get_hook_pipeline, HookContext
+                                _stop_text = "".join(
+                                    b.get("text", "") for b in content_blocks if b.get("type") == "text"
+                                )
+                                _stop_ctx = HookContext(
+                                    hook_point="stop",
+                                    data={
+                                        "stop_reason": stop_reason,
+                                        "text": _stop_text,
+                                        "model": original_model,
+                                    },
+                                    session_id=session_id,
+                                )
+                                get_hook_pipeline().execute("stop", _stop_ctx)
+                            except Exception:
+                                pass  # stop hooks are observational
                         break
                     if cancel_event and cancel_event.is_set():
                         logger.info(f"[Auto] Cancelled before tool execution at iteration {iteration}")

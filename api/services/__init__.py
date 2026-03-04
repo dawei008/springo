@@ -7,6 +7,7 @@ from .vendor_router import VendorRouter, get_vendor_router, init_vendor_router
 from .tool_manager import ToolManager, get_tool_manager, close_tool_manager
 from .session_store import SessionStore, get_session_store
 from .agent_team_manager import AgentTeamManager, get_team_manager
+from .plugin_system import PluginManager, get_plugin_manager, HookPipeline, get_hook_pipeline
 
 __all__ = [
     "BedrockService",
@@ -15,4 +16,5 @@ __all__ = [
     "ToolManager", "get_tool_manager", "close_tool_manager",
     "SessionStore", "get_session_store",
     "AgentTeamManager", "get_team_manager",
+    "PluginManager", "get_plugin_manager", "HookPipeline", "get_hook_pipeline",
 ]

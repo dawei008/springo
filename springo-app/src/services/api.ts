@@ -288,6 +288,14 @@ export const api = {
       post<{ results: ToolExecuteResponse[] }>('/tools/batch', { tools }, { timeout: CONFIG.TIMEOUTS.TOOL_EXECUTION }),
   },
 
+  // ======================== Plugins ========================
+
+  plugins: {
+    list: () => get<{ plugins: Array<{ name: string; version: string; description: string; author: string; enabled: boolean; path: string; hooks: Array<{ hook_point: string; priority: number }> }>; count: number }>('/plugins/list'),
+    reload: () => post<{ status: string; count: number }>('/plugins/reload'),
+    getPath: () => get<{ path: string }>('/plugins/path'),
+  },
+
   // ======================== Skills ========================
 
   skills: {

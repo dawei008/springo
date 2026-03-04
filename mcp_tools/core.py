@@ -122,8 +122,50 @@ TOOL_HANDLERS = {
 }
 
 
+def _run_hook(hook_point: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a plugin hook, returning the (possibly modified) data dict.
+
+    Returns the data dict with optional special keys:
+      _stop_pipeline: bool — hook chain was stopped (tool blocked)
+      _substitute_result: dict — skip execution, return this result instead
+    """
+    try:
+        from api.services.plugin_system.hook_pipeline import get_hook_pipeline, HookContext
+        pipeline = get_hook_pipeline()
+        # Deep copy to prevent hooks from mutating original caller data
+        ctx = HookContext(hook_point=hook_point, data=copy.deepcopy(data))
+        ctx = pipeline.execute(hook_point, ctx)
+        return ctx.data if not ctx.stop_pipeline else {**ctx.data, "_stop_pipeline": True}
+    except Exception as e:
+        logger.debug(f"Hook {hook_point} skipped: {e}")
+        return data
+
+
 def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute a tool and return the result"""
+    """Execute a tool and return the result (with pre/post hook support)."""
+
+    # === PRE_TOOL_USE hook ===
+    pre = _run_hook("pre_tool_use", {"tool_name": tool_name, "tool_input": tool_input})
+    if pre.get("_stop_pipeline"):
+        return pre.get("result", {"error": f"Tool blocked by plugin: {pre.get('stopped_by', 'unknown')}"})
+    if "_substitute_result" in pre:
+        return pre["_substitute_result"]
+    # Apply any modifications from hooks
+    tool_name = pre.get("tool_name", tool_name)
+    tool_input = pre.get("tool_input", tool_input)
+
+    # === EXECUTE ===
+    result = _execute_tool_inner(tool_name, tool_input)
+
+    # === POST_TOOL_USE hook ===
+    post = _run_hook("post_tool_use", {"tool_name": tool_name, "tool_input": tool_input, "result": result})
+    result = post.get("result", result)
+
+    return result
+
+
+def _execute_tool_inner(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
+    """Core tool execution logic (MCP + built-in)."""
     # Check if it's an MCP tool (format: server__toolname)
     if "__" in tool_name:
         try:

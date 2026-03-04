@@ -2,9 +2,10 @@ import { useState, useCallback, useRef } from 'react';
 import { useToolsStore } from '@/stores/toolsStore';
 import { useUIStore } from '@/stores/uiStore';
 import type { Skill } from '@/types';
-import type { McpServer } from '@/stores/toolsStore';
+import type { McpServer, PluginInfo } from '@/stores/toolsStore';
 
 export default function ToolsPanel() {
+  const plugins = useToolsStore((s) => s.plugins);
   const skills = useToolsStore((s) => s.skills);
   const mcpServers = useToolsStore((s) => s.mcpServers);
 
@@ -12,7 +13,7 @@ export default function ToolsPanel() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const totalCount = skills.length + mcpServers.length;
+  const totalCount = plugins.length + skills.length + mcpServers.length;
 
   // ─── Drag handlers ───
 
@@ -80,6 +81,12 @@ export default function ToolsPanel() {
     }
   }, [insertTextToInput]);
 
+  const handlePluginDoubleClick = useCallback((plugin: PluginInfo) => {
+    if (plugin.path && window.electronAPI?.openPath) {
+      window.electronAPI.openPath(plugin.path);
+    }
+  }, []);
+
   if (totalCount === 0) return null;
 
   return (
@@ -101,12 +108,38 @@ export default function ToolsPanel() {
         >
           <path d="M3 1.5L7 5L3 8.5" />
         </svg>
-        <span className="tools-panel-title">Skills & Tools</span>
+        <span className="tools-panel-title">Tools</span>
         <span className="tools-panel-badge">{totalCount}</span>
       </div>
 
       <div className="tools-panel-body" ref={listRef}>
         <div className="tools-panel-list">
+          {/* Plugins */}
+          {plugins.length > 0 && (
+            <div className="tools-panel-group">
+              <div className="tools-panel-subtitle plugins-subtitle">
+                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M8 1v4m0 0a3 3 0 100 6 3 3 0 000-6zM6 13h4m-5 0a1.5 1.5 0 01-1.5-1.5V11h9v.5A1.5 1.5 0 0111 13H5z" />
+                </svg>
+                Plugins
+              </div>
+              {plugins.map((plugin) => (
+                <div
+                  key={plugin.name}
+                  className="tools-panel-item plugin-item"
+                  onDoubleClick={() => handlePluginDoubleClick(plugin)}
+                  title={`${plugin.description}${plugin.hooks.length ? ` (${plugin.hooks.length} hooks)` : ''}`}
+                >
+                  <span className="plugin-icon">⚡</span>
+                  <span className="tools-panel-name">{plugin.name}</span>
+                  {plugin.hooks.length > 0 && (
+                    <span className="server-tools-count">{plugin.hooks.length}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Skills */}
           {skills.length > 0 && (
             <div className="tools-panel-group">
