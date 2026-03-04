@@ -638,7 +638,7 @@ Use acp_list_agents first to see what's available.""",
                 "agent": {"type": "string", "description": "Name of the ACP agent (e.g., 'kiro', 'gemini')"},
                 "prompt": {"type": "string", "description": "The task/prompt to send to the agent"},
                 "cwd": {"type": "string", "description": "Working directory for the agent session", "default": "/tmp"},
-                "timeout": {"type": "number", "description": "Max seconds to wait for response", "default": 300}
+                "timeout": {"type": "number", "description": "Max seconds to wait for response", "default": 600}
             },
             "required": ["agent", "prompt"]
         }

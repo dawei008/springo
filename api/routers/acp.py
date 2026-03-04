@@ -37,7 +37,7 @@ class PromptRequest(BaseModel):
     """Direct prompt request"""
     prompt: str = Field(..., description="Prompt text to send")
     cwd: str = Field(default="/tmp", description="Working directory")
-    timeout: float = Field(default=300, description="Timeout in seconds")
+    timeout: float = Field(default=600, description="Timeout in seconds")
 
 
 # ============ Endpoints ============

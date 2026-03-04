@@ -20,8 +20,8 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# ACP Protocol version
-ACP_PROTOCOL_VERSION = "2025-03-26"
+# ACP Protocol version (numeric, as required by both Kiro and OpenClaw)
+ACP_PROTOCOL_VERSION = 1
 
 
 class AcpAgentConnection:
@@ -295,14 +295,20 @@ class AcpAgentConnection:
             "clientCapabilities": {
                 "roots": True,
                 "sampling": False,
+                "fs": {
+                    "readTextFile": True,
+                    "writeTextFile": True,
+                    "listDirectory": True,
+                },
+                "terminal": True,
             },
             "clientInfo": {"name": "springo", "version": "2.0.0"},
         }
 
         if self.transport == "stdio":
-            result = self._send_request("initialize", params, timeout=30)
+            result = self._send_request("initialize", params, timeout=60)
         else:
-            result = await self._http_request("initialize", params, timeout=30)
+            result = await self._http_request("initialize", params, timeout=60)
 
         if result and "error" not in result:
             result_data = result.get("result", {})
@@ -310,10 +316,6 @@ class AcpAgentConnection:
             self.agent_capabilities = result_data.get("agentCapabilities", {})
             self.auth_methods = result_data.get("authMethods", [])
             self._initialized = True
-
-            # Send initialized notification
-            if self.transport == "stdio":
-                self._send_notification("notifications/initialized", {})
 
             logger.info(
                 f"ACP agent {self.name} initialized: "
@@ -342,16 +344,15 @@ class AcpAgentConnection:
 
     async def session_new(self, cwd: str = None, mcp_servers: List[Dict] = None) -> Optional[str]:
         """Create a new ACP session. Returns sessionId."""
-        params = {}
-        if cwd:
-            params["cwd"] = cwd
-        if mcp_servers:
-            params["mcpServers"] = mcp_servers
+        params = {
+            "cwd": cwd or os.getcwd(),
+            "mcpServers": mcp_servers or [],
+        }
 
         if self.transport == "stdio":
-            result = self._send_request("session/new", params, timeout=30)
+            result = self._send_request("session/new", params, timeout=60)
         else:
-            result = await self._http_request("session/new", params, timeout=30)
+            result = await self._http_request("session/new", params, timeout=60)
 
         if result and "error" not in result:
             session_id = result.get("result", {}).get("sessionId")
@@ -368,7 +369,7 @@ class AcpAgentConnection:
         session_id: str,
         prompt: str,
         on_update: Callable = None,
-        timeout: float = 300,
+        timeout: float = 600,
     ) -> Dict[str, Any]:
         """Send a prompt to the agent, collect streaming updates.
 
@@ -395,8 +396,12 @@ class AcpAgentConnection:
 
         if result and "error" not in result:
             result_data = result.get("result", {})
+            text = self._extract_text(result_data)
+            # If final response has no content, assemble from streaming chunks
+            if not text and updates:
+                text = self._assemble_text_from_updates(updates)
             return {
-                "text": self._extract_text(result_data),
+                "text": text,
                 "stop_reason": result_data.get("stopReason", "end_turn"),
                 "updates": updates,
                 "raw": result_data,
@@ -415,6 +420,17 @@ class AcpAgentConnection:
         return result is not None and "error" not in result
 
     # ──────────────────── Helpers ────────────────────
+
+    def _assemble_text_from_updates(self, updates: List[Dict]) -> str:
+        """Assemble full text from session/update streaming chunks."""
+        parts = []
+        for update in updates:
+            u = update.get("update", {})
+            if u.get("sessionUpdate") == "agent_message_chunk":
+                content = u.get("content", {})
+                if isinstance(content, dict) and content.get("type") == "text":
+                    parts.append(content.get("text", ""))
+        return "".join(parts)
 
     def _extract_text(self, result_data: Dict) -> str:
         """Extract text content from ACP response."""
@@ -585,7 +601,7 @@ class AcpClientManager:
         agent_name: str,
         prompt: str,
         cwd: str = None,
-        timeout: float = 300,
+        timeout: float = 600,
     ) -> Dict[str, Any]:
         """High-level: ensure agent is started, create session if needed, send prompt."""
         if not await self.ensure_agent_started(agent_name):
@@ -662,10 +678,12 @@ class AcpClientManager:
         self.save_config()
 
     async def refresh_agent(self, agent_name: str) -> bool:
-        """Restart an agent connection."""
+        """Restart an agent connection, reloading config from disk first."""
         if agent_name in self.agents:
             await self.agents[agent_name].stop()
             del self.agents[agent_name]
+        # Reload config from disk so updated args/settings take effect
+        self.load_config()
         if agent_name in self.agent_configs:
             self.agent_configs[agent_name]["status"] = "configured"
             self.agent_configs[agent_name].pop("error", None)
