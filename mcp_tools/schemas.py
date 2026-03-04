@@ -630,6 +630,8 @@ Each ACP agent uses its own LLM/subscription. Use this to:
 - Leverage specialized agents for specific tasks
 - Delegate sub-tasks to agents with different capabilities
 
+Supports stateful multi-turn conversations: pass session_id from a previous call or from acp_new_session to keep context across turns. Omit session_id for stateless one-shot calls.
+
 Available agents are configured in ~/.springo/acp_agents.json.
 Use acp_list_agents first to see what's available.""",
         "input_schema": {
@@ -638,7 +640,8 @@ Use acp_list_agents first to see what's available.""",
                 "agent": {"type": "string", "description": "Name of the ACP agent (e.g., 'kiro', 'gemini')"},
                 "prompt": {"type": "string", "description": "The task/prompt to send to the agent"},
                 "cwd": {"type": "string", "description": "Working directory for the agent session", "default": "/tmp"},
-                "timeout": {"type": "number", "description": "Max seconds to wait for response", "default": 600}
+                "timeout": {"type": "number", "description": "Max seconds to wait for response", "default": 600},
+                "session_id": {"type": "string", "description": "Session ID to reuse for multi-turn context. Get from acp_new_session or a previous acp_prompt response."}
             },
             "required": ["agent", "prompt"]
         }
@@ -653,7 +656,10 @@ Use acp_list_agents first to see what's available.""",
     },
     {
         "name": "acp_new_session",
-        "description": "Pre-warm a session on an ACP agent for faster subsequent prompts (optional).",
+        "description": """Create a persistent session on an ACP agent for stateful multi-turn conversations.
+
+Returns a session_id that can be passed to subsequent acp_prompt calls to maintain context.
+Use this when you need the agent to remember previous conversation turns.""",
         "input_schema": {
             "type": "object",
             "properties": {

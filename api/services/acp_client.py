@@ -614,20 +614,29 @@ class AcpClientManager:
         prompt: str,
         cwd: str = None,
         timeout: float = 600,
+        session_id: str = None,
     ) -> Dict[str, Any]:
-        """High-level: ensure agent is started, create session if needed, send prompt."""
+        """High-level: ensure agent is started, create/reuse session, send prompt.
+
+        If session_id is provided, reuse that session (stateful multi-turn).
+        Otherwise create a new session (stateless one-shot).
+        """
         if not await self.ensure_agent_started(agent_name):
             return {"error": f"Failed to start ACP agent: {agent_name}"}
 
         agent = self.agents[agent_name]
 
-        # Create a new session for this prompt
-        session_id = await agent.session_new(cwd=cwd)
-        if not session_id:
-            return {"error": f"Failed to create session on agent: {agent_name}"}
+        # Reuse existing session or create a new one
+        if session_id and session_id in agent._sessions:
+            logger.info(f"Reusing ACP session {session_id} on {agent_name}")
+        else:
+            session_id = await agent.session_new(cwd=cwd)
+            if not session_id:
+                return {"error": f"Failed to create session on agent: {agent_name}"}
 
         # Send prompt
         result = await agent.session_prompt(session_id, prompt, timeout=timeout)
+        result["session_id"] = session_id
         return result
 
     def get_all_agents(self) -> List[Dict[str, Any]]:

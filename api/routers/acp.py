@@ -38,6 +38,7 @@ class PromptRequest(BaseModel):
     prompt: str = Field(..., description="Prompt text to send")
     cwd: str = Field(default="/tmp", description="Working directory")
     timeout: float = Field(default=600, description="Timeout in seconds")
+    session_id: Optional[str] = Field(default=None, description="Session ID to reuse for multi-turn context")
 
 
 # ============ Endpoints ============
@@ -106,6 +107,7 @@ async def prompt_agent(agent_name: str, request: PromptRequest) -> Dict[str, Any
         result = await manager.prompt_agent(
             agent_name, request.prompt,
             cwd=request.cwd, timeout=request.timeout,
+            session_id=request.session_id,
         )
         return result
     except Exception as e:

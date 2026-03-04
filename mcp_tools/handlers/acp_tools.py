@@ -28,7 +28,8 @@ def _run_async(coro, timeout: float = 660):
         return asyncio.run(coro)
 
 
-def acp_prompt(agent: str, prompt: str, cwd: str = "/tmp", timeout: float = 300) -> Dict[str, Any]:
+def acp_prompt(agent: str, prompt: str, cwd: str = "/tmp", timeout: float = 300,
+               session_id: str = None) -> Dict[str, Any]:
     """Delegate a task to an ACP agent and return the result.
 
     Args:
@@ -36,13 +37,18 @@ def acp_prompt(agent: str, prompt: str, cwd: str = "/tmp", timeout: float = 300)
         prompt: The task/prompt to send to the agent
         cwd: Working directory for the agent session
         timeout: Max seconds to wait for response
+        session_id: Optional session ID to reuse (for stateful multi-turn conversations).
+                    Omit to create a new session (stateless one-shot).
+                    Use acp_new_session() first to get a session_id.
     """
     try:
         from api.services.acp_client import get_acp_client_manager
         manager = get_acp_client_manager()
 
         async def _do_prompt():
-            return await manager.prompt_agent(agent, prompt, cwd=cwd, timeout=timeout)
+            return await manager.prompt_agent(
+                agent, prompt, cwd=cwd, timeout=timeout, session_id=session_id,
+            )
 
         result = _run_async(_do_prompt())
 
@@ -56,6 +62,7 @@ def acp_prompt(agent: str, prompt: str, cwd: str = "/tmp", timeout: float = 300)
             "agent": agent,
             "text": result.get("text", ""),
             "stop_reason": result.get("stop_reason", "unknown"),
+            "session_id": result.get("session_id", ""),
         }
     except Exception as e:
         logger.error(f"acp_prompt failed: {e}")
