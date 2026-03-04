@@ -80,6 +80,26 @@ function handleToolResultUI(result: Record<string, unknown> | null | undefined, 
     ui.setRightPanelOpen(true);
     ui.setRightPanelTab('schedules');
   }
+
+  // ask_user: show modal so the user can answer, then send their reply
+  if (result.ui_update === 'user_question' && result.question) {
+    const options = (result.options as Array<Record<string, string>> || []).map((o) => ({
+      label: o.label || '',
+      description: o.description,
+    }));
+    ui.showAskUser({
+      question: result.question as string,
+      options,
+      allowCustom: true,
+      resolve: (answer: string) => {
+        // Send the user's answer as a normal message to continue the conversation
+        const convId = effectiveSessionId || useSessionStore.getState().currentSessionId || '';
+        if (convId) {
+          useChatStore.getState().sendMessage(convId, answer);
+        }
+      },
+    });
+  }
 }
 
 /**
