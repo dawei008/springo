@@ -29,6 +29,7 @@ export default function SettingsModal() {
   const [localDefaultWorkdir, setLocalDefaultWorkdir] = useState(defaultWorkingFolder || '~/Downloads')
 
   // Recording settings (General tab)
+  const [recordTarget, setRecordTarget] = useState<'window' | 'screen' | 'screen-ext'>('window')
   const [recordingDir, setRecordingDir] = useState('~/.springo/recordings')
   const [replayMode, setReplayMode] = useState(false)
   const [replaySpeed, setReplaySpeed] = useState(1)
@@ -481,6 +482,7 @@ export default function SettingsModal() {
       try {
         const raw = await window.electronAPI.cache.get('recording') as Record<string, unknown> | null
         if (raw) {
+          setRecordTarget((raw.recordTarget as 'window' | 'screen' | 'screen-ext') || 'window')
           setRecordingDir((raw.outputDir as string) || '~/.springo/recordings')
           setReplayMode(raw.replayMode === true)
           setReplaySpeed((raw.replaySpeed as number) || 1)
@@ -892,6 +894,22 @@ export default function SettingsModal() {
               <div className="hint" style={{ marginBottom: '10px' }}>
                 Record the Springo window as video.
                 Use <kbd style={{ padding: '1px 5px', borderRadius: '3px', border: '1px solid var(--border)', fontSize: '11px', background: 'var(--bg-tertiary)' }}>Cmd+Shift+R</kbd> or the record button in the title bar.
+              </div>
+
+              <div className="setting-group">
+                <label>Record Target</label>
+                <select
+                  value={recordTarget}
+                  onChange={(e) => {
+                    const v = e.target.value as 'window' | 'screen' | 'screen-ext'
+                    setRecordTarget(v)
+                    saveRecordingSettings({ recordTarget: v })
+                  }}
+                >
+                  <option value="window">Springo Window</option>
+                  <option value="screen">Current Screen</option>
+                  <option value="screen-ext">Extended Screen</option>
+                </select>
               </div>
 
               <div className="setting-group">

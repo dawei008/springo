@@ -532,11 +532,34 @@ ipcMain.handle('schedules-set', async (event, tasks) => {
 });
 
 // --- Screen Recording ---
-ipcMain.handle('recording-get-source', async () => {
-    const { desktopCapturer } = require('electron');
-    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
-    const springoSource = sources.find(s => s.name.includes('Springo'));
-    return springoSource ? { id: springoSource.id, name: springoSource.name } : null;
+ipcMain.handle('recording-get-source', async (event, target) => {
+    const { desktopCapturer, screen } = require('electron');
+    if (target === 'screen' || target === 'screen-ext') {
+        const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+        if (sources.length <= 1) {
+            // Only one screen — use it regardless
+            return sources[0] ? { id: sources[0].id, name: sources[0].name } : null;
+        }
+        // Find which display the Springo window is on
+        const winBounds = mainWindow.getBounds();
+        const displays = screen.getAllDisplays();
+        const currentDisplay = screen.getDisplayMatching(winBounds);
+        if (target === 'screen') {
+            // Current screen — match by display id
+            const currentIdx = displays.findIndex(d => d.id === currentDisplay.id);
+            const source = sources[currentIdx >= 0 ? currentIdx : 0];
+            return source ? { id: source.id, name: source.name } : null;
+        } else {
+            // Extended screen — pick the OTHER display
+            const otherIdx = displays.findIndex(d => d.id !== currentDisplay.id);
+            const source = sources[otherIdx >= 0 ? otherIdx : 0];
+            return source ? { id: source.id, name: source.name } : null;
+        }
+    } else {
+        const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
+        const springoSource = sources.find(s => s.name.includes('Springo'));
+        return springoSource ? { id: springoSource.id, name: springoSource.name } : null;
+    }
 });
 
 ipcMain.handle('recording-save', async (event, buffer, filename) => {

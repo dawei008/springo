@@ -29,10 +29,16 @@ export const useRecordingStore = create<RecordingState>()((set, get) => ({
 
   startRecording: async () => {
     try {
-      // Get the Springo window source via IPC
-      const source = await window.electronAPI?.recording?.getSource();
+      // Read recording target from settings cache
+      let target: string = 'window';
+      try {
+        const raw = await window.electronAPI?.cache?.get('recording') as Record<string, unknown> | null;
+        if (raw?.recordTarget) target = raw.recordTarget as string;
+      } catch { /* ignore */ }
+
+      const source = await window.electronAPI?.recording?.getSource(target as 'window' | 'screen');
       if (!source) {
-        console.error('[Recording] Could not find Springo window source');
+        console.error(`[Recording] Could not find ${target} source`);
         return false;
       }
 

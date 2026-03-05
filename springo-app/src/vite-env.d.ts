@@ -24,7 +24,7 @@ interface ElectronAPI {
     set: (tasks: unknown) => Promise<void>
   }
   recording: {
-    getSource: () => Promise<{ id: string; name: string } | null>
+    getSource: (target?: string) => Promise<{ id: string; name: string } | null>
     save: (buffer: ArrayBuffer, filename: string) => Promise<string>
     selectDir: () => Promise<string | null>
   }
