@@ -336,6 +336,8 @@ interface ChatState {
 
   // Message actions
   addMessage: (convId: string, message: Message) => void;
+  clearMessages: (convId: string) => void;
+  updateLastAssistantContent: (convId: string, content: string) => void;
   updateAssistantMessage: (
     convId: string,
     text: string,
@@ -441,6 +443,27 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // in MessageList detects the change (push alone is invisible to reference checks)
     set((state) => ({
       runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: [...runtime.messages] } },
+    }));
+  },
+
+  clearMessages: (convId: string) => {
+    const runtime = get().getRuntime(convId);
+    set((state) => ({
+      runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: [] } },
+    }));
+  },
+
+  updateLastAssistantContent: (convId: string, content: string) => {
+    const runtime = get().getRuntime(convId);
+    const msgs = [...runtime.messages];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'assistant') {
+        msgs[i] = { ...msgs[i], content };
+        break;
+      }
+    }
+    set((state) => ({
+      runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: msgs } },
     }));
   },
 

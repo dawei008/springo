@@ -12,6 +12,7 @@ import PlanApprovalModal, { PlanModeIndicator } from '@/components/common/PlanMo
 import { useUIStore } from '@/stores/uiStore'
 import { useToolsStore } from '@/stores/toolsStore'
 import { useScheduleStore } from '@/stores/scheduleStore'
+import { useRecordingStore } from '@/stores/recordingStore'
 import Toast from '@/components/common/Toast'
 
 const BASE_URL = 'http://127.0.0.1:8081'
@@ -78,6 +79,37 @@ export default function App() {
       })
       window.electronAPI.onOpenSettings?.(() => {
         useUIStore.getState().toggleSettings()
+      })
+      window.electronAPI.onToggleRecording?.(async () => {
+        const recStore = useRecordingStore.getState()
+        if (recStore.isRecording) {
+          // Stop: also stop replay if active
+          const { useReplayStore } = await import('@/stores/replayStore')
+          if (useReplayStore.getState().isReplaying) {
+            useReplayStore.getState().stopReplay()
+          }
+          const p = await recStore.stopRecording()
+          if (p) useUIStore.getState().showToast(`Recording saved: ${p}`, 'success')
+        } else {
+          // Start: check replay mode
+          let replayMode = false
+          try {
+            const raw = await window.electronAPI?.cache?.get('recording') as Record<string, unknown> | null
+            if (raw) replayMode = raw.replayMode === true
+          } catch { /* ignore */ }
+
+          const currentSessionId = useSessionStore.getState().currentSessionId
+          if (replayMode && currentSessionId) {
+            const ok = await recStore.startRecording()
+            if (!ok) { useUIStore.getState().showToast('Failed to start recording', 'error'); return }
+            const { useReplayStore } = await import('@/stores/replayStore')
+            const replaySessionId = useSessionStore.getState().createSession('Replay')
+            useReplayStore.getState().startReplay(currentSessionId, replaySessionId)
+          } else {
+            const ok = await recStore.startRecording()
+            if (!ok) useUIStore.getState().showToast('Failed to start recording', 'error')
+          }
+        }
       })
     }
   }, [])

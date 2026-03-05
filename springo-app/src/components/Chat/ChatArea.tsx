@@ -2,9 +2,11 @@ import { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore, type StoreTask } from '@/stores/teamStore';
+import { useReplayStore } from '@/stores/replayStore';
 import WelcomeScreen from './WelcomeScreen';
 import MessageList from './MessageList';
 import ToolPanel from './ToolPanel';
+import RecordingBar from './RecordingBar';
 import { useUIStore } from '@/stores/uiStore';
 import type { Message } from '@/types';
 
@@ -149,8 +151,21 @@ export default function ChatArea() {
 
   const hasMessages = messages.length > 0 && !messages.every((m) => m.isThinking);
 
+  const isReplaying = useReplayStore((s) => s.isReplaying);
+
   return (
     <div className="chat-container" ref={containerRef}>
+      <RecordingBar />
+      {isReplaying && (
+        <div className="replay-bar">
+          <span className="replay-icon">&#9654;</span>
+          <span>Replaying session...</span>
+          <span className="replay-speed">{useReplayStore.getState().speed}x</span>
+          <button className="replay-stop-btn" onClick={() => useReplayStore.getState().stopReplay()}>
+            Stop
+          </button>
+        </div>
+      )}
       <div className="chat-content">
         {hasMessages ? <MessageList messages={messages} isStreaming={isStreaming} /> : <WelcomeScreen />}
         {activeTeamId && Object.keys(tasks).length > 0 && (

@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     onClearChat: (callback) => ipcRenderer.on('clear-chat', callback),
     onOpenSettings: (callback) => ipcRenderer.on('open-settings', callback),
     onShowLogs: (callback) => ipcRenderer.on('show-logs', callback),
+    onToggleRecording: (callback) => ipcRenderer.on('toggle-recording', callback),
     // Folder selection
     selectFolder: () => ipcRenderer.invoke('select-folder'),
     openFolder: (path) => ipcRenderer.invoke('open-folder', path),
@@ -28,5 +29,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     schedules: {
         get: () => ipcRenderer.invoke('schedules-get'),
         set: (tasks) => ipcRenderer.invoke('schedules-set', tasks)
+    },
+    // Screen recording API
+    recording: {
+        getSource: () => ipcRenderer.invoke('recording-get-source'),
+        save: (buffer, filename) => ipcRenderer.invoke('recording-save', buffer, filename),
+        selectDir: () => ipcRenderer.invoke('recording-select-dir'),
     }
 });

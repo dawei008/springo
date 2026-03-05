@@ -486,6 +486,34 @@
         }
 
         /* Panel Toggle Button */
+        .header-record-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.15s;
+        }
+
+        .header-record-btn:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .header-record-btn.recording {
+            color: #e53935;
+            animation: recording-pulse 1.2s ease-in-out infinite;
+        }
+
+        .header-record-btn.recording:hover {
+            background: rgba(229, 57, 53, 0.1);
+        }
+
         .panel-toggle {
             width: 32px;
             height: 32px;
@@ -3064,6 +3092,27 @@
             font-size: 12px;
             color: var(--text-tertiary);
             margin-top: 4px;
+        }
+
+        .setting-checkbox-label {
+            display: flex !important;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px !important;
+            font-weight: 400 !important;
+            margin-bottom: 0 !important;
+            cursor: pointer;
+        }
+
+        .setting-checkbox-label input[type="checkbox"] {
+            width: auto;
+            flex-shrink: 0;
+        }
+
+        .setting-checkbox-label .hint {
+            font-size: 12px;
+            color: var(--text-tertiary);
+            margin-top: 0;
         }
 
         /* AWS Credentials Status Box */
@@ -7264,5 +7313,143 @@
 }
 .sidebar-footer .settings-btn {
     flex: 1;
+}
+
+/* ==================== Recording Bar ==================== */
+
+.recording-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: rgba(229, 57, 53, 0.08);
+    border-bottom: 1px solid rgba(229, 57, 53, 0.2);
+    font-size: 13px;
+    color: var(--text-primary);
+    z-index: 10;
+    flex-shrink: 0;
+}
+
+.recording-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #e53935;
+    animation: recording-pulse 1.2s ease-in-out infinite;
+    flex-shrink: 0;
+}
+
+.recording-dot.paused {
+    background: #ff9800;
+    animation: none;
+}
+
+@keyframes recording-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.recording-label {
+    font-weight: 500;
+    color: #e53935;
+}
+
+.recording-timer {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 13px;
+    color: var(--text-secondary);
+    min-width: 44px;
+}
+
+.recording-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.recording-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.recording-stop-btn {
+    color: #e53935;
+    border-color: rgba(229, 57, 53, 0.3);
+}
+
+.recording-stop-btn:hover {
+    background: rgba(229, 57, 53, 0.1);
+    color: #c62828;
+}
+
+/* Recording active state for icon button */
+.icon-btn.recording-active {
+    color: #e53935;
+}
+
+.icon-btn.recording-active:hover {
+    background: rgba(229, 57, 53, 0.1);
+}
+
+/* ==================== Replay Bar ==================== */
+
+.replay-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px;
+    background: rgba(33, 150, 243, 0.08);
+    border-bottom: 1px solid rgba(33, 150, 243, 0.2);
+    font-size: 13px;
+    color: var(--text-primary);
+    z-index: 10;
+    flex-shrink: 0;
+}
+
+.replay-icon {
+    color: #2196f3;
+    font-size: 14px;
+}
+
+.replay-speed {
+    font-family: 'SF Mono', 'Menlo', monospace;
+    font-size: 12px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(33, 150, 243, 0.12);
+    color: #1976d2;
+}
+
+.replay-stop-btn {
+    margin-left: auto;
+    padding: 4px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(229, 57, 53, 0.3);
+    background: var(--bg-primary);
+    color: #e53935;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.replay-stop-btn:hover {
+    background: rgba(229, 57, 53, 0.1);
+}
+
+/* Replay button in input area */
+.replay-btn {
+    color: var(--text-tertiary);
+}
+
+.replay-btn:hover {
+    color: #2196f3;
 }
 

@@ -6,6 +6,7 @@ interface ElectronAPI {
   onClearChat: (callback: () => void) => void
   onOpenSettings: (callback: () => void) => void
   onShowLogs: (callback: () => void) => void
+  onToggleRecording: (callback: () => void) => void
   selectFolder: () => Promise<string | null>
   openFolder: (path: string) => Promise<{ success: boolean }>
   openPath: (path: string) => Promise<{ success: boolean }>
@@ -21,6 +22,11 @@ interface ElectronAPI {
   schedules: {
     get: () => Promise<unknown>
     set: (tasks: unknown) => Promise<void>
+  }
+  recording: {
+    getSource: () => Promise<{ id: string; name: string } | null>
+    save: (buffer: ArrayBuffer, filename: string) => Promise<string>
+    selectDir: () => Promise<string | null>
   }
 }
 

@@ -258,6 +258,14 @@ function createMenu() {
                     click: () => {
                         mainWindow.webContents.send('clear-chat');
                     }
+                },
+                { type: 'separator' },
+                {
+                    label: 'Toggle Recording',
+                    accelerator: 'CmdOrCtrl+Shift+R',
+                    click: () => {
+                        mainWindow.webContents.send('toggle-recording');
+                    }
                 }
             ]
         },
@@ -521,6 +529,33 @@ ipcMain.handle('schedules-get', async () => {
 
 ipcMain.handle('schedules-set', async (event, tasks) => {
     return writeScheduledTasks(tasks);
+});
+
+// --- Screen Recording ---
+ipcMain.handle('recording-get-source', async () => {
+    const { desktopCapturer } = require('electron');
+    const sources = await desktopCapturer.getSources({ types: ['window'], thumbnailSize: { width: 0, height: 0 } });
+    const springoSource = sources.find(s => s.name.includes('Springo'));
+    return springoSource ? { id: springoSource.id, name: springoSource.name } : null;
+});
+
+ipcMain.handle('recording-save', async (event, buffer, filename) => {
+    const cache = readCache();
+    const recordingSettings = cache.recording || {};
+    const dir = recordingSettings.outputDir || path.join(os.homedir(), '.springo', 'recordings');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, filename);
+    fs.writeFileSync(filePath, Buffer.from(buffer));
+    return filePath;
+});
+
+ipcMain.handle('recording-select-dir', async () => {
+    if (mainWindow) mainWindow.focus();
+    const result = await dialog.showOpenDialog(mainWindow, {
+        properties: ['openDirectory', 'createDirectory'],
+        title: 'Select Recording Output Directory'
+    });
+    return result.canceled ? null : result.filePaths[0];
 });
 
 app.whenReady().then(async () => {
