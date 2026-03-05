@@ -718,6 +718,12 @@ class BedrockService:
                 if max_t > 0 and len(raw_tools) > max_t:
                     raw_tools = _prioritize_tools(raw_tools, max_t)
                 if api_format == "anthropic" and raw_tools:
+                    # Strip stale cache_control from all tools first — tool dicts
+                    # are reused across auto-loop iterations, so previous calls may
+                    # have left cache_control on other tools, exceeding Bedrock's
+                    # 4-block limit.
+                    for t in raw_tools:
+                        t.pop("cache_control", None)
                     raw_tools[-1]["cache_control"] = {"type": "ephemeral"}
                 bedrock_body["tools"] = raw_tools
         
