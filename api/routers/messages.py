@@ -691,7 +691,7 @@ async def messages_auto_api(
                             t0 = asyncio.get_event_loop().time()
                             try:
                                 r = await asyncio.wait_for(
-                                    mgr.execute_tool(t["name"], t.get("input", {})),
+                                    mgr.execute_tool(t["name"], t.get("input", {}), session_id=session_id),
                                     timeout=timeout
                                 )
                                 err = "error" in r
@@ -791,7 +791,7 @@ async def messages_auto_api(
                             # Wrap tool execution in a task so we can cancel it
                             _tool_task = asyncio.create_task(
                                 asyncio.wait_for(
-                                    tool_manager.execute_tool(tool["name"], tool.get("input", {})),
+                                    tool_manager.execute_tool(tool["name"], tool.get("input", {}), session_id=session_id),
                                     timeout=settings.tool_execution_timeout,
                                 )
                             )
@@ -1036,7 +1036,7 @@ async def messages_auto_api(
                 async def _exec_one(t):
                     try:
                         r = await asyncio.wait_for(
-                            tool_manager.execute_tool(t["name"], t.get("input", {})),
+                            tool_manager.execute_tool(t["name"], t.get("input", {}), session_id=session_id),
                             timeout=settings.tool_execution_timeout
                         )
                         err = "error" in r

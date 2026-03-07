@@ -26,15 +26,19 @@ class ToolManager:
     避免阻塞 asyncio 事件循环。
     """
 
-    def __init__(self, max_workers: int = 10):
+    # Per-session concurrency limit: prevents one session from starving others
+    PER_SESSION_MAX_CONCURRENT = 10
+
+    def __init__(self, max_workers: int = 100):
         """
         初始化 MCP 管理器
 
         Args:
-            max_workers: 线程池最大工作线程数
+            max_workers: 线程池最大工作线程数 (100 = 10 sessions × 10 concurrent tools)
         """
         self.executor = ThreadPoolExecutor(max_workers=max_workers)
-        self._semaphore = asyncio.Semaphore(max_workers)  # Prevent executor exhaustion
+        self._global_semaphore = asyncio.Semaphore(max_workers)
+        self._session_semaphores: Dict[str, asyncio.Semaphore] = {}
         self._tools_loaded = False
         self._tool_definitions: List[Dict[str, Any]] = []
         self._tool_handlers: Dict[str, callable] = {}
@@ -167,33 +171,53 @@ class ToolManager:
                 logger.warning(f"Failed to refresh tool definitions: {e}")
         return self._tool_definitions
     
+    def _get_session_semaphore(self, session_id: str) -> asyncio.Semaphore:
+        """Get or create a per-session semaphore."""
+        if session_id not in self._session_semaphores:
+            self._session_semaphores[session_id] = asyncio.Semaphore(
+                self.PER_SESSION_MAX_CONCURRENT
+            )
+        return self._session_semaphores[session_id]
+
     async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any],
                            session_id: Optional[str] = None) -> Dict[str, Any]:
         """
-        异步执行单个工具 (with semaphore to prevent executor exhaustion)
+        异步执行单个工具 (with per-session + global semaphore)
+
+        Uses two-level semaphore to prevent one session from starving others:
+        - Per-session semaphore: max PER_SESSION_MAX_CONCURRENT concurrent tools
+        - Global semaphore: max max_workers total across all sessions
 
         Args:
             tool_name: 工具名称
             tool_input: 工具输入参数
-            session_id: Optional session ID for cancellation tracking
+            session_id: Optional session ID for per-session limiting
 
         Returns:
             工具执行结果
         """
-        async with self._semaphore:
-            try:
+        session_sem = self._get_session_semaphore(session_id) if session_id else None
+
+        async def _run():
+            async with self._global_semaphore:
                 loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
+                return await loop.run_in_executor(
                     self.executor,
                     partial(self._execute_tool_sync, tool_name, tool_input)
                 )
-                return result
-            except asyncio.CancelledError:
-                logger.info(f"Tool execution cancelled: {tool_name}")
-                return {"error": "Tool execution cancelled by user"}
-            except Exception as e:
-                logger.error(f"Tool execution failed: {tool_name} - {e}")
-                return {"error": f"Tool execution failed: {e}"}
+
+        try:
+            if session_sem:
+                async with session_sem:
+                    return await _run()
+            else:
+                return await _run()
+        except asyncio.CancelledError:
+            logger.info(f"Tool execution cancelled: {tool_name}")
+            return {"error": "Tool execution cancelled by user"}
+        except Exception as e:
+            logger.error(f"Tool execution failed: {tool_name} - {e}")
+            return {"error": f"Tool execution failed: {e}"}
     
     def _execute_tool_sync(self, tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
         """同步执行工具（在线程池中执行, with crash detection）"""
