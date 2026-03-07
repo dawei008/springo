@@ -206,7 +206,9 @@ class MemoryFileManager:
             "The following is your persistent memory from previous sessions. "
             "Use this context to maintain continuity.\n\n"
             + "\n\n".join(parts)
-            + "\n\n**Memory tools:**\n"
+            + "\n\n**Memory is limited — if you want to remember something, WRITE IT TO A FILE. "
+            "\"Mental notes\" don't survive session restarts. Files do. Text > Brain.**\n"
+            "\n**Memory tools:**\n"
             "- `memory_search` — Search past conversations, decisions, or context.\n"
             "- `memory_get` — Read a specific memory file.\n"
             "- `memory_write(target=\"daily\")` — Append a note to today's daily log. Use for session observations, decisions, todos, running context.\n"
