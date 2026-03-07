@@ -1044,16 +1044,24 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
-      // NOW safe to mark idle — backend sync is complete, messages are correct
-      const syncedRuntime = get().getRuntime(convId);
-      syncedRuntime.isStreaming = false;
-      set((state) => ({
-        runtimes: {
-          ...state.runtimes,
-          [convId]: { ...syncedRuntime, isStreaming: false, messages: [...syncedRuntime.messages] },
-        },
-      }));
-      useSessionStore.getState().updateSessionStatus(convId, 'idle');
+      // NOW safe to mark idle — but ONLY if no newer sendMessage() has started.
+      // If epoch is stale, Q2 owns the runtime now — touching it would
+      // set isStreaming=false mid-stream, causing A1 to briefly vanish
+      // (MessageList re-renders with stale filter state) until Q2 restores it.
+      const epochAfterSync = _sendEpoch[convId] || 0;
+      if (epochAfterSync === epochAtStart) {
+        const syncedRuntime = get().getRuntime(convId);
+        syncedRuntime.isStreaming = false;
+        set((state) => ({
+          runtimes: {
+            ...state.runtimes,
+            [convId]: { ...syncedRuntime, isStreaming: false, messages: [...syncedRuntime.messages] },
+          },
+        }));
+        useSessionStore.getState().updateSessionStatus(convId, 'idle');
+      } else {
+        console.log(`[${convId}] Skipped isStreaming=false — newer sendMessage (epoch ${epochAfterSync} > ${epochAtStart}) owns this session`);
+      }
 
       // Mark as unseen completion if user is viewing a different session
       const { currentSessionId, markUnseenCompletion } = useSessionStore.getState();
