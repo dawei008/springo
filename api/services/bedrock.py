@@ -1344,6 +1344,16 @@ class BedrockService:
                 else:
                     kwargs["toolConfig"]["toolChoice"] = {"auto": {}}
 
+        # Enable thinking mode for models that support it (e.g. Kimi K2.5)
+        # by passing reasoning_effort via additionalModelRequestFields.
+        model_info = get_model_info(original_model or model_id)
+        if model_info and model_info.get("supports_thinking"):
+            provider = model_info.get("provider", "")
+            if provider == "moonshot":
+                kwargs["additionalModelRequestFields"] = {
+                    "reasoning_effort": "high"
+                }
+
         return kwargs
 
     async def _converse_invoke(

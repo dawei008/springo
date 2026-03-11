@@ -196,7 +196,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "context_window": 262144,   # 256K (Bedrock-probed)
         "max_output": 131072,
         "supports_vision": True,
-        "supports_thinking": False,
+        "supports_thinking": True,
         "supports_tools": True,
         "api_format": "converse",
         "max_tools": 50,
