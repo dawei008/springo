@@ -258,11 +258,11 @@ export default function SettingsModal() {
         body: JSON.stringify({ vendor: 'minimax', api_key: minimaxApiKey }),
       }).catch(() => {})
     }
-    // Save memory settings to backend
-    saveMemorySettings()
-    // Save Feishu settings to backend
-    saveFeishuSettings()
     setSettingsOpen(false)
+    // Save memory settings to backend (fire-and-forget)
+    saveMemorySettings()
+    // Save Feishu settings to backend (fire-and-forget)
+    saveFeishuSettings()
   }
 
   // Click outside to close
