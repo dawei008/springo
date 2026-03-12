@@ -100,7 +100,14 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       loadWorkingDir: async () => {
-        // In Electron, load from cache API
+        // Zustand persist (localStorage) is the primary source of truth.
+        // Only fall back to Electron cache if persist hasn't restored values yet.
+        const current = get();
+        if (current.workingFolders.length > 0 || current.workingDir || current.defaultWorkingFolder !== '~/Downloads') {
+          // Already have persisted values from zustand — skip Electron cache
+          return;
+        }
+        // Fallback: load from Electron cache for first-time migration
         if (window.electronAPI?.cache) {
           try {
             const raw = await window.electronAPI.cache.get('workspace');

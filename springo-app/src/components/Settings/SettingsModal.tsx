@@ -227,16 +227,9 @@ export default function SettingsModal() {
         compactModel: localCompactModel,
         enable1mContext: localEnable1mContext,
       })
-      // Always persist default working dir
+      // Persist default working dir (zustand persist handles localStorage automatically)
       if (localDefaultWorkdir.trim()) {
         useSettingsStore.setState({ defaultWorkingFolder: localDefaultWorkdir.trim() });
-        if (window.electronAPI?.cache) {
-          window.electronAPI.cache.set('workspace', {
-            workingFolders,
-            currentWorkingDir: workingDir,
-            defaultWorkingFolder: localDefaultWorkdir.trim(),
-          })
-        }
       }
       // Save AWS credentials to backend if entered
       if (awsAccessKey && awsSecretKey) {
