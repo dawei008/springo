@@ -209,6 +209,13 @@ export const useSettingsStore = create<SettingsState>()(
         workingFolders: state.workingFolders,
         // defaultWorkingFolder is NOT persisted here — backend (~/.springo/config.json) is the source of truth
       }),
+      merge: (persistedState: any, currentState) => {
+        const merged = { ...currentState, ...persistedState };
+        // Never let stale localStorage override the default — backend is source of truth
+        delete (merged as any).defaultWorkingFolder;
+        merged.defaultWorkingFolder = currentState.defaultWorkingFolder;
+        return merged;
+      },
     },
   ),
 );
