@@ -389,42 +389,24 @@ function startServer() {
                 debugLog(`Server spawned with PID=${serverProcess.pid}`);
 
                 serverProcess.stdout.on('data', (data) => {
-                    console.log(`Server: ${data}`);
+                    const msg = data.toString().trim();
+                    console.log(`Server: ${msg}`);
+                    debugLog(`[stdout] ${msg}`);
                 });
 
                 serverProcess.stderr.on('data', (data) => {
-                    console.error(`Server Error: ${data}`);
+                    const msg = data.toString().trim();
+                    console.error(`Server Error: ${msg}`);
+                    debugLog(`[stderr] ${msg}`);
                 });
 
-                // Auto-restart on unexpected crash
+                // Track unexpected crash — do NOT auto-restart here
+                // (the health-check polling below will detect the failure)
                 serverProcess.on('exit', (code, signal) => {
+                    debugLog(`Server process exited: code=${code} signal=${signal}`);
+                    serverProcess = null;
                     if (code !== null && code !== 0 && !app.isQuitting) {
-                        console.error(`Server crashed with code ${code} (signal: ${signal}), attempting restart...`);
-                        serverProcess = null;
-                        serverRestartCount = (serverRestartCount || 0) + 1;
-                        if (serverRestartCount <= 3) {
-                            const delay = 2000 * serverRestartCount;
-                            console.log(`Restarting server in ${delay}ms (attempt ${serverRestartCount}/3)...`);
-                            setTimeout(() => {
-                                startServer()
-                                    .then(() => {
-                                        console.log('Server restarted successfully');
-                                        serverRestartCount = 0;
-                                        if (mainWindow) {
-                                            mainWindow.webContents.send('server-restarted');
-                                        }
-                                    })
-                                    .catch(err => console.error('Server restart failed:', err));
-                            }, delay);
-                        } else {
-                            console.error('Server restart limit reached (3 attempts)');
-                            if (mainWindow) {
-                                mainWindow.webContents.send('server-crash', {
-                                    code, signal,
-                                    message: 'Server crashed and could not be restarted after 3 attempts.'
-                                });
-                            }
-                        }
+                        debugLog(`Server crashed with code ${code}`);
                     }
                 });
 
