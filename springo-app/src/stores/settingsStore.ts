@@ -100,14 +100,24 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       loadWorkingDir: async () => {
-        // Zustand persist (localStorage) is the primary source of truth.
-        // Only fall back to Electron cache if persist hasn't restored values yet.
+        // Load default working folder from backend (primary source of truth)
+        try {
+          const res = await fetch(`${BASE_URL}/v1/config/default-working-folder`);
+          if (res.ok) {
+            const data = await res.json();
+            const backendDefault = data.default_working_folder as string;
+            if (backendDefault) {
+              set({ defaultWorkingFolder: backendDefault });
+            }
+          }
+        } catch (e) {
+          console.warn('[Settings] Failed to load default working folder from backend:', e);
+        }
+        // Load working folders from Electron cache (for folder list only)
         const current = get();
-        if (current.workingFolders.length > 0 || current.workingDir || current.defaultWorkingFolder !== '~/Downloads') {
-          // Already have persisted values from zustand — skip Electron cache
+        if (current.workingFolders.length > 0 || current.workingDir) {
           return;
         }
-        // Fallback: load from Electron cache for first-time migration
         if (window.electronAPI?.cache) {
           try {
             const raw = await window.electronAPI.cache.get('workspace');
@@ -116,7 +126,6 @@ export const useSettingsStore = create<SettingsState>()(
               set({
                 workingFolders: (cached.workingFolders as string[]) || [],
                 workingDir: (cached.currentWorkingDir as string) || '',
-                defaultWorkingFolder: (cached.defaultWorkingFolder as string) || '~/Downloads',
               });
             }
           } catch (e) {

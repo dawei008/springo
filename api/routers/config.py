@@ -510,6 +510,54 @@ def get_current_working_dir() -> str:
     return _working_dir
 
 
+# ============ Default Working Folder (persisted to ~/.springo/config.json) ============
+
+class DefaultWorkingFolderRequest(BaseModel):
+    default_working_folder: str
+
+
+@router.get("/config/default-working-folder")
+async def get_default_working_folder() -> Dict[str, Any]:
+    """Get the persisted default working folder."""
+    import json as json_module
+    CONFIG_FILE = os.path.expanduser("~/.springo/config.json")
+    default = "~/Downloads"
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json_module.load(f)
+            default = config.get("default_working_folder", default)
+    except Exception as e:
+        logger.warning(f"Failed to read default working folder: {e}")
+    return {"default_working_folder": default}
+
+
+@router.post("/config/default-working-folder")
+async def set_default_working_folder(request: DefaultWorkingFolderRequest) -> Dict[str, Any]:
+    """Persist the default working folder to ~/.springo/config.json."""
+    import json as json_module
+    CONFIG_DIR = os.path.expanduser("~/.springo")
+    CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    try:
+        config = {}
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                config = json_module.load(f)
+
+        config["default_working_folder"] = request.default_working_folder
+
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json_module.dump(config, f, indent=2, ensure_ascii=False)
+
+        logger.info(f"Default working folder saved: {request.default_working_folder}")
+        return {"success": True, "default_working_folder": request.default_working_folder}
+    except Exception as e:
+        logger.error(f"Failed to save default working folder: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============ Feishu Bot Config ============
 
 class FeishuConfigRequest(BaseModel):

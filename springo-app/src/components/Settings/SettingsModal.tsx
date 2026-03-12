@@ -227,9 +227,15 @@ export default function SettingsModal() {
         compactModel: localCompactModel,
         enable1mContext: localEnable1mContext,
       })
-      // Persist default working dir (zustand persist handles localStorage automatically)
+      // Persist default working dir to backend (~/.springo/config.json)
       if (localDefaultWorkdir.trim()) {
-        useSettingsStore.setState({ defaultWorkingFolder: localDefaultWorkdir.trim() });
+        const newDir = localDefaultWorkdir.trim();
+        useSettingsStore.setState({ defaultWorkingFolder: newDir });
+        fetch(`${BASE_URL}/v1/config/default-working-folder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ default_working_folder: newDir }),
+        }).catch((e) => console.warn('[Settings] Failed to save default working folder to backend:', e));
       }
       // Save AWS credentials to backend if entered
       if (awsAccessKey && awsSecretKey) {
