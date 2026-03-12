@@ -207,7 +207,7 @@ export const useSettingsStore = create<SettingsState>()(
         settings: state.settings,
         workingDir: state.workingDir,
         workingFolders: state.workingFolders,
-        defaultWorkingFolder: state.defaultWorkingFolder,
+        // defaultWorkingFolder is NOT persisted here — backend (~/.springo/config.json) is the source of truth
       }),
     },
   ),
