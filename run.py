@@ -9,6 +9,13 @@ import sys
 
 
 def main():
+    # When running as a PyInstaller bundle, add the temp extraction dir to sys.path
+    # so that "api" and "mcp_tools" packages (added via --add-data) can be imported.
+    if getattr(sys, 'frozen', False):
+        bundle_dir = sys._MEIPASS
+        if bundle_dir not in sys.path:
+            sys.path.insert(0, bundle_dir)
+
     parser = argparse.ArgumentParser(description="Run Springo FastAPI server")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
     parser.add_argument("--port", type=int, default=8081, help="Port to bind to")

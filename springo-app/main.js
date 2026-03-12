@@ -302,6 +302,56 @@ function createMenu() {
     Menu.setApplicationMenu(menu);
 }
 
+function getPortPids(port) {
+    try {
+        const result = require('child_process').execSync(
+            `lsof -ti:${port}`, { encoding: 'utf8', timeout: 5000 }
+        ).trim();
+        if (result) {
+            return result.split('\n').filter(Boolean).map(Number);
+        }
+    } catch(e) { /* no process on port */ }
+    return [];
+}
+
+function killPortProcess(port) {
+    const pids = getPortPids(port);
+    if (pids.length === 0) return false;
+
+    debugLog(`Found stale processes on port ${port}: ${pids.join(', ')}`);
+
+    // First try SIGTERM for graceful shutdown
+    for (const pid of pids) {
+        try { process.kill(pid, 'SIGTERM'); } catch(e) { /* ignore */ }
+    }
+
+    // Wait briefly, then SIGKILL any survivors
+    try {
+        require('child_process').execSync('sleep 1');
+    } catch(e) { /* ignore */ }
+
+    const remaining = getPortPids(port);
+    for (const pid of remaining) {
+        try {
+            process.kill(pid, 'SIGKILL');
+            debugLog(`Force killed PID ${pid}`);
+        } catch(e) { /* ignore */ }
+    }
+
+    // Wait for port to actually be freed
+    try {
+        require('child_process').execSync('sleep 1');
+    } catch(e) { /* ignore */ }
+
+    const stillAlive = getPortPids(port);
+    if (stillAlive.length > 0) {
+        debugLog(`WARNING: port ${port} still occupied by PIDs: ${stillAlive.join(', ')}`);
+    } else {
+        debugLog(`Port ${port} successfully freed`);
+    }
+    return stillAlive.length === 0;
+}
+
 function startServer() {
     return new Promise((resolve, reject) => {
         // 检查服务器是否已经运行
@@ -314,23 +364,29 @@ function startServer() {
                 }
             })
             .catch(() => {
-                // 服务器未运行，启动它
+                // 服务器未运行，先清理可能残留的旧进程
+                killPortProcess(8081);
+
                 console.log('Starting server...');
 
                 // Use bundled executable in packaged app, python3 in development
+                // detached=true creates a new process group so we can kill the group later
                 if (SERVER_EXECUTABLE) {
-                    console.log('Using bundled executable:', SERVER_EXECUTABLE);
+                    debugLog('Using bundled executable: ' + SERVER_EXECUTABLE);
                     serverProcess = spawn(SERVER_EXECUTABLE, ['--port', '8081'], {
                         cwd: path.dirname(SERVER_EXECUTABLE),
-                        stdio: ['ignore', 'pipe', 'pipe']
+                        stdio: ['ignore', 'pipe', 'pipe'],
+                        detached: true
                     });
                 } else {
-                    console.log('Using python3 with script:', SERVER_SCRIPT);
+                    debugLog('Using python3 with script: ' + SERVER_SCRIPT);
                     serverProcess = spawn('python3', [SERVER_SCRIPT, '--port', '8081'], {
                         cwd: path.dirname(SERVER_SCRIPT),
-                        stdio: ['ignore', 'pipe', 'pipe']
+                        stdio: ['ignore', 'pipe', 'pipe'],
+                        detached: true
                     });
                 }
+                debugLog(`Server spawned with PID=${serverProcess.pid}`);
 
                 serverProcess.stdout.on('data', (data) => {
                     console.log(`Server: ${data}`);
@@ -399,10 +455,46 @@ function startServer() {
 
 function stopServer() {
     app.isQuitting = true;
+    debugLog('stopServer called');
+
+    // 1. Kill the tracked server process and its entire process group
     if (serverProcess) {
-        serverProcess.kill();
+        const pid = serverProcess.pid;
+        debugLog(`Killing server process PID=${pid}`);
+
+        // Kill the process group (negative PID) to catch child processes
+        try { process.kill(-pid, 'SIGTERM'); } catch(e) { /* ignore */ }
+        // Also kill the process directly
+        try { serverProcess.kill('SIGTERM'); } catch(e) { /* ignore */ }
+
+        // Give it a moment then force kill
+        try {
+            require('child_process').execSync('sleep 1');
+        } catch(e) { /* ignore */ }
+
+        try { process.kill(-pid, 'SIGKILL'); } catch(e) { /* ignore */ }
+        try { serverProcess.kill('SIGKILL'); } catch(e) { /* ignore */ }
+
         serverProcess = null;
     }
+
+    // 2. Also kill anything still holding port 8081 (orphaned children)
+    killPortProcess(8081);
+    debugLog('stopServer complete');
+}
+
+// Graceful stop: kill backend but don't set isQuitting (app stays alive on macOS)
+function stopServerGraceful() {
+    debugLog('stopServerGraceful called');
+    if (serverProcess) {
+        const pid = serverProcess.pid;
+        debugLog(`Gracefully stopping server PID=${pid}`);
+        try { process.kill(-pid, 'SIGTERM'); } catch(e) { /* ignore */ }
+        try { serverProcess.kill('SIGTERM'); } catch(e) { /* ignore */ }
+        serverProcess = null;
+    }
+    // Clean up port in background
+    setTimeout(() => killPortProcess(8081), 2000);
 }
 
 // IPC 处理
@@ -614,12 +706,24 @@ app.whenReady().then(async () => {
             debugLog('activate: creating new window');
             createWindow();
         }
+        // Ensure backend is running (may have been stopped on window-all-closed)
+        if (!serverProcess) {
+            debugLog('activate: restarting server');
+            startServer()
+                .then(() => debugLog('activate: server restarted OK'))
+                .catch(err => debugLog('activate: server restart failed: ' + err.message));
+        }
     });
 });
 
 app.on('window-all-closed', () => {
     debugLog(`window-all-closed platform=${process.platform}`);
-    if (process.platform !== 'darwin') {
+    // On macOS, stop the backend when all windows close (it will restart on activate)
+    // This prevents orphaned backend processes
+    if (process.platform === 'darwin') {
+        debugLog('macOS: stopping server on window close (will restart on activate)');
+        stopServerGraceful();
+    } else {
         stopServer();
         app.quit();
     }
