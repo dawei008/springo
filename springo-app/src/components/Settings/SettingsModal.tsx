@@ -28,6 +28,13 @@ export default function SettingsModal() {
   // General tab state
   const [localDefaultWorkdir, setLocalDefaultWorkdir] = useState(defaultWorkingFolder || '~/Downloads')
 
+  // Sync local state when store value loads asynchronously (e.g. from Electron cache)
+  useEffect(() => {
+    if (defaultWorkingFolder) {
+      setLocalDefaultWorkdir(defaultWorkingFolder)
+    }
+  }, [defaultWorkingFolder])
+
   // Recording settings (General tab)
   const [recordTarget, setRecordTarget] = useState<'window' | 'screen' | 'screen-ext'>('window')
   const [recordingDir, setRecordingDir] = useState('~/.springo/recordings')
@@ -211,58 +218,63 @@ export default function SettingsModal() {
 
   // --- Close (saves settings) ---
   function closeSettings() {
-    saveSettings({
-      model: localModel,
-      maxTokens: localMaxTokens,
-      temperature: localTemperature,
-      compactModel: localCompactModel,
-      enable1mContext: localEnable1mContext,
-    })
-    // Update default working dir
-    if (localDefaultWorkdir.trim() && localDefaultWorkdir !== defaultWorkingFolder) {
-      // Update Zustand store so createSession() picks it up
-      useSettingsStore.setState({ defaultWorkingFolder: localDefaultWorkdir.trim() });
-      if (window.electronAPI?.cache) {
-        window.electronAPI.cache.set('workspace', {
-          workingFolders,
-          currentWorkingDir: workingDir,
-          defaultWorkingFolder: localDefaultWorkdir.trim(),
-        })
+    // Save all settings synchronously BEFORE closing the modal
+    try {
+      saveSettings({
+        model: localModel,
+        maxTokens: localMaxTokens,
+        temperature: localTemperature,
+        compactModel: localCompactModel,
+        enable1mContext: localEnable1mContext,
+      })
+      // Always persist default working dir
+      if (localDefaultWorkdir.trim()) {
+        useSettingsStore.setState({ defaultWorkingFolder: localDefaultWorkdir.trim() });
+        if (window.electronAPI?.cache) {
+          window.electronAPI.cache.set('workspace', {
+            workingFolders,
+            currentWorkingDir: workingDir,
+            defaultWorkingFolder: localDefaultWorkdir.trim(),
+          })
+        }
       }
+      // Save AWS credentials to backend if entered
+      if (awsAccessKey && awsSecretKey) {
+        fetch(`${BASE_URL}/v1/config/aws`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            access_key_id: awsAccessKey,
+            secret_access_key: awsSecretKey,
+            region: awsRegion,
+          }),
+        }).catch(() => {})
+      }
+      // Save DeepSeek key to backend if entered
+      if (deepseekApiKey) {
+        fetch(`${BASE_URL}/v1/config/vendor-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vendor: 'deepseek', api_key: deepseekApiKey }),
+        }).catch(() => {})
+      }
+      // Save MiniMax key to backend if entered
+      if (minimaxApiKey) {
+        fetch(`${BASE_URL}/v1/config/vendor-keys`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ vendor: 'minimax', api_key: minimaxApiKey }),
+        }).catch(() => {})
+      }
+      // Save memory & Feishu settings (fire-and-forget)
+      saveMemorySettings()
+      saveFeishuSettings()
+    } catch (e) {
+      console.error('Error saving settings:', e)
+    } finally {
+      // Always close modal, even if save fails
+      setSettingsOpen(false)
     }
-    // Save AWS credentials to backend if entered
-    if (awsAccessKey && awsSecretKey) {
-      fetch(`${BASE_URL}/v1/config/aws`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          access_key_id: awsAccessKey,
-          secret_access_key: awsSecretKey,
-          region: awsRegion,
-        }),
-      }).catch(() => {})
-    }
-    // Save DeepSeek key to backend if entered
-    if (deepseekApiKey) {
-      fetch(`${BASE_URL}/v1/config/vendor-keys`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vendor: 'deepseek', api_key: deepseekApiKey }),
-      }).catch(() => {})
-    }
-    // Save MiniMax key to backend if entered
-    if (minimaxApiKey) {
-      fetch(`${BASE_URL}/v1/config/vendor-keys`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ vendor: 'minimax', api_key: minimaxApiKey }),
-      }).catch(() => {})
-    }
-    setSettingsOpen(false)
-    // Save memory settings to backend (fire-and-forget)
-    saveMemorySettings()
-    // Save Feishu settings to backend (fire-and-forget)
-    saveFeishuSettings()
   }
 
   // Click outside to close

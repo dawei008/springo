@@ -131,7 +131,7 @@ function StatusBar() {
         }
       }
     },
-    [displayDir, setWorkingDir],
+    [displayDir, setWorkingDir, currentSessionId],
   );
 
   return (
