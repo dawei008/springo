@@ -312,7 +312,7 @@ async def root():
 # Import and include routers
 from .routers import messages, tools, sessions, context, news, images, health
 from .routers import config, memory, skills, tool_results
-from .routers import models, mcp, terminal, teams, schedules, plugins, acp
+from .routers import models, mcp, terminal, teams, schedules, plugins, acp, transcribe
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
 app.include_router(tools.router, prefix="/v1", tags=["tools"])
@@ -334,10 +334,24 @@ app.include_router(teams.router, prefix="/v1", tags=["teams"])
 app.include_router(schedules.router, prefix="/v1", tags=["schedules"])
 app.include_router(plugins.router, prefix="/v1", tags=["plugins"])
 app.include_router(acp.router, prefix="/v1", tags=["acp"])
+app.include_router(transcribe.router, prefix="/v1", tags=["transcribe"])
 
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi import Request
+from fastapi.staticfiles import StaticFiles
+
+# Serve frontend static files (so Electron can load via http:// instead of file://)
+_renderer_dir = os.path.join(os.path.dirname(__file__), '..', 'springo-app', 'renderer')
+if os.path.isdir(_renderer_dir):
+    # Serve assets sub-directory
+    _assets_dir = os.path.join(_renderer_dir, 'assets')
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="frontend-assets")
+
+    @app.get("/app", include_in_schema=False)
+    async def serve_frontend():
+        return FileResponse(os.path.join(_renderer_dir, 'index.html'))
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], include_in_schema=False)

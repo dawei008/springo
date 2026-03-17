@@ -2,12 +2,31 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useReplayStore } from '@/stores/replayStore';
+import { useVoiceStore } from '@/stores/voiceStore';
 
 export default function Header() {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const toggleRightPanel = useUIStore((s) => s.toggleRightPanel);
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen);
   const isRecording = useRecordingStore((s) => s.isRecording);
+  const isTranscribing = useVoiceStore((s) => s.isTranscribing);
+
+  const handleVoiceToggle = () => {
+    if (isTranscribing) {
+      useVoiceStore.getState().stopTranscription();
+    } else {
+      // Ensure we have a session; auto-open Meeting tab in right panel
+      let sid = currentSessionId;
+      if (!sid) {
+        sid = useSessionStore.getState().createSession();
+      }
+      useVoiceStore.getState().startTranscription(sid);
+      useUIStore.getState().setRightPanelTab('meeting');
+      if (!useUIStore.getState().rightPanelOpen) {
+        useUIStore.getState().toggleRightPanel();
+      }
+    }
+  };
 
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const session = useSessionStore((s) =>
@@ -78,6 +97,17 @@ export default function Header() {
         </span>
       </div>
       <div className="header-actions">
+        <button
+          className={`header-voice-btn${isTranscribing ? ' active' : ''}`}
+          onClick={handleVoiceToggle}
+          title={isTranscribing ? 'Stop transcription' : 'Voice transcription (meeting notes)'}
+        >
+          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path d="M5 10a7 7 0 0 0 14 0" />
+            <line x1="12" y1="19" x2="12" y2="22" />
+          </svg>
+        </button>
         <button
           className={`header-record-btn${isRecording ? ' recording' : ''}`}
           onClick={handleRecordToggle}

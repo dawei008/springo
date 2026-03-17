@@ -486,6 +486,34 @@
         }
 
         /* Panel Toggle Button */
+        .header-voice-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 6px;
+            transition: all 0.15s;
+        }
+
+        .header-voice-btn:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .header-voice-btn.active {
+            color: #e53935;
+            animation: voice-pulse 1.2s ease-in-out infinite;
+        }
+
+        .header-voice-btn.active:hover {
+            background: rgba(229, 57, 53, 0.1);
+        }
+
         .header-record-btn {
             width: 32px;
             height: 32px;
@@ -7397,6 +7425,113 @@
 
 .icon-btn.recording-active:hover {
     background: rgba(229, 57, 53, 0.1);
+}
+
+/* Voice transcription button active state */
+.icon-btn.voice-active {
+    color: #e53935;
+    animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.icon-btn.voice-active:hover {
+    background: rgba(229, 57, 53, 0.1);
+}
+
+@keyframes voice-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+/* ==================== Meeting Panel ==================== */
+
+.meeting-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+.meeting-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.meeting-toolbar-spacer {
+    flex: 1;
+}
+
+.meeting-lang-btn {
+    padding: 2px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.meeting-lang-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.meeting-live-dot {
+    font-size: 10px;
+    font-weight: 700;
+    color: #e53935;
+    letter-spacing: 0.5px;
+    animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.meeting-action-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.15s;
+}
+
+.meeting-action-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.meeting-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+}
+
+.meeting-empty {
+    color: var(--text-tertiary);
+    font-size: 13px;
+    text-align: center;
+    padding: 24px 12px;
+    line-height: 1.6;
+}
+
+.meeting-text {
+    font-size: 13px;
+    line-height: 1.8;
+    color: var(--text-primary);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.meeting-partial {
+    color: var(--text-tertiary);
+    font-style: italic;
 }
 
 /* ==================== Replay Bar ==================== */

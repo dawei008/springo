@@ -11,6 +11,7 @@ import type { RightPanelTab, TodoItem } from '@/stores/uiStore';
 import TeamPanel from '../RightPanel/TeamPanel';
 import NewsPanel from '../RightPanel/NewsPanel';
 import SchedulesPanel from '../RightPanel/SchedulesPanel';
+import MeetingPanel from '../RightPanel/MeetingPanel';
 
 // ==================== RightPanel Todo List ====================
 
@@ -253,6 +254,7 @@ function RightPanel() {
     { key: 'team', label: 'Team' },
     { key: 'schedules', label: 'Schedules' },
     { key: 'news', label: 'News' },
+    { key: 'meeting', label: 'Meeting' },
   ];
 
   return (
@@ -324,6 +326,14 @@ function RightPanel() {
           id="panel-news"
         >
           <NewsPanel />
+        </div>
+
+        {/* Meeting section */}
+        <div
+          className={`right-panel-section${rightPanelTab === 'meeting' ? ' active' : ''}`}
+          id="panel-meeting"
+        >
+          <MeetingPanel />
         </div>
       </div>
     </div>

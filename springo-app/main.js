@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, shell, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, Menu, shell, ipcMain, dialog, session, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -177,6 +177,20 @@ function createWindow() {
     // 准备好后显示窗口
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
+    });
+
+    // Log renderer crashes
+    mainWindow.webContents.on('render-process-gone', (event, details) => {
+        debugLog(`Renderer crashed: reason=${details.reason} exitCode=${details.exitCode}`);
+    });
+    mainWindow.webContents.on('crashed', () => {
+        debugLog('Renderer process crashed');
+    });
+    mainWindow.webContents.on('console-message', (event, level, message) => {
+        if (level >= 1 || message.includes('[voice]')) {
+            const labels = ['debug','info','warn','error'];
+            debugLog(`[renderer-${labels[level] || level}] ${message}`);
+        }
     });
 
     // 外部链接在浏览器中打开
@@ -482,6 +496,34 @@ function stopServerGraceful() {
 // IPC 处理
 ipcMain.handle('get-server-url', () => SERVER_URL);
 
+// Microphone permission check/request
+ipcMain.handle('check-mic-access', async () => {
+    if (process.platform === 'darwin') {
+        const status = systemPreferences.getMediaAccessStatus('microphone');
+        if (status !== 'granted') {
+            return await systemPreferences.askForMediaAccess('microphone');
+        }
+        return true;
+    }
+    return true;
+});
+
+// Get desktop audio source for system audio capture
+ipcMain.handle('get-desktop-audio-source', async () => {
+    const { desktopCapturer } = require('electron');
+    // Check screen recording permission on macOS
+    if (process.platform === 'darwin') {
+        const screenStatus = systemPreferences.getMediaAccessStatus('screen');
+        debugLog(`[voice] Screen recording permission: ${screenStatus}`);
+        if (screenStatus !== 'granted') {
+            debugLog('[voice] Screen recording NOT granted — system audio will not be captured');
+        }
+    }
+    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+    debugLog(`[voice] desktopCapturer sources: ${sources.map(s => s.id + '/' + s.name).join(', ')}`);
+    return sources[0] ? { id: sources[0].id, name: sources[0].name } : null;
+});
+
 // Folder selection dialog
 ipcMain.handle('select-folder', async () => {
     // Focus the window to ensure dialog appears in front
@@ -666,6 +708,33 @@ app.whenReady().then(async () => {
     };
 
     debugLog('app ready');
+
+    // Auto-approve microphone and display-capture permissions
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+        callback(true);
+    });
+
+    // Handle getDisplayMedia() calls from renderer — auto-select screen with loopback audio
+    // This is the modern Electron approach; avoids the desktopCapturer audio track dying bug
+    const { desktopCapturer: dc } = require('electron');
+    session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+        const sources = await dc.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
+        debugLog(`[voice] setDisplayMediaRequestHandler: ${sources.length} sources, picking ${sources[0]?.name}`);
+        if (sources.length > 0) {
+            callback({ video: sources[0], audio: 'loopback' });
+        } else {
+            callback(null);
+        }
+    });
+
+    // Pre-request macOS microphone permission so the system dialog
+    // appears at startup rather than crashing the renderer later
+    if (process.platform === 'darwin') {
+        systemPreferences.askForMediaAccess('microphone').then((granted) => {
+            debugLog(`Microphone access: ${granted ? 'granted' : 'denied'}`);
+        });
+    }
+
     createMenu();
     createWindow();
     debugLog('window created');

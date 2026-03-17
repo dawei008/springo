@@ -35,5 +35,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
         getSource: (target) => ipcRenderer.invoke('recording-get-source', target),
         save: (buffer, filename) => ipcRenderer.invoke('recording-save', buffer, filename),
         selectDir: () => ipcRenderer.invoke('recording-select-dir'),
-    }
+    },
+    // Microphone permission
+    checkMicAccess: () => ipcRenderer.invoke('check-mic-access'),
+    // Desktop audio source for system audio capture
+    getDesktopAudioSource: () => ipcRenderer.invoke('get-desktop-audio-source'),
 });
