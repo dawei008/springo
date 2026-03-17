@@ -53,7 +53,6 @@ export default function MessageInput() {
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'disabled' | 'error' | 'checking'>('checking');
   const [syncText, setSyncText] = useState('Memory: checking...');
   const [syncTitle, setSyncTitle] = useState('AgentCore Memory Sync Status');
-  const lastKnownSyncCountRef = useRef(0);
 
   const [showModelPicker, setShowModelPicker] = useState(false);
   const modelPickerRef = useRef<HTMLDivElement>(null);
@@ -121,16 +120,25 @@ export default function MessageInput() {
         const res = await fetch(`${BASE_URL}/v1/memory/status`);
         const data = await res.json();
 
-        if (data.sessions_synced > 0) {
-          lastKnownSyncCountRef.current = data.sessions_synced;
-        }
+        // Format last sync time as relative (e.g. "3h ago") or absolute
+        const formatSyncTime = (iso: string) => {
+          if (!iso) return '';
+          const d = new Date(iso + 'Z'); // UTC
+          const now = Date.now();
+          const diff = now - d.getTime();
+          if (diff < 60000) return 'just now';
+          if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+          if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+          return `${Math.floor(diff / 86400000)}d ago`;
+        };
 
-        const lastCount = lastKnownSyncCountRef.current;
+        const syncTime = data.last_file_sync ? formatSyncTime(data.last_file_sync) : '';
+        const filesCount = data.files_synced || 0;
 
         switch (data.status) {
           case 'synced':
             setSyncStatus('synced');
-            setSyncText(`Synced: ${data.sessions_synced} sessions`);
+            setSyncText(syncTime ? `Synced ${syncTime}` : `Synced: ${filesCount} files`);
             break;
           case 'syncing':
             setSyncStatus('syncing');
@@ -139,15 +147,15 @@ export default function MessageInput() {
           case 'disabled':
           case 'not_running':
             setSyncStatus('disabled');
-            setSyncText(lastCount > 0 ? `Synced: ${lastCount} sessions` : 'Memory: off');
+            setSyncText(syncTime ? `Synced ${syncTime}` : 'Memory: off');
             break;
           case 'error':
             setSyncStatus('error');
-            setSyncText(lastCount > 0 ? `Synced: ${lastCount} sessions` : 'Sync paused');
+            setSyncText(syncTime ? `Synced ${syncTime}` : 'Sync paused');
             break;
           default:
             setSyncStatus('disabled');
-            setSyncText(lastCount > 0 ? `Synced: ${lastCount} sessions` : 'Memory: --');
+            setSyncText(syncTime ? `Synced ${syncTime}` : 'Memory: --');
         }
 
         setSyncTitle(
@@ -155,13 +163,12 @@ export default function MessageInput() {
           `Status: ${data.status || 'unknown'}\n` +
           `Memory ID: ${data.memory_id || 'N/A'}\n` +
           `Region: ${data.region || 'N/A'}\n` +
-          `Sessions: ${data.sessions_synced || 0}\n` +
-          `Total Events: ${data.total_events || 0}`,
+          `Files synced: ${filesCount}\n` +
+          (syncTime ? `Last sync: ${syncTime}` : ''),
         );
       } catch {
-        const lastCount = lastKnownSyncCountRef.current;
         setSyncStatus('disabled');
-        setSyncText(lastCount > 0 ? `Synced: ${lastCount} sessions` : 'Memory: --');
+        setSyncText('Memory: --');
       }
     };
 

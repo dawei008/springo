@@ -352,29 +352,56 @@ class MemorySyncManager:
             logger.info(f"File sync: synced {synced_count} changed file(s) to AgentCore")
 
     def _sync_file_to_agentcore(self, rel_path: str, content: str) -> bool:
-        """Sync a single memory file to AgentCore as a conversational event."""
+        """Sync a single memory file to AgentCore as conversational event(s).
+
+        AgentCore CreateEvent has a 100,000 char limit per text field.
+        Large files are split into multiple chunks sent as separate events.
+        """
         if not self._memory_client:
             return False
 
+        MAX_CHUNK = 95000  # leave margin below 100k limit
+
         try:
-            # Use file path as session ID — deterministic, so re-syncs overwrite
             session_id = f"memfile-{rel_path.replace('/', '-').replace('.md', '')}"
 
-            payload = [{
-                "conversational": {
-                    "content": {"text": content},
-                    "role": "USER",
-                }
-            }]
+            if len(content) <= MAX_CHUNK:
+                chunks = [content]
+            else:
+                # Split on paragraph boundaries
+                chunks = []
+                remaining = content
+                while remaining:
+                    if len(remaining) <= MAX_CHUNK:
+                        chunks.append(remaining)
+                        break
+                    # Find a good split point (double newline near the limit)
+                    split_at = remaining.rfind('\n\n', 0, MAX_CHUNK)
+                    if split_at < MAX_CHUNK // 2:
+                        split_at = remaining.rfind('\n', 0, MAX_CHUNK)
+                    if split_at < MAX_CHUNK // 2:
+                        split_at = MAX_CHUNK
+                    chunks.append(remaining[:split_at])
+                    remaining = remaining[split_at:].lstrip('\n')
+                logger.info(f"File sync: splitting {rel_path} into {len(chunks)} chunks ({len(content)} chars)")
 
-            self._memory_client.create_event(
-                memoryId=self.memory_id,
-                actorId="springo",
-                sessionId=session_id,
-                eventTimestamp=datetime.utcnow(),
-                payload=payload,
-            )
-            logger.info(f"File sync: synced {rel_path} to AgentCore ({len(content)} chars)")
+            for i, chunk in enumerate(chunks):
+                chunk_session = session_id if len(chunks) == 1 else f"{session_id}-part{i+1}"
+                payload = [{
+                    "conversational": {
+                        "content": {"text": chunk},
+                        "role": "USER",
+                    }
+                }]
+                self._memory_client.create_event(
+                    memoryId=self.memory_id,
+                    actorId="springo",
+                    sessionId=chunk_session,
+                    eventTimestamp=datetime.utcnow(),
+                    payload=payload,
+                )
+
+            logger.info(f"File sync: synced {rel_path} to AgentCore ({len(content)} chars, {len(chunks)} chunk(s))")
             return True
         except Exception as e:
             logger.error(f"File sync: failed to sync {rel_path}: {e}")

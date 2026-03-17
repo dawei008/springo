@@ -95,6 +95,18 @@ async def get_memory_status() -> Dict[str, Any]:
         except Exception:
             pass
 
+        # File sync checkpoint — last sync time and file count
+        try:
+            workspace = os.path.expanduser("~/.springo/workspace")
+            cp_path = os.path.join(workspace, ".sync_checkpoint.json")
+            if os.path.exists(cp_path):
+                with open(cp_path, 'r') as f:
+                    cp = json_module.load(f)
+                status["last_file_sync"] = cp.get("last_check", "")
+                status["files_synced"] = len(cp.get("files", {}))
+        except Exception:
+            pass
+
         # Determine status
         if status["pending"] > 0:
             status["status"] = "syncing"
@@ -148,6 +160,21 @@ async def list_memory_files() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"List memory files error: {e}")
         return {"files": [], "error": str(e)}
+
+
+@router.post("/memory/sync")
+async def trigger_memory_sync() -> Dict[str, Any]:
+    """Trigger immediate file sync to AgentCore Memory."""
+    try:
+        from ..services.memory_sync import get_sync_manager
+        manager = get_sync_manager()
+        if not manager:
+            return {"synced": False, "error": "sync_manager_not_running"}
+        manager.trigger_file_sync()
+        return {"synced": True}
+    except Exception as e:
+        logger.error(f"Trigger sync error: {e}")
+        return {"synced": False, "error": str(e)}
 
 
 @router.post("/memory/cleanup")
