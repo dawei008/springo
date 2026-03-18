@@ -28,6 +28,46 @@ function computeCacheHitRate(usage: UsageData): number | null {
 const FILE_ACCEPT =
   'image/*,.pdf,.txt,.md,.json,.csv,.pptx,.ppt,.xlsx,.xls,.docx,.doc,.html,.xml,.yaml,.yml,.py,.js,.ts,.tsx,.jsx,.java,.go,.rs,.c,.cpp,.h,.css,.scss,.sql,.sh,.bash,.zsh,.r,.rb,.php,.swift,.kt,.scala,.lua,.m,.mm';
 
+/** Bedrock image size limit (5 MB). Compress images that exceed this. */
+const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024; // 4.5 MB to leave margin
+
+function compressImage(base64: string, mimeType: string): Promise<{ data: string; type: string }> {
+  return new Promise((resolve) => {
+    const raw = atob(base64);
+    if (raw.length <= MAX_IMAGE_BYTES) {
+      resolve({ data: base64, type: mimeType });
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      // Scale down to fit within size limit
+      let { width, height } = img;
+      const scale = Math.min(1, Math.sqrt(MAX_IMAGE_BYTES / raw.length) * 0.9);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.drawImage(img, 0, 0, width, height);
+      // Try JPEG at decreasing quality until under limit
+      for (let q = 0.85; q >= 0.3; q -= 0.1) {
+        const dataUrl = canvas.toDataURL('image/jpeg', q);
+        const b64 = dataUrl.split(',')[1];
+        if (atob(b64).length <= MAX_IMAGE_BYTES) {
+          resolve({ data: b64, type: 'image/jpeg' });
+          return;
+        }
+      }
+      // Last resort: lowest quality
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.2);
+      resolve({ data: dataUrl.split(',')[1], type: 'image/jpeg' });
+    };
+    img.onerror = () => resolve({ data: base64, type: mimeType }); // fallback: send as-is
+    img.src = `data:${mimeType};base64,${base64}`;
+  });
+}
+
 /** Built-in commands shown in the skill picker */
 const BUILT_IN_COMMANDS = [
   { name: 'name', description: 'Rename current session (usage: /name New Title)', isBuiltIn: true as const },
@@ -458,11 +498,12 @@ export default function MessageInput() {
           const file = items[i].getAsFile();
           if (file) {
             const reader = new FileReader();
-            reader.onload = () => {
+            reader.onload = async () => {
               const base64 = (reader.result as string).split(',')[1];
+              const compressed = await compressImage(base64, file.type);
               setAttachments((prev) => [
                 ...prev,
-                { name: file.name || 'pasted-image', type: file.type, data: base64 },
+                { name: file.name || 'pasted-image', type: compressed.type, data: compressed.data },
               ]);
             };
             reader.readAsDataURL(file);
@@ -488,11 +529,12 @@ export default function MessageInput() {
     for (const file of files) {
       if (file.type.startsWith('image/')) {
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
           const base64 = (reader.result as string).split(',')[1];
+          const compressed = await compressImage(base64, file.type);
           setAttachments((prev) => [
             ...prev,
-            { name: file.name, type: file.type, data: base64 },
+            { name: file.name, type: compressed.type, data: compressed.data },
           ]);
         };
         reader.readAsDataURL(file);
