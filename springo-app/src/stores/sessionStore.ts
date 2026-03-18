@@ -11,13 +11,13 @@ const BASE_URL = 'http://127.0.0.1:8081';
 const ARCHIVE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 const _recentArchives = new Map<string, number>();
 
-/** Fire-and-forget: archive a session's messages to memory daily log. */
-function archiveSession(sessionId: string) {
+/** Archive a session's messages to memory daily log. Returns a promise. */
+function archiveSession(sessionId: string): Promise<void> {
   const now = Date.now();
   const last = _recentArchives.get(sessionId);
-  if (last && now - last < ARCHIVE_COOLDOWN_MS) return;
+  if (last && now - last < ARCHIVE_COOLDOWN_MS) return Promise.resolve();
 
-  fetch(`${BASE_URL}/v1/memory/archive`, {
+  return fetch(`${BASE_URL}/v1/memory/archive`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ session_id: sessionId }),
@@ -193,8 +193,9 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   deleteSession: async (id: string) => {
-    // Archive to memory/*.md before deleting
-    archiveSession(id);
+    // Archive to memory/*.md before deleting — must await to avoid race
+    // where DELETE removes the JSONL before archive reads it
+    await archiveSession(id);
 
     try {
       const response = await fetch(`${BASE_URL}/v1/sessions/${id}`, {
