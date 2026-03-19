@@ -646,17 +646,21 @@ class BedrockService:
         # Only add anthropic_version for Anthropic-format models
         if api_format == "anthropic":
             bedrock_body["anthropic_version"] = "bedrock-2023-05-31"
-            # Add beta features (e.g. 1M context window) if the model requires them
-            # and extended_context is not explicitly disabled
+            # Build beta features list
+            beta_list: list[str] = []
+            # Fine-grained tool streaming: faster tool_use param delivery (~3s vs ~15s)
+            beta_list.append("fine-grained-tool-streaming-2025-05-14")
+            # Extended context (e.g. 1M) if the model requires it and user opts in
             extended_context = request.get("extended_context")
             if extended_context is None:
                 extended_context = False  # disabled by default; user must opt-in
-            beta_features = model_info.get("beta_features", []) if model_info else []
-            if beta_features and extended_context:
-                bedrock_body["anthropic_beta"] = beta_features
-                logger.info(f"[Beta] Added anthropic_beta={beta_features} to body for {model}")
-            elif beta_features and not extended_context:
-                logger.info(f"[Beta] Skipped anthropic_beta for {model} (extended_context=False)")
+            model_betas = model_info.get("beta_features", []) if model_info else []
+            if model_betas and extended_context:
+                beta_list.extend(model_betas)
+                logger.info(f"[Beta] Added model beta features {model_betas} for {model}")
+            elif model_betas and not extended_context:
+                logger.info(f"[Beta] Skipped model beta {model_betas} for {model} (extended_context=False)")
+            bedrock_body["anthropic_beta"] = beta_list
 
         # Copy optional parameters
         for key in ["temperature", "top_p", "top_k", "stop_sequences", "tool_choice"]:
