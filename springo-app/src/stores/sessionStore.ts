@@ -11,11 +11,17 @@ const BASE_URL = 'http://127.0.0.1:8081';
 const ARCHIVE_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
 const _recentArchives = new Map<string, number>();
 
-/** Archive a session's messages to memory daily log. Returns a promise. */
-function archiveSession(sessionId: string): Promise<void> {
-  const now = Date.now();
-  const last = _recentArchives.get(sessionId);
-  if (last && now - last < ARCHIVE_COOLDOWN_MS) return Promise.resolve();
+/**
+ * Archive a session's messages to memory daily log.
+ * @param skipCooldown - bypass 15-min dedup (used before delete)
+ * @returns true if archive succeeded or was skipped by cooldown, false on error
+ */
+function archiveSession(sessionId: string, skipCooldown = false): Promise<boolean> {
+  if (!skipCooldown) {
+    const now = Date.now();
+    const last = _recentArchives.get(sessionId);
+    if (last && now - last < ARCHIVE_COOLDOWN_MS) return Promise.resolve(true);
+  }
 
   return fetch(`${BASE_URL}/v1/memory/archive`, {
     method: 'POST',
@@ -23,9 +29,13 @@ function archiveSession(sessionId: string): Promise<void> {
     body: JSON.stringify({ session_id: sessionId }),
   })
     .then((res) => {
-      if (res.ok) _recentArchives.set(sessionId, Date.now());
+      if (res.ok) {
+        _recentArchives.set(sessionId, Date.now());
+        return true;
+      }
+      return false;
     })
-    .catch(() => {});
+    .catch(() => false);
 }
 
 interface SessionState {
@@ -193,9 +203,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   deleteSession: async (id: string) => {
-    // Archive to memory/*.md before deleting — must await to avoid race
-    // where DELETE removes the JSONL before archive reads it
-    await archiveSession(id);
+    // Archive to memory/*.md before deleting — skip cooldown and check result
+    const archived = await archiveSession(id, true);
+    if (!archived) {
+      console.warn(`[Sessions] Archive failed for ${id}, proceeding with delete anyway`);
+      // Still delete — archive failure shouldn't block UX permanently,
+      // but log so we know data may have been lost.
+    }
 
     try {
       const response = await fetch(`${BASE_URL}/v1/sessions/${id}`, {
