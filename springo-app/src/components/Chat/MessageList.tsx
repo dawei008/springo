@@ -46,7 +46,7 @@ export default function MessageList({ messages, isStreaming = false }: Props) {
       // Skip assistant messages that only have tool_use (no text),
       // but don't skip the last message (active streaming message)
       if (m.role === 'assistant' && m.hasToolUse && idx < messages.length - 1) {
-        const display = m.displayContent || '';
+        const display = m.displayContent || extractTextContent(m.content);
         if (!display.trim()) return false;
       }
       // Skip thinking indicators
