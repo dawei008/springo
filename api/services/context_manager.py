@@ -22,11 +22,11 @@ TARGET_AFTER_SUMMARY = 40000
 RECENT_MESSAGES_TO_KEEP = 10
 
 
-def _resolve_limits(model: str = None, extended_context: bool = True) -> tuple:
+def _resolve_limits(model: str = None, **_kwargs) -> tuple:
     """Resolve context limits for a model. Returns (max_tokens, summary_threshold, target_after_summary)."""
     if model:
         from .model_registry import get_model_limits
-        limits = get_model_limits(model, extended_context=extended_context)
+        limits = get_model_limits(model)
         return limits["max_context_tokens"], limits["compact_threshold"], limits["target_after_summary"]
     return MAX_TOKENS, SUMMARY_THRESHOLD, TARGET_AFTER_SUMMARY
 
@@ -199,10 +199,10 @@ def get_context_stats(
     system_prompt: str = "",
     tools: List[Dict] = None,
     model: str = None,
-    extended_context: bool = True,
+    **_kwargs,
 ) -> Dict[str, Any]:
     """获取上下文统计信息"""
-    max_tok, summary_thresh, _ = _resolve_limits(model, extended_context=extended_context)
+    max_tok, summary_thresh, _ = _resolve_limits(model)
     bd = compute_breakdown(messages, system_prompt, tools)
 
     return {
@@ -941,7 +941,7 @@ def get_context_breakdown(
     skills: List[Dict] = None,
     memory_files: List[Dict] = None,
     model: str = None,
-    extended_context: bool = True,
+    **_kwargs,
 ) -> Dict[str, Any]:
     """详细分解：每个分类返回 {tokens, count, percent}
 
@@ -1048,7 +1048,7 @@ def get_context_breakdown(
         tokens = breakdown[cat]["tokens"]
         breakdown[cat]["percent"] = round((tokens / total_tokens) * 100, 1) if total_tokens > 0 else 0
 
-    max_tok, _, _ = _resolve_limits(model, extended_context=extended_context)
+    max_tok, _, _ = _resolve_limits(model)
     return {
         "breakdown": breakdown,
         "total_tokens": total_tokens,
@@ -1114,9 +1114,9 @@ def count_messages_tokens(messages: List[Dict[str, Any]]) -> int:
     return total
 
 
-def should_summarize(messages: List[Dict[str, Any]], model: str = None, extended_context: bool = True) -> bool:
+def should_summarize(messages: List[Dict[str, Any]], model: str = None, **_kwargs) -> bool:
     """检查是否需要摘要"""
-    _, summary_thresh, _ = _resolve_limits(model, extended_context=extended_context)
+    _, summary_thresh, _ = _resolve_limits(model)
     return count_messages_tokens(messages) > summary_thresh
 
 

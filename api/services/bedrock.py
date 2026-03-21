@@ -29,48 +29,6 @@ from .model_registry import (
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Bedrock beta header injection for 1M context window
-# ---------------------------------------------------------------------------
-# Models with context_window > 200K need ``anthropic_beta`` in the request body
-# (primary mechanism, set in convert_request_to_bedrock) AND the HTTP header as
-# a belt-and-suspenders fallback.
-_BEDROCK_BETA_CONTEXT_1M = "context-1m-2025-08-07"
-
-
-def _register_beta_header(client, model_name: str, extended_context: bool = True) -> None:
-    """Register an event hook on *client* to inject the ``x-amz-bedrock-beta``
-    HTTP header as a **secondary** mechanism.  The primary mechanism is the
-    ``anthropic_beta`` field in the InvokeModel JSON body (set by
-    ``convert_request_to_bedrock``).
-
-    When *extended_context* is False the hook is skipped entirely, matching
-    the body-level logic that omits ``anthropic_beta``.
-    """
-    if not extended_context:
-        logger.debug(f"[Beta] Skipped HTTP header hook for {model_name} (extended_context=False)")
-        return
-
-    info = MODEL_REGISTRY.get(model_name)
-    if not info or info.get("context_window", 200000) <= 200000:
-        return
-    if info.get("api_format") != "anthropic":
-        return  # Only needed for InvokeModel (Anthropic format)
-
-    beta_features = info.get("beta_features", [])
-    if not beta_features:
-        return
-
-    beta_value = ",".join(beta_features)
-
-    def _inject(request, **_kwargs):
-        request.headers["x-amz-bedrock-beta"] = beta_value
-        logger.debug(f"[Beta] Injected x-amz-bedrock-beta: {beta_value} for {model_name}")
-
-    client.meta.events.register("before-sign.bedrock-runtime.*", _inject)
-    logger.debug(f"[Beta] Registered HTTP header hook for {model_name}")
-
-
 def format_error_response(error: Exception, lang: str = "zh") -> dict:
     """Format error into structured response — delegates to error_handler module"""
     return _eh_format_error(error, lang=lang)
@@ -155,28 +113,19 @@ def _estimate_tools_tokens(tools: list) -> int:
     return sum(len(_json.dumps(t)) for t in tools) // 4
 
 
-def _get_tool_budget(model: str, extended_context: bool = False) -> int:
+def _get_tool_budget(model: str) -> int:
     """Calculate the tool token budget for a model.
 
-    Uses the model's *effective* context window (respects extended_context)
-    and allocates TOOL_BUDGET_RATIO of it for tools.
+    Uses the model's context window and allocates TOOL_BUDGET_RATIO of it for tools.
 
-    budget = max(effective_context * _TOOL_BUDGET_RATIO, _TOOL_BUDGET_FLOOR)
-
-    Examples (standard context, extended_context=False):
-      - Opus 4.6:   200,000 * 0.25 = 50,000
-      - Haiku 4.5:  200,000 * 0.25 = 50,000
-      - Qwen3 128K: 131,072 * 0.25 = 32,768
-      - DeepSeek:   163,840 * 0.25 = 40,960
-    Extended context:
-      - Opus 4.6:  1,000,000 * 0.25 = 250,000  (no eviction needed)
+    budget = max(context_window * _TOOL_BUDGET_RATIO, _TOOL_BUDGET_FLOOR)
     """
-    limits = get_model_limits(model, extended_context=extended_context)
+    limits = get_model_limits(model)
     ctx = limits.get("max_context_tokens", 200000)
     return max(int(ctx * _TOOL_BUDGET_RATIO), _TOOL_BUDGET_FLOOR)
 
 
-def _auto_unload_tools(tools: list, model: str = "", extended_context: bool = False) -> list:
+def _auto_unload_tools(tools: list, model: str = "") -> list:
     """Evict unused tools to save context tokens.
 
     Trigger conditions (ALL must be met):
@@ -199,7 +148,7 @@ def _auto_unload_tools(tools: list, model: str = "", extended_context: bool = Fa
         return tools  # Grace period — include everything
 
     # Calculate dynamic budget based on model's effective context window
-    budget = _get_tool_budget(model, extended_context=extended_context)
+    budget = _get_tool_budget(model)
     total_tokens = _estimate_tools_tokens(tools)
     if total_tokens <= budget:
         return tools  # Within budget — no eviction needed
@@ -646,21 +595,8 @@ class BedrockService:
         # Only add anthropic_version for Anthropic-format models
         if api_format == "anthropic":
             bedrock_body["anthropic_version"] = "bedrock-2023-05-31"
-            # Build beta features list
-            beta_list: list[str] = []
-            # Fine-grained tool streaming: faster tool_use param delivery (~3s vs ~15s)
-            beta_list.append("fine-grained-tool-streaming-2025-05-14")
-            # Extended context (e.g. 1M) if the model requires it and user opts in
-            extended_context = request.get("extended_context")
-            if extended_context is None:
-                extended_context = False  # disabled by default; user must opt-in
-            model_betas = model_info.get("beta_features", []) if model_info else []
-            if model_betas and extended_context:
-                beta_list.extend(model_betas)
-                logger.info(f"[Beta] Added model beta features {model_betas} for {model}")
-            elif model_betas and not extended_context:
-                logger.info(f"[Beta] Skipped model beta {model_betas} for {model} (extended_context=False)")
-            bedrock_body["anthropic_beta"] = beta_list
+            # Beta features
+            bedrock_body["anthropic_beta"] = ["fine-grained-tool-streaming-2025-05-14"]
 
         # Copy optional parameters
         for key in ["temperature", "top_p", "top_k", "stop_sequences", "tool_choice"]:
@@ -715,8 +651,7 @@ class BedrockService:
             raw_tools = request.get("tools") or tools or []
             if raw_tools:
                 # Auto-unload: evict unused tools after grace period
-                _ext_ctx = request.get("extended_context") or False
-                raw_tools = _auto_unload_tools(raw_tools, model=model, extended_context=bool(_ext_ctx))
+                raw_tools = _auto_unload_tools(raw_tools, model=model)
                 # Apply tool limit for Converse models with max_tools set
                 max_t = get_max_tools(model)
                 if max_t > 0 and len(raw_tools) > max_t:
@@ -772,9 +707,7 @@ class BedrockService:
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
         original_model = body.pop("_original_model", None) or ""
-        extended_context = body.pop("extended_context", None)
-        if extended_context is None:
-            extended_context = False  # disabled by default; user must opt-in
+        body.pop("extended_context", None)
 
         for attempt in range(max_retries):
             try:
@@ -783,7 +716,6 @@ class BedrockService:
                     region_name=self.region,
                     config=self.config
                 ) as client:
-                    _register_beta_header(client, original_model, extended_context=extended_context)
                     response = await client.invoke_model(
                         modelId=model_id,
                         body=json.dumps(body),
@@ -828,9 +760,7 @@ class BedrockService:
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
         body.pop("_original_model", None)
-        extended_context = body.pop("extended_context", None)
-        if extended_context is None:
-            extended_context = False  # disabled by default; user must opt-in
+        body.pop("extended_context", None)
 
         # Retry connection phase for 429 throttling
         response = None
@@ -843,7 +773,6 @@ class BedrockService:
                     config=self.config
                 )
                 client = await client_ctx.__aenter__()
-                _register_beta_header(client, original_model, extended_context=extended_context)
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body),
@@ -973,9 +902,7 @@ class BedrockService:
 
         # Remove internal metadata before sending to Anthropic InvokeModel API
         original_model = body.pop("_original_model", None) or ""
-        extended_context = body.pop("extended_context", None)
-        if extended_context is None:
-            extended_context = False  # disabled by default; user must opt-in
+        body.pop("extended_context", None)
 
         response = None
         client_ctx = None
@@ -987,7 +914,6 @@ class BedrockService:
                     config=self.config
                 )
                 client = await client_ctx.__aenter__()
-                _register_beta_header(client, original_model, extended_context=extended_context)
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
                     body=json.dumps(body),

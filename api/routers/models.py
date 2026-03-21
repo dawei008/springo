@@ -11,7 +11,6 @@ from ..services.model_registry import (
     MODEL_REGISTRY,
     BEDROCK_MODEL_MAPPING,
     get_model_limits,
-    model_supports_extended_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,7 +36,6 @@ async def list_models() -> Dict[str, Any]:
     models = []
     for model_id, info in MODEL_REGISTRY.items():
         limits = get_model_limits(model_id)
-        has_extended = model_supports_extended_context(model_id)
         entry = {
             "id": model_id,
             "object": "model",
@@ -51,7 +49,7 @@ async def list_models() -> Dict[str, Any]:
             "supports_vision": info.get("supports_vision", False),
             "supports_thinking": info.get("supports_thinking", False),
             "api_format": info.get("api_format", "anthropic"),
-            "supports_extended_context": has_extended,
+            "supports_extended_context": False,
             "context": {
                 "max_context_tokens": limits["max_context_tokens"],
                 "compact_threshold": limits["compact_threshold"],
@@ -59,19 +57,8 @@ async def list_models() -> Dict[str, Any]:
                 "target_after_summary": limits["target_after_summary"],
                 "max_output_tokens": limits["max_output_tokens"],
             },
+            "context_standard": None,
         }
-        # Include standard (200K) limits for models that support the 1M toggle
-        if has_extended:
-            std = get_model_limits(model_id, extended_context=False)
-            entry["context_standard"] = {
-                "max_context_tokens": std["max_context_tokens"],
-                "compact_threshold": std["compact_threshold"],
-                "warning_threshold": std["warning_threshold"],
-                "target_after_summary": std["target_after_summary"],
-                "max_output_tokens": std["max_output_tokens"],
-            }
-        else:
-            entry["context_standard"] = None
         models.append(entry)
 
     # Build vendor-grouped dict for UI optgroup rendering (grouped by API platform)

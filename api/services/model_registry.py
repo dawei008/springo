@@ -19,7 +19,7 @@ class ModelInfo(TypedDict, total=False):
     supports_tools: bool
     api_format: str  # "anthropic", "converse", or "openai"
     max_tools: int   # optional: limit tools sent to this model
-    beta_features: List[str]  # optional: Bedrock anthropic_beta headers (e.g. "context-1m-2025-08-07")
+
 
 
 # ---------------------------------------------------------------------------
@@ -33,44 +33,13 @@ _DEFAULT_LIMITS = {
     "max_output_tokens": 64000,
 }
 
-# Per-model overrides for context-management limits (keyed by short name).
-# Models not listed here fall back to _DEFAULT_LIMITS.
-_CONTEXT_LIMITS: Dict[str, dict] = {
-    "claude-opus-4-6": {
-        "max_context_tokens": 1000000,
-        "compact_threshold": 600000,
-        "warning_threshold": 800000,
-        "target_after_summary": 200000,
-        "max_output_tokens": 64000,
-    },
-    "claude-sonnet-4-6": {
-        "max_context_tokens": 1000000,
-        "compact_threshold": 600000,
-        "warning_threshold": 800000,
-        "target_after_summary": 200000,
-        "max_output_tokens": 64000,
-    },
-}
 
-
-def get_model_limits(model: str, extended_context: bool = False) -> dict:
+def get_model_limits(model: str, **_kwargs) -> dict:
     """Get context-management limits for a model.
 
-    Priority:
-    1. Explicit overrides in ``_CONTEXT_LIMITS`` (only when *extended_context* is True).
-    2. Auto-derived from ``MODEL_REGISTRY.context_window / max_output``.
-    3. ``_DEFAULT_LIMITS`` for unknown models.
-
-    When *extended_context* is False (default) and the model has an override
-    in ``_CONTEXT_LIMITS``, the override is skipped and ``_DEFAULT_LIMITS``
-    (200K) is returned instead.  Users must explicitly opt-in to 1M context.
+    Auto-derives limits from ``MODEL_REGISTRY.context_window``.
+    Falls back to ``_DEFAULT_LIMITS`` for unknown models.
     """
-    if model in _CONTEXT_LIMITS:
-        if extended_context:
-            return dict(_CONTEXT_LIMITS[model])
-        # extended_context disabled → fall back to standard 200K limits
-        return dict(_DEFAULT_LIMITS)
-
     info = MODEL_REGISTRY.get(model)
     if info:
         ctx = info["context_window"]
@@ -83,11 +52,6 @@ def get_model_limits(model: str, extended_context: bool = False) -> dict:
         }
 
     return dict(_DEFAULT_LIMITS)
-
-
-def model_supports_extended_context(model: str) -> bool:
-    """Return True if *model* supports the 1M extended context toggle."""
-    return model in _CONTEXT_LIMITS
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +72,6 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "anthropic",
-        "beta_features": ["context-1m-2025-08-07"],
     },
     "claude-sonnet-4-6": {
         "vendor": "bedrock",
@@ -121,7 +84,6 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_thinking": False,
         "supports_tools": True,
         "api_format": "anthropic",
-        "beta_features": ["context-1m-2025-08-07"],
     },
     "claude-sonnet-4-5-20250929": {
         "vendor": "bedrock",

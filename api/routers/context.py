@@ -59,7 +59,7 @@ class ContextStatsRequest(BaseModel):
     skills: Optional[List[Dict]] = None
     memory_files: Optional[List[Dict]] = None
     model: Optional[str] = None
-    extended_context: Optional[bool] = Field(default=None, description="Enable 1M context for supported models")
+    extended_context: Optional[bool] = Field(default=None, description="Deprecated, no longer needed")
 
 
 class ContextSummarizeRequest(BaseModel):
