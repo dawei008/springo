@@ -31,6 +31,10 @@ class Settings(BaseSettings):
         description="Default chat model for new sessions"
     )
 
+    # ASR (Speech-to-Text) Configuration
+    asr_engine: str = Field(default="aws", description="ASR engine: 'aws' (Transcribe Streaming) or 'local' (faster-whisper)")
+    whisper_model_size: str = Field(default="base", description="Whisper model size: tiny, base, small, medium, large-v3")
+
     # DeepSeek Direct API
     deepseek_api_key: str = Field(default="", description="DeepSeek API key")
     deepseek_base_url: str = Field(default="https://api.deepseek.com", description="DeepSeek API base URL")
