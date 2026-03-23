@@ -29,7 +29,6 @@ Key files in the multi-vendor stack:
 │  ├── tools.py       → /v1/tools/*                           │
 │  ├── sessions.py    → /v1/sessions/*                        │
 │  ├── context.py     → /v1/context/*                         │
-│  ├── news.py        → /v1/news/*                            │
 │  ├── images.py      → /v1/images/*                          │
 │  └── health.py      → /health/*                             │
 ├─────────────────────────────────────────────────────────────┤

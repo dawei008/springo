@@ -27,7 +27,8 @@ function extractTextContent(content: string | ContentBlock[] | undefined): strin
 function isToolResultOnlyMessage(m: MessageType): boolean {
   if (m.role !== 'user') return false;
   if (!Array.isArray(m.content)) return false;
-  return (m.content as ContentBlock[]).some((c) => c.type === 'tool_result');
+  const blocks = m.content as ContentBlock[];
+  return blocks.length > 0 && blocks.every((c) => c.type === 'tool_result');
 }
 
 interface Props {
