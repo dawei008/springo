@@ -395,7 +395,7 @@ function startServer() {
                 } else {
                     // Use venv python to avoid system python architecture mismatches
                     const venvPython = path.join(__dirname, '..', 'venv', 'bin', 'python3');
-                    const pythonCmd = require('fs').existsSync(venvPython) ? venvPython : 'python3';
+                    const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
                     debugLog(`Using ${pythonCmd} with script: ${SERVER_SCRIPT}`);
                     serverProcess = spawn(pythonCmd, [SERVER_SCRIPT, '--port', '8081'], {
                         cwd: path.dirname(SERVER_SCRIPT),
