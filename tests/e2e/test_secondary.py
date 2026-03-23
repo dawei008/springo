@@ -1,6 +1,6 @@
 """
 Springo E2E Tests - Secondary Routes
-辅助路由端点 E2E 测试 (context, news, images, health)
+辅助路由端点 E2E 测试 (context, images, health)
 """
 import pytest
 import httpx
@@ -54,44 +54,6 @@ async def test_context_clear(fastapi_client: httpx.AsyncClient):
     assert clear_response.status_code == 200
     clear_data = clear_response.json()
     assert clear_data["success"] == True
-
-
-# ============ News Tests ============
-
-@pytest.mark.asyncio
-@pytest.mark.e2e
-async def test_news_search_endpoint(fastapi_client: httpx.AsyncClient):
-    """
-    E2E Test: News search endpoint exists.
-    测试新闻搜索端点存在。
-    """
-    response = await fastapi_client.post("/v1/news/search", json={
-        "query": "technology",
-        "count": 5
-    })
-    
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert "success" in data
-    assert "query" in data
-    assert "articles" in data
-
-
-@pytest.mark.asyncio
-@pytest.mark.e2e
-async def test_news_search_get_endpoint(fastapi_client: httpx.AsyncClient):
-    """
-    E2E Test: News search GET endpoint.
-    测试新闻搜索 GET 端点。
-    """
-    response = await fastapi_client.get("/v1/news/search?query=AI&count=5")
-    
-    assert response.status_code == 200
-    
-    data = response.json()
-    assert "query" in data
-    assert data["query"] == "AI"
 
 
 # ============ Images Tests ============
@@ -238,7 +200,6 @@ async def test_all_routes_in_openapi(fastapi_client: httpx.AsyncClient):
         "/v1/sessions",
         "/v1/context",
         "/v1/context/add",
-        "/v1/news/search",
         "/v1/images/search",
         "/health",
         "/health/detailed",

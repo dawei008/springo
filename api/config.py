@@ -26,10 +26,6 @@ class Settings(BaseSettings):
         default="claude-haiku-4-5-20251001",
         description="Model for natural language to command parsing"
     )
-    news_format_model_id: str = Field(
-        default="claude-sonnet-4-5-20250929",
-        description="Model for news formatting"
-    )
     default_chat_model: str = Field(
         default="claude-opus-4-6",
         description="Default chat model for new sessions"

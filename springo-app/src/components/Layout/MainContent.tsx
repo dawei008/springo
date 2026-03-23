@@ -9,7 +9,6 @@ import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
 import type { RightPanelTab, TodoItem } from '@/stores/uiStore';
 import TeamPanel from '../RightPanel/TeamPanel';
-import NewsPanel from '../RightPanel/NewsPanel';
 import SchedulesPanel from '../RightPanel/SchedulesPanel';
 import MeetingPanel from '../RightPanel/MeetingPanel';
 
@@ -253,7 +252,6 @@ function RightPanel() {
     { key: 'tasks', label: 'Tasks' },
     { key: 'team', label: 'Team' },
     { key: 'schedules', label: 'Schedules' },
-    { key: 'news', label: 'News' },
     { key: 'meeting', label: 'Meeting' },
   ];
 
@@ -318,14 +316,6 @@ function RightPanel() {
           id="panel-schedules"
         >
           <SchedulesPanel />
-        </div>
-
-        {/* News section */}
-        <div
-          className={`right-panel-section${rightPanelTab === 'news' ? ' active' : ''}`}
-          id="panel-news"
-        >
-          <NewsPanel />
         </div>
 
         {/* Meeting section */}

@@ -715,22 +715,6 @@ export interface ImageGenerateRequest {
   height?: number;
 }
 
-// ==================== News API shapes ====================
-
-export interface NewsSearchRequest {
-  query: string;
-  freshness?: string;
-  count?: number;
-}
-
-export interface NewsArticle {
-  title: string;
-  url: string;
-  description: string;
-  source?: string;
-  published?: string;
-}
-
 // ==================== Terminal API shapes ====================
 
 export interface TerminalExecuteRequest {

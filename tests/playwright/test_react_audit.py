@@ -483,7 +483,7 @@ def test_13_right_panel(page: Page):
     record("Right panel: has tab buttons", tab_count >= 4, f"found {tab_count}")
 
     # Check expected tabs exist
-    expected_tabs = ["tasks", "team", "schedules", "news"]
+    expected_tabs = ["tasks", "team", "schedules"]
     found_tabs = []
     for i in range(tab_count):
         data_tab = tab_buttons.nth(i).get_attribute("data-tab")

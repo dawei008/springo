@@ -6,7 +6,6 @@ from . import messages
 from . import tools
 from . import sessions
 from . import context
-from . import news
 from . import images
 from . import health
 from . import config
@@ -21,7 +20,6 @@ __all__ = [
     "tools",
     "sessions",
     "context",
-    "news",
     "images",
     "health",
     "config",

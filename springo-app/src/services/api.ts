@@ -26,8 +26,6 @@ import type {
   TeamSpawnRequest,
   TeamInfo,
   TeamMessageRequest,
-  NewsSearchRequest,
-  NewsArticle,
   ImageGenerateRequest,
   ImageUploadResponse,
   TerminalExecuteRequest,
@@ -419,16 +417,6 @@ export const api = {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response;
     },
-  },
-
-  // ======================== News ========================
-
-  news: {
-    search: (body: NewsSearchRequest) =>
-      post<{ articles: NewsArticle[] }>('/news/search', body, { timeout: CONFIG.TIMEOUTS.API_DEFAULT }),
-    getInterests: () => get<{ interests: string[] }>('/news/interests'),
-    addInterest: (interest: string) => post<{ ok: boolean }>('/news/interests', { interest }),
-    deleteInterest: (interest: string) => del<{ ok: boolean }>(`/news/interests/${interest}`),
   },
 
   // ======================== Memory ========================

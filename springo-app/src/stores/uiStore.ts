@@ -18,7 +18,7 @@ export interface ActiveSkill {
   description: string;
 }
 
-export type RightPanelTab = 'tasks' | 'team' | 'schedules' | 'news' | 'meeting';
+export type RightPanelTab = 'tasks' | 'team' | 'schedules' | 'meeting';
 
 export interface AskUserOption {
   label: string;
