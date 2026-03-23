@@ -5,9 +5,7 @@ Same interface as AWS Transcribe version — drop-in replacement.
 """
 
 import asyncio
-import io
 import logging
-import struct
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -19,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Singleton model instance — loaded once, shared across sessions
 _model = None
+_model_size_loaded: Optional[str] = None
 _model_lock = asyncio.Lock()
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -36,8 +35,13 @@ OVERLAP_SAMPLES = int(SAMPLE_RATE * OVERLAP_DURATION_SEC)
 
 async def _get_model(model_size: str = "base"):
     """Lazy-load the Whisper model (thread-safe singleton)."""
-    global _model
+    global _model, _model_size_loaded
     if _model is not None:
+        if _model_size_loaded and _model_size_loaded != model_size:
+            logger.warning(
+                f"Whisper model size mismatch: loaded '{_model_size_loaded}' but "
+                f"requested '{model_size}'. Restart server to switch models."
+            )
         return _model
 
     async with _model_lock:
@@ -53,6 +57,7 @@ async def _get_model(model_size: str = "base"):
             return WhisperModel(model_size, device="cpu", compute_type="int8")
 
         _model = await loop.run_in_executor(_executor, _load)
+        _model_size_loaded = model_size
         logger.info(f"Whisper model '{model_size}' loaded successfully")
         return _model
 
@@ -63,12 +68,42 @@ def _pcm_to_float32(pcm_bytes: bytes) -> np.ndarray:
     return samples
 
 
+
+# Common whisper hallucinations on silence/noise
+_HALLUCINATION_PATTERNS = {
+    "thank you", "thanks for watching", "thanks for listening",
+    "subscribe", "like and subscribe",
+    "字幕由", "字幕提供", "字幕制作", "谢谢观看", "感谢观看",
+    "sous-titres", "sous titres", "untertitel",
+    "ご視聴ありがとうございました",
+}
+
+
+def _is_hallucination(text: str) -> bool:
+    """Filter out common whisper hallucinations on silence."""
+    lower = text.lower().strip()
+    if not lower:
+        return True
+    for pattern in _HALLUCINATION_PATTERNS:
+        if pattern in lower:
+            return True
+    # Repeated short phrases (e.g., "you you you you")
+    words = lower.split()
+    if len(words) >= 3 and len(set(words)) == 1:
+        return True
+    return False
+
+
 def _transcribe_buffer(model, audio: np.ndarray, language: Optional[str]) -> list:
     """Run whisper inference on an audio buffer. Returns list of segments."""
     kwargs = {
         "beam_size": 1,  # Greedy for speed in real-time
         "vad_filter": True,  # Skip silence
-        "vad_parameters": {"min_silence_duration_ms": 500},
+        "vad_parameters": {
+            "min_silence_duration_ms": 300,
+            "speech_pad_ms": 200,
+            "threshold": 0.35,
+        },
     }
     if language and language != "auto":
         kwargs["language"] = language
@@ -77,7 +112,7 @@ def _transcribe_buffer(model, audio: np.ndarray, language: Optional[str]) -> lis
     results = []
     for seg in segments:
         text = seg.text.strip()
-        if text:
+        if text and not _is_hallucination(text):
             results.append(text)
     return results
 
@@ -124,17 +159,6 @@ async def handle_transcription(ws: WebSocket, language: str = "auto",
             # Check if we have enough audio for inference
             elapsed = time.monotonic() - last_inference_time
             if len(audio_buffer) < BUFFER_SIZE and elapsed < BUFFER_DURATION_SEC + 1.0:
-                # Send partial indicator while buffering
-                buffer_duration = len(audio_buffer) / (SAMPLE_RATE * BYTES_PER_SAMPLE)
-                if len(audio_buffer) > SAMPLE_RATE * BYTES_PER_SAMPLE:  # > 1 sec
-                    try:
-                        await ws.send_json({
-                            "type": "transcript",
-                            "text": "...",
-                            "is_partial": True,
-                        })
-                    except Exception:
-                        break
                 continue
 
             # Run inference on accumulated buffer
