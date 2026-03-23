@@ -2,34 +2,7 @@ import { useMemo } from 'react';
 import Message from './Message';
 import type { DisplayMessage } from './Message';
 import type { Message as MessageType, ContentBlock, ToolUseBlock, ToolUse } from '@/types';
-
-/** Extract readable text from message content (string or ContentBlock[]). */
-function extractTextContent(content: string | ContentBlock[] | undefined): string {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => {
-        if (typeof c === 'string') return c;
-        if (c.type === 'text') return c.text || '';
-        if (c.type === 'image') return '[Image]';
-        if (c.type === 'tool_use') return '';
-        if (c.type === 'tool_result') return '';
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n');
-  }
-  return '';
-}
-
-/** Check if a user message only contains tool_result blocks. */
-function isToolResultOnlyMessage(m: MessageType): boolean {
-  if (m.role !== 'user') return false;
-  if (!Array.isArray(m.content)) return false;
-  const blocks = m.content as ContentBlock[];
-  return blocks.length > 0 && blocks.every((c) => c.type === 'tool_result');
-}
+import { extractTextContent, isToolResultOnlyMessage } from '@/utils/messageHelpers';
 
 interface Props {
   messages: MessageType[];

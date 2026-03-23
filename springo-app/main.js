@@ -145,8 +145,9 @@ if (!gotTheLock) {
     });
 }
 
-// 服务器配置 - FastAPI on port 8081
-const SERVER_URL = 'http://127.0.0.1:8081';
+// 服务器配置
+const SERVER_PORT = process.env.SPRINGO_PORT || '8081';
+const SERVER_URL = `http://127.0.0.1:${SERVER_PORT}`;
 // In development: use python3 with script
 // In packaged app: use bundled executable
 const SERVER_EXECUTABLE = app.isPackaged
@@ -387,7 +388,7 @@ function startServer() {
                 // detached=true creates a new process group so we can kill the group later
                 if (SERVER_EXECUTABLE) {
                     debugLog('Using bundled executable: ' + SERVER_EXECUTABLE);
-                    serverProcess = spawn(SERVER_EXECUTABLE, ['--port', '8081'], {
+                    serverProcess = spawn(SERVER_EXECUTABLE, ['--port', SERVER_PORT], {
                         cwd: path.dirname(SERVER_EXECUTABLE),
                         stdio: ['ignore', 'pipe', 'pipe'],
                         detached: true
@@ -397,7 +398,7 @@ function startServer() {
                     const venvPython = path.join(__dirname, '..', 'venv', 'bin', 'python3');
                     const pythonCmd = fs.existsSync(venvPython) ? venvPython : 'python3';
                     debugLog(`Using ${pythonCmd} with script: ${SERVER_SCRIPT}`);
-                    serverProcess = spawn(pythonCmd, [SERVER_SCRIPT, '--port', '8081'], {
+                    serverProcess = spawn(pythonCmd, [SERVER_SCRIPT, '--port', SERVER_PORT], {
                         cwd: path.dirname(SERVER_SCRIPT),
                         stdio: ['ignore', 'pipe', 'pipe'],
                         detached: true
