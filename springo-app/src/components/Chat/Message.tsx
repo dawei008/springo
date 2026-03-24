@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
-import ArtifactRenderer, { ArtifactInline } from '@/components/Visual/ArtifactRenderer';
+import ArtifactRenderer from '@/components/Visual/ArtifactRenderer';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
+import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -604,11 +605,35 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         })}
         {textContent && (
           <ArtifactRenderer text={textContent}>
-            {(cleaned, artifacts) => (
+            {(cleaned, htmlArtifacts) => (
               <>
-                <Markdown content={cleaned} />
-                {artifacts.map((a) => (
-                  <ArtifactInline key={a.id} artifactId={a.id} />
+                {message.role === 'assistant' && cleaned.length > 800 ? (
+                  <>
+                    <Markdown content={cleaned.slice(0, 200) + '\n\n...'} />
+                    <ArtifactCard
+                      artifact={{
+                        id: `md-${message.timestamp || Date.now()}`,
+                        type: 'markdown',
+                        title: cleaned.split('\n').find((l) => l.startsWith('#'))?.replace(/^#+\s*/, '') || 'Document',
+                        content: cleaned,
+                        timestamp: message.timestamp || Date.now(),
+                      }}
+                    />
+                  </>
+                ) : (
+                  <Markdown content={cleaned} />
+                )}
+                {htmlArtifacts.map((a) => (
+                  <ArtifactCard
+                    key={a.id}
+                    artifact={{
+                      id: a.id,
+                      type: 'html',
+                      title: a.title,
+                      content: a.html,
+                      timestamp: message.timestamp || Date.now(),
+                    }}
+                  />
                 ))}
               </>
             )}
@@ -623,41 +648,97 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           />
         )}
         {toolUses.length > 0 && showToolPanel && <ToolContainer tools={toolUses} isStreaming={isStreaming} />}
-        {/* Visual content from tools — intermediate images collapsed, last visible */}
-        {(() => {
-          // Find indices of tools that produce visual content
-          const visualIndices: number[] = [];
-          toolUses.forEach((tool, i) => {
-            if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
-              visualIndices.push(i);
-              return;
-            }
-            const hasResult = tool.result !== undefined && tool.result !== null;
-            const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
-            if (hasResult && !hasError) {
-              const rs = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result || '');
-              const hasVisual =
-                /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp))/i.test(rs) ||
-                /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/i.test(rs) ||
-                /data:image\/[a-z+]+;base64,/.test(rs) ||
-                (rs.includes('<svg') && rs.includes('</svg>'));
-              if (hasVisual) visualIndices.push(i);
-            }
-          });
-          const lastVisualIdx = visualIndices.length > 0 ? visualIndices[visualIndices.length - 1] : -1;
+        {/* Visual content from tools — show as artifact cards */}
+        {toolUses.map((tool) => {
+          // Excalidraw
+          if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
+            return (
+              <ArtifactCard
+                key={`vis-${tool.id}`}
+                artifact={{
+                  id: `exc-${tool.id}`,
+                  type: 'excalidraw',
+                  title: 'Excalidraw Diagram',
+                  content: '',
+                  elements: tool.input.elements as unknown[],
+                  timestamp: message.timestamp || Date.now(),
+                }}
+              />
+            );
+          }
 
-          return toolUses.map((tool, i) => {
-            if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
-              return <ExcalidrawLinkCard key={`vis-${tool.id}`} elements={tool.input.elements} />;
+          const hasResult = tool.result !== undefined && tool.result !== null;
+          const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
+          if (!hasResult || hasError) return null;
+
+          const rs = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result || '');
+
+          // MCP image blocks
+          const mcpContent = tool.result && typeof tool.result === 'object' ? (tool.result as Record<string, unknown>).content : null;
+          if (Array.isArray(mcpContent)) {
+            const imgBlock = mcpContent.find((b: unknown) => b && typeof b === 'object' && (b as Record<string, unknown>).type === 'image') as Record<string, unknown> | undefined;
+            if (imgBlock && typeof imgBlock.data === 'string' && (imgBlock.data as string).length > 50) {
+              const mimeType = (imgBlock.mimeType as string) || 'image/png';
+              return (
+                <ArtifactCard
+                  key={`vis-${tool.id}`}
+                  artifact={{
+                    id: `img-${tool.id}`,
+                    type: 'image',
+                    title: 'Screenshot',
+                    content: `data:${mimeType};base64,${imgBlock.data}`,
+                    timestamp: message.timestamp || Date.now(),
+                  }}
+                />
+              );
             }
-            const hasResult = tool.result !== undefined && tool.result !== null;
-            const hasError = !!(tool.result && (tool.result as Record<string, unknown>).error);
-            if (!hasResult || hasError) return null;
-            // Collapse intermediate images, show last one expanded
-            const shouldCollapse = visualIndices.length > 1 && i !== lastVisualIdx && visualIndices.includes(i);
-            return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={shouldCollapse} />;
-          });
-        })()}
+          }
+
+          // Base64 data URL
+          const base64Match = rs.match(/data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/);
+          if (base64Match) {
+            return (
+              <ArtifactCard
+                key={`vis-${tool.id}`}
+                artifact={{
+                  id: `img-${tool.id}`,
+                  type: 'image',
+                  title: 'Generated Image',
+                  content: base64Match[0],
+                  timestamp: message.timestamp || Date.now(),
+                }}
+              />
+            );
+          }
+
+          // SVG
+          if (rs.includes('<svg') && rs.includes('</svg>')) {
+            const svgMatch = rs.match(/<svg[\s\S]*?<\/svg>/i);
+            if (svgMatch) {
+              return (
+                <ArtifactCard
+                  key={`vis-${tool.id}`}
+                  artifact={{
+                    id: `svg-${tool.id}`,
+                    type: 'svg',
+                    title: 'SVG Diagram',
+                    content: svgMatch[0],
+                    timestamp: message.timestamp || Date.now(),
+                  }}
+                />
+              );
+            }
+          }
+
+          // Image URLs or paths — keep inline for these (they need fetching)
+          const hasImageUrl = /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp))/i.test(rs);
+          const hasImagePath = /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/i.test(rs);
+          if (hasImageUrl || hasImagePath) {
+            return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={false} />;
+          }
+
+          return null;
+        })}
       </div>
     </div>
   );

@@ -2,11 +2,13 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import Header from './Header';
 import ChatArea from '@/components/Chat/ChatArea';
 import MessageInput from '@/components/Chat/MessageInput';
+import ArtifactPanel from '@/components/ArtifactPanel/ArtifactPanel';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
+import { useArtifactStore } from '@/stores/artifactStore';
 import type { RightPanelTab, TodoItem } from '@/stores/uiStore';
 import TeamPanel from '../RightPanel/TeamPanel';
 import SchedulesPanel from '../RightPanel/SchedulesPanel';
@@ -377,6 +379,11 @@ export default function MainContent() {
     }
   }, [currentSessionId]);
 
+  // Save/restore artifact panel state per session
+  useEffect(() => {
+    useArtifactStore.getState().switchSession(currentSessionId ?? null);
+  }, [currentSessionId]);
+
   return (
     <div className="main-content">
       <Header />
@@ -385,6 +392,7 @@ export default function MainContent() {
           <ChatArea />
           <StatusBar />
         </div>
+        <ArtifactPanel />
         <RightPanel />
       </div>
       <MessageInput />

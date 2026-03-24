@@ -1982,6 +1982,245 @@
             justify-content: center;
         }
 
+        /* ==================== Artifact Panel (right side) ==================== */
+
+        .artifact-panel {
+            width: 480px;
+            min-width: 300px;
+            max-width: 60vw;
+            background: var(--bg-primary);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            position: relative;
+        }
+
+        .artifact-panel-resize {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            cursor: ew-resize;
+            background: transparent;
+            z-index: 10;
+        }
+
+        .artifact-panel-resize:hover,
+        .artifact-panel-resize.dragging {
+            background: var(--accent);
+        }
+
+        .artifact-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-secondary);
+            gap: 8px;
+            min-height: 44px;
+        }
+
+        .artifact-panel-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            flex: 1;
+            color: var(--text-secondary);
+        }
+
+        .artifact-panel-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .artifact-panel-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+
+        .artifact-panel-btn {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 8px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.15s;
+        }
+
+        .artifact-panel-btn:hover {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .artifact-panel-history {
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-secondary);
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .artifact-panel-history-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 14px;
+            font-size: 12px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+
+        .artifact-panel-history-item:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .artifact-panel-history-item.active {
+            color: var(--accent);
+            font-weight: 600;
+        }
+
+        .artifact-panel-body {
+            flex: 1;
+            overflow: auto;
+            position: relative;
+        }
+
+        .artifact-panel-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            display: block;
+            background: #fff;
+        }
+
+        .artifact-panel-image {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            min-height: 200px;
+        }
+
+        .artifact-panel-image img {
+            max-width: 100%;
+            max-height: calc(100vh - 200px);
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .artifact-panel-svg {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 16px;
+            background: #fff;
+            min-height: 200px;
+        }
+
+        .artifact-panel-svg svg {
+            max-width: 100%;
+            height: auto;
+        }
+
+        .artifact-panel-markdown {
+            padding: 20px 24px;
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .artifact-panel-empty {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-tertiary);
+            font-size: 13px;
+        }
+
+        /* ==================== Artifact Card (inline in chat) ==================== */
+
+        .artifact-card {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 8px 0;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--bg-secondary);
+            cursor: pointer;
+            transition: all 0.15s ease;
+            max-width: 360px;
+        }
+
+        .artifact-card:hover {
+            border-color: var(--accent);
+            background: var(--accent-light, rgba(218, 119, 86, 0.06));
+        }
+
+        .artifact-card.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 1px var(--accent);
+        }
+
+        .artifact-card-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background: var(--accent-light, rgba(218, 119, 86, 0.1));
+            color: var(--accent);
+            flex-shrink: 0;
+        }
+
+        .artifact-card-info {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .artifact-card-title {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .artifact-card-type {
+            font-size: 11px;
+            color: var(--text-tertiary);
+        }
+
+        .artifact-card-arrow {
+            flex-shrink: 0;
+            color: var(--text-tertiary);
+        }
+
+        .artifact-card:hover .artifact-card-arrow {
+            color: var(--accent);
+        }
+
         /* HTML Artifact Sandbox */
         .artifact-container {
             margin: 12px 0;
