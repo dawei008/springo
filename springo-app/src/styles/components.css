@@ -2012,6 +2012,11 @@
             background: var(--accent);
         }
 
+        .artifact-panel.resizing iframe,
+        .artifact-panel.resizing .artifact-panel-body {
+            pointer-events: none;
+        }
+
         .artifact-panel-header {
             display: flex;
             align-items: center;

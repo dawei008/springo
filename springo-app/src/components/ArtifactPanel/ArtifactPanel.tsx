@@ -228,6 +228,7 @@ export default function ArtifactPanel() {
       startX = e.clientX
       startWidth = panel.offsetWidth
       resizeHandle.classList.add('dragging')
+      panel.classList.add('resizing')
       document.body.style.cursor = 'ew-resize'
       document.body.style.userSelect = 'none'
       e.preventDefault()
@@ -245,6 +246,7 @@ export default function ArtifactPanel() {
       if (isResizing) {
         isResizing = false
         resizeHandle.classList.remove('dragging')
+        panel.classList.remove('resizing')
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
       }
@@ -259,7 +261,7 @@ export default function ArtifactPanel() {
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
-  }, [])
+  }, [panelOpen])
 
   const handleOpenExternal = useCallback(() => {
     if (!activeArtifact) return
