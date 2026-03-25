@@ -64,23 +64,68 @@ function MarkdownRenderer({ artifact }: { artifact: ArtifactItem }) {
 
 // ==================== Draw.io Renderer ====================
 
+// Cache the viewer JS to avoid re-reading from disk
+let viewerJsCache: string | null = null
+let viewerJsPromise: Promise<string> | null = null
+
+function fetchViewerJs(): Promise<string> {
+  if (viewerJsCache) return Promise.resolve(viewerJsCache)
+  if (viewerJsPromise) return viewerJsPromise
+  // Read from local file via Electron IPC (fetch blocked on file:// origin)
+  const base = document.baseURI.replace('file://', '').replace(/\/[^/]*$/, '/')
+  const filePath = base + 'drawio-viewer.min.js'
+  viewerJsPromise = window.electronAPI.readFileBase64(filePath)
+    .then((r: { success: boolean; data: string }) => {
+      if (!r.success) throw new Error('read failed')
+      const js = atob(r.data)
+      viewerJsCache = js
+      return js
+    })
+    .catch((e: Error) => { console.error('Failed to load drawio viewer:', e); viewerJsPromise = null; return '' })
+  return viewerJsPromise
+}
+
 function DrawioRenderer({ artifact }: { artifact: ArtifactItem }) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const [viewerJs, setViewerJs] = useState(viewerJsCache)
+
+  useEffect(() => {
+    if (!viewerJs) fetchViewerJs().then((js) => { if (js) setViewerJs(js) })
+  }, [viewerJs])
 
   useEffect(() => {
     const iframe = iframeRef.current
-    if (!iframe) return
-    // Embed draw.io XML using the diagrams.net viewer
-    const html = `<!DOCTYPE html>
-<html><head>
-<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#fff}</style>
-</head><body>
-<div class="mxgraph" style="max-width:100%;border:none;" data-mxgraph='${JSON.stringify({ highlight: '#0000ff', nav: true, resize: true, toolbar: 'zoom layers', xml: artifact.content }).replace(/'/g, '&#39;')}'>
-</div>
-<script src="https://viewer.diagrams.net/js/viewer-static.min.js"><\/script>
-</body></html>`
-    iframe.srcdoc = html
-  }, [artifact.content])
+    if (!iframe || !viewerJs) return
+
+    // Build srcdoc via DOM with inlined viewer JS
+    const doc = document.implementation.createHTMLDocument('drawio')
+    const style = doc.createElement('style')
+    style.textContent = 'html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#fff}'
+    doc.head.appendChild(style)
+
+    const div = doc.createElement('div')
+    div.className = 'mxgraph'
+    div.style.maxWidth = '100%'
+    div.style.border = 'none'
+    div.setAttribute('data-mxgraph', JSON.stringify({
+      highlight: '#0000ff',
+      nav: true,
+      resize: true,
+      toolbar: 'zoom layers',
+      xml: artifact.content,
+    }))
+    doc.body.appendChild(div)
+
+    const script = doc.createElement('script')
+    script.textContent = viewerJs
+    doc.body.appendChild(script)
+
+    iframe.srcdoc = '<!DOCTYPE html>' + doc.documentElement.outerHTML
+  }, [artifact.content, viewerJs])
+
+  if (!viewerJs) {
+    return <div className="artifact-panel-empty">Loading draw.io viewer...</div>
+  }
 
   return (
     <iframe
