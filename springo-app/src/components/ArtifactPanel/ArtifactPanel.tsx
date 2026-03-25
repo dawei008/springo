@@ -62,6 +62,35 @@ function MarkdownRenderer({ artifact }: { artifact: ArtifactItem }) {
   )
 }
 
+// ==================== Draw.io Renderer ====================
+
+function DrawioRenderer({ artifact }: { artifact: ArtifactItem }) {
+  const iframeRef = useRef<HTMLIFrameElement>(null)
+
+  useEffect(() => {
+    const iframe = iframeRef.current
+    if (!iframe) return
+    // Embed draw.io XML using the diagrams.net viewer
+    const html = `<!DOCTYPE html>
+<html><head>
+<style>html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#fff}</style>
+</head><body>
+<div class="mxgraph" style="max-width:100%;border:none;" data-mxgraph='${JSON.stringify({ highlight: '#0000ff', nav: true, resize: true, toolbar: 'zoom layers', xml: artifact.content }).replace(/'/g, '&#39;')}'>
+</div>
+<script src="https://viewer.diagrams.net/js/viewer-static.min.js"><\/script>
+</body></html>`
+    iframe.srcdoc = html
+  }, [artifact.content])
+
+  return (
+    <iframe
+      ref={iframeRef}
+      className="artifact-panel-iframe"
+      sandbox="allow-scripts allow-same-origin"
+    />
+  )
+}
+
 // ==================== Content Router ====================
 
 function ArtifactContent({ artifact }: { artifact: ArtifactItem }) {
@@ -80,6 +109,8 @@ function ArtifactContent({ artifact }: { artifact: ArtifactItem }) {
           elements={artifact.elements || []}
         />
       )
+    case 'drawio':
+      return <DrawioRenderer artifact={artifact} />
     default:
       return <div className="artifact-panel-empty">Unsupported artifact type</div>
   }
@@ -115,6 +146,7 @@ function TypeIcon({ type }: { type: ArtifactItem['type'] }) {
       )
     case 'svg':
     case 'excalidraw':
+    case 'drawio':
       return (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
@@ -199,6 +231,10 @@ export default function ArtifactPanel() {
       }
     } else if (activeArtifact.type === 'image') {
       useUIStore.getState().setImagePreview(activeArtifact.content)
+    } else if (activeArtifact.type === 'drawio') {
+      // Open in diagrams.net editor with the XML
+      const encoded = encodeURIComponent(activeArtifact.content)
+      window.open(`https://app.diagrams.net/?#R${encoded}`, '_blank')
     }
   }, [activeArtifact])
 
@@ -229,7 +265,7 @@ export default function ArtifactPanel() {
               {artifacts.length}
             </button>
           )}
-          {(activeArtifact?.type === 'html' || activeArtifact?.type === 'image') && (
+          {(activeArtifact?.type === 'html' || activeArtifact?.type === 'image' || activeArtifact?.type === 'drawio') && (
             <button
               className="artifact-panel-btn"
               onClick={handleOpenExternal}

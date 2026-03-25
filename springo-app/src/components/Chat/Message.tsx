@@ -650,6 +650,26 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         {toolUses.length > 0 && showToolPanel && <ToolContainer tools={toolUses} isStreaming={isStreaming} />}
         {/* Visual content from tools — show as artifact cards */}
         {toolUses.map((tool) => {
+          // Draw.io — detect XML with mxGraphModel or mxfile
+          const toolResult = typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result || '');
+          if ((tool.name.includes('drawio') || toolResult.includes('<mxGraphModel') || toolResult.includes('<mxfile')) && toolResult.includes('</mx')) {
+            const xmlMatch = toolResult.match(/<mx(?:GraphModel|file)[\s\S]*?<\/mx(?:GraphModel|file)>/i);
+            if (xmlMatch) {
+              return (
+                <ArtifactCard
+                  key={`vis-${tool.id}`}
+                  artifact={{
+                    id: `dio-${tool.id}`,
+                    type: 'drawio',
+                    title: 'Draw.io Diagram',
+                    content: xmlMatch[0],
+                    timestamp: message.timestamp || Date.now(),
+                  }}
+                />
+              );
+            }
+          }
+
           // Excalidraw
           if (tool.name === 'excalidraw__create_view' && tool.input?.elements) {
             return (

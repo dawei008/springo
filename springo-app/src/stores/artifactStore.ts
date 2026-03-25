@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ArtifactType = 'html' | 'markdown' | 'image' | 'svg' | 'excalidraw'
+export type ArtifactType = 'html' | 'markdown' | 'image' | 'svg' | 'excalidraw' | 'drawio'
 
 export interface ArtifactItem {
   id: string

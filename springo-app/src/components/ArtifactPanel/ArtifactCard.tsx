@@ -15,6 +15,7 @@ function TypeIcon({ type }: { type: ArtifactItem['type'] }) {
       return <svg {...props}><rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><circle cx="8.5" cy="8.5" r="1.5" /><polyline points="21 15 16 10 5 21" /></svg>
     case 'svg':
     case 'excalidraw':
+    case 'drawio':
       return <svg {...props}><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" /></svg>
   }
 }
@@ -25,6 +26,7 @@ const TYPE_LABELS: Record<ArtifactItem['type'], string> = {
   image: 'Image',
   svg: 'SVG',
   excalidraw: 'Diagram',
+  drawio: 'Draw.io',
 }
 
 export default function ArtifactCard({ artifact }: ArtifactCardProps) {
