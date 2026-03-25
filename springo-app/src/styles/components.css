@@ -2226,6 +2226,29 @@
             color: var(--accent);
         }
 
+        .artifact-card-actions {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .artifact-card-action {
+            background: none;
+            border: none;
+            padding: 4px;
+            border-radius: 4px;
+            cursor: pointer;
+            color: var(--text-tertiary);
+            display: flex;
+            align-items: center;
+        }
+
+        .artifact-card-action:hover {
+            color: var(--accent);
+            background: var(--bg-hover);
+        }
+
         /* HTML Artifact Sandbox */
         .artifact-container {
             margin: 12px 0;

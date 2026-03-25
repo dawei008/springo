@@ -10,6 +10,10 @@ export interface ArtifactItem {
   content: string
   /** Optional: excalidraw elements JSON for excalidraw type */
   elements?: unknown[]
+  /** Optional: file path on disk (for "Reveal in Folder") */
+  filePath?: string
+  /** Optional: URL (for "Open in Browser") */
+  url?: string
   /** Timestamp for ordering */
   timestamp: number
 }

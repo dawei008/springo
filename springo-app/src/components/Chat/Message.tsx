@@ -650,6 +650,49 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         {toolUses.length > 0 && showToolPanel && <ToolContainer tools={toolUses} isStreaming={isStreaming} />}
         {/* Visual content from tools — show as artifact cards */}
         {toolUses.map((tool) => {
+          // Extract file path / URL from tool input+result for card actions
+          const { toolFilePath, toolUrl } = (() => {
+            let filePath: string | undefined;
+            let url: string | undefined;
+            const pathKeys = ['file_path', 'filePath', 'path', 'output_path', 'outputPath', 'filename'];
+            const urlKeys = ['url', 'href', 'link'];
+            // Check input fields
+            const inp = tool.input || {};
+            for (const key of pathKeys) {
+              const v = inp[key];
+              if (typeof v === 'string' && v.startsWith('/')) { filePath = v; break; }
+            }
+            for (const key of urlKeys) {
+              const v = inp[key];
+              if (typeof v === 'string' && /^https?:\/\//.test(v)) { url = v; break; }
+            }
+            // Check result object fields
+            if (tool.result && typeof tool.result === 'object' && !Array.isArray(tool.result)) {
+              const res = tool.result as Record<string, unknown>;
+              if (!filePath) for (const key of pathKeys) {
+                const v = res[key];
+                if (typeof v === 'string' && v.startsWith('/')) { filePath = v; break; }
+              }
+              if (!url) for (const key of urlKeys) {
+                const v = res[key];
+                if (typeof v === 'string' && /^https?:\/\//.test(v)) { url = v; break; }
+              }
+            }
+            // Fallback: scan result string for absolute paths or URLs
+            if (!filePath || !url) {
+              const rs = typeof tool.result === 'string' ? tool.result : '';
+              if (!filePath) {
+                const pathMatch = rs.match(/(?:saved|wrote|created|output|file)[^/\n]*?(\/[\w./-]+\.\w{1,10})/i);
+                if (pathMatch) filePath = pathMatch[1];
+              }
+              if (!url) {
+                const urlMatch = rs.match(/https?:\/\/[^\s"'<>]+/);
+                if (urlMatch) url = urlMatch[0];
+              }
+            }
+            return { toolFilePath: filePath, toolUrl: url };
+          })();
+
           // Draw.io — check both tool.input.content and tool.result for mxGraphModel/mxfile XML
           {
             const inputContent = typeof tool.input?.content === 'string' ? tool.input.content : '';
@@ -666,6 +709,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                       type: 'drawio',
                       title: 'Draw.io Diagram',
                       content: xmlMatch[0],
+                      filePath: toolFilePath, url: toolUrl,
                       timestamp: message.timestamp || Date.now(),
                     }}
                   />
@@ -685,6 +729,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                   title: 'Excalidraw Diagram',
                   content: '',
                   elements: tool.input.elements as unknown[],
+                  filePath: toolFilePath,
                   timestamp: message.timestamp || Date.now(),
                 }}
               />
@@ -711,6 +756,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                     type: 'image',
                     title: 'Screenshot',
                     content: `data:${mimeType};base64,${imgBlock.data}`,
+                    filePath: toolFilePath,
                     timestamp: message.timestamp || Date.now(),
                   }}
                 />
@@ -729,6 +775,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                   type: 'image',
                   title: 'Generated Image',
                   content: base64Match[0],
+                  filePath: toolFilePath,
                   timestamp: message.timestamp || Date.now(),
                 }}
               />
@@ -747,6 +794,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                     type: 'svg',
                     title: 'SVG Diagram',
                     content: svgMatch[0],
+                    filePath: toolFilePath,
                     timestamp: message.timestamp || Date.now(),
                   }}
                 />
