@@ -1016,7 +1016,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 for (let si = searchFrom; si < synced.length; si++) {
                   if (synced[si].role === 'assistant') {
                     synced[si].toolUses = streamingToolUses;
-                    synced[si].hasToolUse = true;
                     break;
                   }
                 }
@@ -1416,7 +1415,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
               for (let si = searchFrom; si < synced.length; si++) {
                 if (synced[si].role === 'assistant') {
                   synced[si].toolUses = streamingToolUses;
-                  synced[si].hasToolUse = true;
                   break;
                 }
               }
