@@ -29,6 +29,71 @@ const TYPE_LABELS: Record<ArtifactItem['type'], string> = {
   drawio: 'Draw.io',
 }
 
+const EXT_MAP: Record<ArtifactItem['type'], string> = {
+  html: '.html',
+  markdown: '.md',
+  image: '.png',
+  svg: '.svg',
+  excalidraw: '.excalidraw',
+  drawio: '.drawio',
+}
+
+function saveArtifact(artifact: ArtifactItem) {
+  let blob: Blob
+  const filename = (artifact.title.replace(/[/\\?%*:|"<>]/g, '_').slice(0, 60) || 'artifact') + EXT_MAP[artifact.type]
+
+  if (artifact.type === 'image' && artifact.content.startsWith('data:')) {
+    // data URL → binary blob
+    const [header, b64] = artifact.content.split(',')
+    const mime = header.match(/:(.*?);/)?.[1] || 'image/png'
+    const bytes = atob(b64)
+    const arr = new Uint8Array(bytes.length)
+    for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i)
+    blob = new Blob([arr], { type: mime })
+  } else if (artifact.type === 'excalidraw') {
+    const scene = {
+      type: 'excalidraw',
+      version: 2,
+      source: 'springo',
+      elements: Array.isArray(artifact.elements) ? artifact.elements : [],
+      appState: { viewBackgroundColor: '#ffffff' },
+    }
+    blob = new Blob([JSON.stringify(scene, null, 2)], { type: 'application/json' })
+  } else {
+    blob = new Blob([artifact.content], { type: 'text/plain;charset=utf-8' })
+  }
+
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+// SVG icons as components
+const FolderIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  </svg>
+)
+
+const GlobeIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="12" cy="12" r="10" />
+    <line x1="2" y1="12" x2="22" y2="12" />
+    <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+  </svg>
+)
+
+const DownloadIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
+  </svg>
+)
+
 export default function ArtifactCard({ artifact }: ArtifactCardProps) {
   const openArtifact = useArtifactStore((s) => s.openArtifact)
   const activeId = useArtifactStore((s) => s.activeArtifact?.id)
@@ -53,37 +118,27 @@ export default function ArtifactCard({ artifact }: ArtifactCardProps) {
           <button
             className="artifact-card-action"
             title="Reveal in Folder"
-            onClick={(e) => {
-              e.stopPropagation()
-              window.electronAPI?.openFolder(artifact.filePath!)
-            }}
+            onClick={(e) => { e.stopPropagation(); window.electronAPI?.openFolder(artifact.filePath!) }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-            </svg>
+            <FolderIcon />
           </button>
         )}
         {artifact.url && (
           <button
             className="artifact-card-action"
             title="Open in Browser"
-            onClick={(e) => {
-              e.stopPropagation()
-              window.open(artifact.url!, '_blank')
-            }}
+            onClick={(e) => { e.stopPropagation(); window.open(artifact.url!, '_blank') }}
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="2" y1="12" x2="22" y2="12" />
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-            </svg>
+            <GlobeIcon />
           </button>
         )}
-        {!artifact.filePath && !artifact.url && (
-          <svg className="artifact-card-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="9 18 15 12 9 6" />
-          </svg>
-        )}
+        <button
+          className="artifact-card-action"
+          title="Save"
+          onClick={(e) => { e.stopPropagation(); saveArtifact(artifact) }}
+        >
+          <DownloadIcon />
+        </button>
       </div>
     </div>
   )
