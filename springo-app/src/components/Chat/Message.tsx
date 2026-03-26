@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
-import ArtifactRenderer from '@/components/Visual/ArtifactRenderer';
+import ArtifactRenderer, { extractModelArtifacts } from '@/components/Visual/ArtifactRenderer';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import { useUIStore } from '@/stores/uiStore';
@@ -512,14 +512,21 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
     );
   }, [message.mergedContent, message.displayContent, message.content]);
 
+  // Extract model-generated artifacts (<springo-artifact> tags)
+  const { textAfterArtifacts, modelArtifacts } = useMemo(() => {
+    if (message.role !== 'assistant' || !rawText) return { textAfterArtifacts: rawText, modelArtifacts: [] };
+    const { cleaned, artifacts } = extractModelArtifacts(rawText);
+    return { textAfterArtifacts: cleaned, modelArtifacts: artifacts };
+  }, [message.role, rawText]);
+
   // Detect skill-wrapped user messages
   const skillInfo = useMemo(() => {
     if (message.role !== 'user' || !rawText) return null;
     return parseSkillMessage(rawText);
   }, [message.role, rawText]);
 
-  // For skill messages, show only the user's request; otherwise full text
-  const textContent = skillInfo ? skillInfo.userText : rawText;
+  // For skill messages, show only the user's request; for assistant, use artifact-cleaned text
+  const textContent = skillInfo ? skillInfo.userText : (message.role === 'assistant' ? textAfterArtifacts : rawText);
 
   // Extract inline images from content blocks (user messages only —
   // assistant messages may contain image blocks from tool results synced
@@ -607,22 +614,21 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           <ArtifactRenderer text={textContent}>
             {(cleaned, htmlArtifacts) => (
               <>
-                {message.role === 'assistant' && cleaned.length > 800 ? (
-                  <>
-                    <Markdown content={cleaned.slice(0, 200) + '\n\n...'} />
-                    <ArtifactCard
-                      artifact={{
-                        id: `md-${message.timestamp || Date.now()}`,
-                        type: 'markdown',
-                        title: cleaned.split('\n').find((l) => l.startsWith('#'))?.replace(/^#+\s*/, '') || 'Document',
-                        content: cleaned,
-                        timestamp: message.timestamp || Date.now(),
-                      }}
-                    />
-                  </>
-                ) : (
-                  <Markdown content={cleaned} />
-                )}
+                <Markdown content={cleaned} />
+                {/* Model-generated artifacts via <springo-artifact> tags */}
+                {modelArtifacts.map((a) => (
+                  <ArtifactCard
+                    key={a.id}
+                    artifact={{
+                      id: a.id,
+                      type: a.type === 'code' ? 'markdown' : a.type,
+                      title: a.title,
+                      content: a.type === 'code' ? '```\n' + a.content + '\n```' : a.content,
+                      timestamp: message.timestamp || Date.now(),
+                    }}
+                  />
+                ))}
+                {/* HTML artifacts detected from code fences */}
                 {htmlArtifacts.map((a) => (
                   <ArtifactCard
                     key={a.id}

@@ -6,6 +6,14 @@ interface Artifact {
   html: string
 }
 
+/** Model-generated artifact via <springo-artifact> tags */
+export interface ModelArtifact {
+  id: string
+  type: 'markdown' | 'html' | 'svg' | 'code'
+  title: string
+  content: string
+}
+
 interface ArtifactRendererProps {
   /** Raw markdown/text content that may contain HTML artifacts. */
   text: string
@@ -24,6 +32,41 @@ function isFullHtmlDocument(code: string): boolean {
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+}
+
+/** Map springo-artifact type attr to internal type */
+function mapArtifactType(typeAttr: string): ModelArtifact['type'] {
+  if (typeAttr.includes('html')) return 'html'
+  if (typeAttr.includes('svg')) return 'svg'
+  if (typeAttr.includes('code')) return 'code'
+  return 'markdown'
+}
+
+let modelArtifactCounter = 0
+
+/**
+ * Extract <springo-artifact> tags from model output.
+ * Returns cleaned text (tags replaced) and extracted artifacts.
+ */
+export function extractModelArtifacts(text: string): { cleaned: string; artifacts: ModelArtifact[] } {
+  if (!text || typeof text !== 'string') return { cleaned: text, artifacts: [] }
+
+  const artifacts: ModelArtifact[] = []
+  const cleaned = text.replace(
+    /<springo-artifact\s+([^>]*?)>([\s\S]*?)<\/springo-artifact>/g,
+    (_match, attrs: string, content: string) => {
+      const typeMatch = attrs.match(/type="([^"]*)"/)
+      const titleMatch = attrs.match(/title="([^"]*)"/)
+      const idMatch = attrs.match(/id="([^"]*)"/)
+      const type = mapArtifactType(typeMatch?.[1] || 'text/markdown')
+      const title = titleMatch?.[1] || 'Artifact'
+      const id = idMatch?.[1] || `mart-${++modelArtifactCounter}`
+      artifacts.push({ id, type, title, content: content.trim() })
+      return '' // Remove from inline text
+    }
+  )
+
+  return { cleaned: cleaned.trim(), artifacts }
 }
 
 /**
