@@ -1,7 +1,9 @@
+import { useState, useEffect, useRef } from 'react'
 import { useArtifactStore, type ArtifactItem } from '@/stores/artifactStore'
 
 interface ArtifactCardProps {
   artifact: ArtifactItem
+  onClickOverride?: () => void
 }
 
 function TypeIcon({ type }: { type: ArtifactItem['type'] }) {
@@ -94,52 +96,127 @@ const DownloadIcon = () => (
   </svg>
 )
 
-export default function ArtifactCard({ artifact }: ArtifactCardProps) {
+/** Save artifact content to a temp file and open with system app */
+async function openWithSystemApp(artifact: ArtifactItem) {
+  // If artifact has a filePath, open that directly
+  if (artifact.filePath) {
+    window.electronAPI?.openPath(artifact.filePath)
+    return
+  }
+  // Otherwise save to temp and open
+  saveArtifact(artifact)
+}
+
+function ContextMenu({ x, y, artifact, onClose }: { x: number; y: number; artifact: ArtifactItem; onClose: () => void }) {
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [onClose])
+
+  // Position: keep menu within viewport
+  const style: React.CSSProperties = {
+    position: 'fixed', left: x, top: y, zIndex: 9999,
+  }
+
+  return (
+    <div className="artifact-context-menu" ref={menuRef} style={style}>
+      {artifact.filePath && (
+        <div className="artifact-context-menu-item" onClick={() => { onClose(); window.electronAPI?.openPath(artifact.filePath!) }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <polyline points="15 3 21 3 21 9" />
+            <line x1="10" y1="14" x2="21" y2="3" />
+          </svg>
+          Open with System App
+        </div>
+      )}
+      {artifact.filePath && (
+        <div className="artifact-context-menu-item" onClick={() => { onClose(); window.electronAPI?.openFolder(artifact.filePath!) }}>
+          <FolderIcon />
+          Reveal in Folder
+        </div>
+      )}
+      {artifact.url && (
+        <div className="artifact-context-menu-item" onClick={() => { onClose(); window.electronAPI?.openExternal(artifact.url!) }}>
+          <GlobeIcon />
+          Open URL in Browser
+        </div>
+      )}
+      <div className="artifact-context-menu-item" onClick={() => { onClose(); saveArtifact(artifact) }}>
+        <DownloadIcon />
+        Save / Export
+      </div>
+      <div className="artifact-context-menu-item" onClick={() => {
+        onClose()
+        const text = artifact.content || ''
+        navigator.clipboard.writeText(text).catch(() => {})
+      }}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+        Copy Content
+      </div>
+    </div>
+  )
+}
+
+export default function ArtifactCard({ artifact, onClickOverride }: ArtifactCardProps) {
   const openArtifact = useArtifactStore((s) => s.openArtifact)
   const activeId = useArtifactStore((s) => s.activeArtifact?.id)
   const panelOpen = useArtifactStore((s) => s.panelOpen)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
   const isActive = panelOpen && activeId === artifact.id
 
   return (
-    <div
-      className={`artifact-card${isActive ? ' active' : ''}`}
-      onClick={() => openArtifact(artifact)}
-    >
-      <div className="artifact-card-icon">
-        <TypeIcon type={artifact.type} />
-      </div>
-      <div className="artifact-card-info">
-        <span className="artifact-card-title">{artifact.title}</span>
-        <span className="artifact-card-type">{TYPE_LABELS[artifact.type]}</span>
-      </div>
-      <div className="artifact-card-actions">
-        {artifact.filePath && (
+    <>
+      <div
+        className={`artifact-card${isActive ? ' active' : ''}`}
+        onClick={onClickOverride ?? (() => openArtifact(artifact))}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }) }}
+      >
+        <div className="artifact-card-icon">
+          <TypeIcon type={artifact.type} />
+        </div>
+        <div className="artifact-card-info">
+          <span className="artifact-card-title">{artifact.title}</span>
+          <span className="artifact-card-type">{TYPE_LABELS[artifact.type]}</span>
+        </div>
+        <div className="artifact-card-actions">
+          {artifact.filePath && (
+            <button
+              className="artifact-card-action"
+              title="Reveal in Folder"
+              onClick={(e) => { e.stopPropagation(); window.electronAPI?.openFolder(artifact.filePath!) }}
+            >
+              <FolderIcon />
+            </button>
+          )}
+          {artifact.url && (
+            <button
+              className="artifact-card-action"
+              title="Open in Browser"
+              onClick={(e) => { e.stopPropagation(); window.open(artifact.url!, '_blank') }}
+            >
+              <GlobeIcon />
+            </button>
+          )}
           <button
             className="artifact-card-action"
-            title="Reveal in Folder"
-            onClick={(e) => { e.stopPropagation(); window.electronAPI?.openFolder(artifact.filePath!) }}
+            title="Save"
+            onClick={(e) => { e.stopPropagation(); saveArtifact(artifact) }}
           >
-            <FolderIcon />
+            <DownloadIcon />
           </button>
-        )}
-        {artifact.url && (
-          <button
-            className="artifact-card-action"
-            title="Open in Browser"
-            onClick={(e) => { e.stopPropagation(); window.open(artifact.url!, '_blank') }}
-          >
-            <GlobeIcon />
-          </button>
-        )}
-        <button
-          className="artifact-card-action"
-          title="Save"
-          onClick={(e) => { e.stopPropagation(); saveArtifact(artifact) }}
-        >
-          <DownloadIcon />
-        </button>
+        </div>
       </div>
-    </div>
+      {ctxMenu && <ContextMenu x={ctxMenu.x} y={ctxMenu.y} artifact={artifact} onClose={() => setCtxMenu(null)} />}
+    </>
   )
 }

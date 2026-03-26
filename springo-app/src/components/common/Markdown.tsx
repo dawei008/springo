@@ -272,8 +272,12 @@ export default function Markdown({ content }: Props) {
           {...props}
           href={href}
           onClick={handleClick}
+          onContextMenu={isFilePath ? (e) => {
+            e.preventDefault();
+            if (href) window.electronAPI?.openPath(href);
+          } : undefined}
           className={isFilePath ? 'clickable-path' : 'clickable-url'}
-          title={href}
+          title={isFilePath ? `Click: preview | Right-click: open with system app` : href}
         >
           {children}
         </a>
@@ -321,9 +325,10 @@ export default function Markdown({ content }: Props) {
           <code
             {...props}
             className="clickable-path"
-            title={`Open ${text}`}
+            title="Click: preview | Right-click: open with system app"
             style={{ cursor: 'pointer' }}
             onClick={() => openFileInArtifactPanel(text)}
+            onContextMenu={(e) => { e.preventDefault(); window.electronAPI?.openPath(text) }}
           >
             {children}
           </code>

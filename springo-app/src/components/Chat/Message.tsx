@@ -3,6 +3,8 @@ import Markdown from '@/components/common/Markdown';
 import ArtifactRenderer, { extractModelArtifacts } from '@/components/Visual/ArtifactRenderer';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
+import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
+import type { ArtifactType } from '@/stores/artifactStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -354,6 +356,69 @@ function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]
       {/* Tool detail modal */}
       {detailTool && <ToolDetailModal tool={detailTool} onClose={() => setDetailTool(null)} />}
     </>
+  );
+}
+
+// ==================== File Artifact Card (reads fresh from disk on click) ====================
+
+const FILE_PREVIEW_EXTENSIONS: Record<string, ArtifactType> = {
+  '.md': 'markdown', '.markdown': 'markdown', '.mdx': 'markdown',
+  '.html': 'html', '.htm': 'html', '.svg': 'svg',
+  '.txt': 'markdown', '.log': 'markdown',
+  '.json': 'markdown', '.yaml': 'markdown', '.yml': 'markdown',
+  '.xml': 'markdown', '.csv': 'markdown',
+  '.ts': 'markdown', '.tsx': 'markdown', '.js': 'markdown', '.jsx': 'markdown',
+  '.py': 'markdown', '.go': 'markdown', '.rs': 'markdown', '.java': 'markdown',
+  '.css': 'markdown', '.scss': 'markdown',
+  '.sh': 'markdown', '.bash': 'markdown', '.zsh': 'markdown',
+  '.toml': 'markdown', '.ini': 'markdown', '.sql': 'markdown',
+};
+
+function getFilePreviewType(path: string): ArtifactType | null {
+  const ext = path.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
+  return ext ? FILE_PREVIEW_EXTENSIONS[ext] ?? null : null;
+}
+
+/** Artifact card for tool-modified files. Reads latest content from disk on click. */
+function FileArtifactCard({ filePath, timestamp }: { filePath: string; timestamp: number }) {
+  const type = getFilePreviewType(filePath);
+  if (!type) return null;
+  const fileName = filePath.split('/').pop() || filePath;
+  const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';
+
+  const handleClick = async () => {
+    if (!window.electronAPI?.readFileBase64) return;
+    try {
+      const result = await window.electronAPI.readFileBase64(filePath);
+      if (!result.success || !result.data) return;
+      const content = atob(result.data);
+      let finalContent = content;
+      if (type === 'markdown' && ext !== '.md' && ext !== '.markdown' && ext !== '.mdx' && ext !== '.txt') {
+        finalContent = '```' + ext.replace('.', '') + '\n' + content + '\n```';
+      }
+      useArtifactStore.getState().openArtifact({
+        id: createArtifactId(),
+        type,
+        title: fileName,
+        content: finalContent,
+        filePath,
+        timestamp: Date.now(),
+      });
+    } catch { /* ignore */ }
+  };
+
+  return (
+    <ArtifactCard
+      artifact={{
+        id: `file-${timestamp}-${fileName}`,
+        type,
+        title: fileName,
+        content: '', // Content loaded on click
+        filePath,
+        timestamp,
+      }}
+      onClickOverride={handleClick}
+    />
   );
 }
 
@@ -813,6 +878,12 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           const hasImagePath = /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/i.test(rs);
           if (hasImageUrl || hasImagePath) {
             return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={false} />;
+          }
+
+          // File edit/write tools — show file artifact card for previewable files
+          const fileModTools = ['edit', 'write_file', 'create_file', 'write', 'str_replace_editor'];
+          if (fileModTools.includes(tool.name) && toolFilePath && getFilePreviewType(toolFilePath)) {
+            return <FileArtifactCard key={`file-${tool.id}`} filePath={toolFilePath} timestamp={message.timestamp || Date.now()} />;
           }
 
           return null;
