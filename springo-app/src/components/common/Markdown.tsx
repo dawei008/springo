@@ -5,7 +5,66 @@ import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import { useUIStore } from '@/stores/uiStore';
+import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
+import type { ArtifactType } from '@/stores/artifactStore';
 import type { Components } from 'react-markdown';
+
+/** File extensions that can be previewed in the artifact panel */
+const PREVIEW_EXTENSIONS: Record<string, ArtifactType> = {
+  '.md': 'markdown', '.markdown': 'markdown', '.mdx': 'markdown',
+  '.html': 'html', '.htm': 'html',
+  '.svg': 'svg',
+  '.txt': 'markdown', '.log': 'markdown',
+  '.json': 'markdown', '.yaml': 'markdown', '.yml': 'markdown',
+  '.xml': 'markdown', '.csv': 'markdown',
+  '.ts': 'markdown', '.tsx': 'markdown', '.js': 'markdown', '.jsx': 'markdown',
+  '.py': 'markdown', '.go': 'markdown', '.rs': 'markdown', '.java': 'markdown',
+  '.css': 'markdown', '.scss': 'markdown',
+  '.sh': 'markdown', '.bash': 'markdown', '.zsh': 'markdown',
+  '.toml': 'markdown', '.ini': 'markdown', '.conf': 'markdown',
+  '.sql': 'markdown', '.graphql': 'markdown',
+};
+
+function getPreviewType(path: string): ArtifactType | null {
+  const ext = path.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
+  return ext ? PREVIEW_EXTENSIONS[ext] ?? null : null;
+}
+
+async function openFileInArtifactPanel(filePath: string) {
+  const type = getPreviewType(filePath);
+  if (!type || !window.electronAPI?.readFileBase64) {
+    window.electronAPI?.openPath(filePath);
+    return;
+  }
+  try {
+    const result = await window.electronAPI.readFileBase64(filePath);
+    if (!result.success || !result.data) {
+      window.electronAPI?.openPath(filePath);
+      return;
+    }
+    const content = atob(result.data);
+    const fileName = filePath.split('/').pop() || filePath;
+    const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';
+
+    // For code/config files, wrap in code fence for syntax highlighting
+    let finalContent = content;
+    if (type === 'markdown' && ext !== '.md' && ext !== '.markdown' && ext !== '.mdx' && ext !== '.txt') {
+      const lang = ext.replace('.', '');
+      finalContent = '```' + lang + '\n' + content + '\n```';
+    }
+
+    useArtifactStore.getState().openArtifact({
+      id: createArtifactId(),
+      type,
+      title: fileName,
+      content: finalContent,
+      filePath,
+      timestamp: Date.now(),
+    });
+  } catch {
+    window.electronAPI?.openPath(filePath);
+  }
+}
 
 interface Props {
   content: string;
@@ -197,7 +256,7 @@ export default function Markdown({ content }: Props) {
         if (!href) return;
 
         if (isFilePath) {
-          window.electronAPI?.openPath(href);
+          openFileInArtifactPanel(href);
           return;
         }
 
@@ -264,7 +323,7 @@ export default function Markdown({ content }: Props) {
             className="clickable-path"
             title={`Open ${text}`}
             style={{ cursor: 'pointer' }}
-            onClick={() => window.electronAPI?.openPath(text)}
+            onClick={() => openFileInArtifactPanel(text)}
           >
             {children}
           </code>
