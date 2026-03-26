@@ -114,8 +114,17 @@ function StatusBar() {
       if (value === '__add__') {
         // Use Electron dialog to add new folder
         if (window.electronAPI?.selectFolder) {
-          const folders = await window.electronAPI.selectFolder();
-          if (folders && folders.length > 0) {
+          const result = await window.electronAPI.selectFolder();
+          const folders = Array.isArray(result) ? result : result ? [result] : [];
+          if (folders.length > 0) {
+            const currentFolders = useSettingsStore.getState().workingFolders;
+            const updatedFolders = [...currentFolders];
+            for (const folder of folders) {
+              if (!updatedFolders.includes(folder)) {
+                updatedFolders.push(folder);
+              }
+            }
+            useSettingsStore.setState({ workingFolders: updatedFolders });
             setWorkingDir(folders[0]);
           }
         }
