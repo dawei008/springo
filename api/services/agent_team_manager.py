@@ -247,7 +247,10 @@ class AgentTeamManager:
         self._cleanup_task: Optional[asyncio.Task] = None
 
     def get_team(self, team_id: str) -> Optional[Team]:
-        return self._teams.get(team_id)
+        team = self._teams.get(team_id)
+        if team is None:
+            team = self._lazy_load_team(team_id)
+        return team
 
     def get_team_by_number(self, number: int) -> Optional[Team]:
         """Look up a team by its user-friendly number."""
@@ -1899,81 +1902,71 @@ class AgentTeamManager:
             await asyncio.sleep(2.0)
 
     def load_persisted_teams(self) -> int:
-        """Scan storage dir and restore interrupted teams.
+        """No-op at startup — teams are now lazily loaded on access.
 
-        Non-terminal teams are loaded into _teams with task boards and
-        message logs rebuilt. They are NOT auto-restarted — call /resume.
-
-        Returns the count of teams restored.
+        Returns 0 for backwards compatibility.
         """
+        persisted = list_persisted_teams()
+        if persisted:
+            logger.info(f"[TeamManager] {len(persisted)} persisted team(s) on disk (lazy-loaded on access)")
+        return 0
+
+    def _lazy_load_team(self, team_id: str) -> Optional["Team"]:
+        """Load a single team from disk into memory on demand."""
         from .message_bus import get_or_create_bus
         from .team_task_manager import get_or_create_task_manager
 
-        count = 0
-        for team_id in list_persisted_teams():
-            if team_id in self._teams:
-                continue
+        store = TeamStore(team_id)
+        meta = store.load_team_meta()
+        if not meta:
+            return None
 
-            store = TeamStore(team_id)
-            meta = store.load_team_meta()
-            if not meta:
-                continue
-
-            status = meta.get("status", "complete")
-            if status in ("complete", "error"):
-                continue
-
-            # Rebuild Team from metadata
-            agents = []
-            for ad in meta.get("agents", []):
-                role = AgentRole(
-                    name=ad.get("role_name", "worker"),
-                    model=ad.get("role_model", ""),
-                    purpose=ad.get("role_purpose", ""),
-                )
-                agent = TeamAgent(
-                    agent_id=ad.get("agent_id", ""),
-                    name=ad.get("name", ""),
-                    role=role,
-                    status="idle",
-                    token_usage=ad.get("token_usage", {"input_tokens": 0, "output_tokens": 0}),
-                    started_at=ad.get("started_at"),
-                    completed_at=ad.get("completed_at"),
-                )
-                agents.append(agent)
-
-            team = Team(
-                team_id=team_id,
-                team_number=meta.get("team_number"),
-                execution_mode=meta.get("execution_mode", "collaborative"),
-                agents=agents,
-                status="created",  # Paused — needs /resume
-                user_request=meta.get("user_request", ""),
-                shared_context=meta.get("shared_context", ""),
-                created_at=meta.get("created_at", ""),
-                completed_at=None,
-                total_tokens=meta.get("total_tokens", {"input_tokens": 0, "output_tokens": 0}),
+        agents = []
+        for ad in meta.get("agents", []):
+            role = AgentRole(
+                name=ad.get("role_name", "worker"),
+                model=ad.get("role_model", ""),
+                purpose=ad.get("role_purpose", ""),
             )
-
-            self._teams[team_id] = team
-            self._stores[team_id] = store
-
-            # Rebuild bus + task manager from persisted data
-            bus = get_or_create_bus(team_id, store=store)
-            bus.load_from_store(store)
-            for agent in agents:
-                bus.register_agent(agent.name or agent.agent_id)
-
-            task_mgr = get_or_create_task_manager(team_id, bus, store=store)
-            task_mgr.load_from_store(store)
-
-            count += 1
-            logger.info(
-                f"[TeamManager] Restored team {team_id} "
-                f"({len(agents)} agents, was '{status}')"
+            agent = TeamAgent(
+                agent_id=ad.get("agent_id", ""),
+                name=ad.get("name", ""),
+                role=role,
+                status="idle",
+                token_usage=ad.get("token_usage", {"input_tokens": 0, "output_tokens": 0}),
+                started_at=ad.get("started_at"),
+                completed_at=ad.get("completed_at"),
             )
+            agents.append(agent)
 
-        return count
+        status = meta.get("status", "complete")
+        team = Team(
+            team_id=team_id,
+            team_number=meta.get("team_number"),
+            execution_mode=meta.get("execution_mode", "collaborative"),
+            agents=agents,
+            status=status if status in ("complete", "error") else "created",
+            user_request=meta.get("user_request", ""),
+            shared_context=meta.get("shared_context", ""),
+            created_at=meta.get("created_at", ""),
+            completed_at=meta.get("completed_at"),
+            total_tokens=meta.get("total_tokens", {"input_tokens": 0, "output_tokens": 0}),
+        )
+
+        self._teams[team_id] = team
+        self._stores[team_id] = store
+
+        # Rebuild bus + task manager from persisted data
+        bus = get_or_create_bus(team_id, store=store)
+        bus.load_from_store(store)
+        for agent in agents:
+            bus.register_agent(agent.name or agent.agent_id)
+
+        task_mgr = get_or_create_task_manager(team_id, bus, store=store)
+        task_mgr.load_from_store(store)
+
+        logger.info(f"[TeamManager] Lazy-loaded team {team_id} ({len(agents)} agents, status='{status}')")
+        return team
 
     async def resume_team(
         self, team_id: str,
