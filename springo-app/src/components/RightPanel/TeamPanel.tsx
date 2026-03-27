@@ -200,6 +200,22 @@ export default function TeamPanel() {
   const userRequest = useTeamStore((s) => s.userRequest);
   const agents = useTeamStore((s) => s.agents);
   const messages = useTeamStore((s) => s.messages);
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+
+  // Sync team panel with current session — restore or clear team on session switch
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const teamIdForSession = useUIStore.getState().getSessionTeam(currentSessionId);
+    const currentTeamId = useTeamStore.getState().activeTeamId;
+
+    if (teamIdForSession && teamIdForSession !== currentTeamId) {
+      // Restore team for this session
+      useTeamStore.getState().loadTeamFromAPI(teamIdForSession);
+    } else if (!teamIdForSession && currentTeamId) {
+      // No team for this session — clear panel
+      useTeamStore.getState().resetTeam();
+    }
+  }, [currentSessionId]);
 
   // Divider drag state — start with agents taking most space; auto-adjust when messages arrive
   const [agentsFlex, setAgentsFlex] = useState(0.8);
