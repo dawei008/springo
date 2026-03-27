@@ -284,7 +284,30 @@ export default function TeamPanel() {
     }
   }, [messages.length]);
 
-  // No active team — show placeholder
+  // Saved teams list
+  const [savedTeams, setSavedTeams] = useState<Array<{ team_id: string; team_number?: number; status: string; user_request: string; agents: number; created_at: string }>>([]);
+  const [showSavedTeams, setShowSavedTeams] = useState(false);
+
+  const loadSavedTeams = useCallback(async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:8081/v1/teams');
+      if (!res.ok) return;
+      const data = await res.json();
+      setSavedTeams(data.teams || []);
+    } catch { /* ignore */ }
+  }, []);
+
+  const handleRestoreTeam = useCallback(async (teamId: string) => {
+    const convId = useSessionStore.getState().currentSessionId;
+    const loaded = await useTeamStore.getState().loadTeamFromAPI(teamId);
+    if (loaded) {
+      useUIStore.getState().setActiveTeamId(teamId);
+      if (convId) useUIStore.getState().setSessionTeam(convId, teamId);
+      setShowSavedTeams(false);
+    }
+  }, []);
+
+  // No active team — show saved teams list
   if (!activeTeamId) {
     return (
       <div className="team-split-panel">
@@ -297,8 +320,29 @@ export default function TeamPanel() {
           </svg>
           <p>No active team</p>
           <span style={{ fontSize: 11, opacity: 0.6 }}>
-            Start a team task to see agent activity here
+            Start a team task or restore a saved team
           </span>
+          <button className="team-new-btn" style={{ marginTop: 8 }} onClick={() => { loadSavedTeams(); setShowSavedTeams((v) => !v); }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            </svg>
+            Saved Teams
+          </button>
+          {showSavedTeams && (
+            <div className="team-saved-list">
+              {savedTeams.length === 0 ? (
+                <div className="team-saved-empty">No saved teams</div>
+              ) : (
+                savedTeams.map((t) => (
+                  <div key={t.team_id} className="team-saved-item" onClick={() => handleRestoreTeam(t.team_id)}>
+                    <span className="team-saved-number">#{t.team_number ?? '?'}</span>
+                    <span className="team-saved-request">{t.user_request || '(no description)'}</span>
+                    <span className={`team-saved-status ${t.status}`}>{t.status}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -329,14 +373,41 @@ export default function TeamPanel() {
                 Stop
               </button>
             )}
+            <button className="team-new-btn" onClick={() => { loadSavedTeams(); setShowSavedTeams((v) => !v); }} title="Load a saved team">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+              Teams
+            </button>
             <button className="team-new-btn" onClick={handleNewTeam} title="Dismiss current team and start fresh">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
               </svg>
-              New Team
+              New
             </button>
           </div>
         </div>
+
+        {/* Saved Teams Dropdown */}
+        {showSavedTeams && (
+          <div className="team-saved-list">
+            {savedTeams.length === 0 ? (
+              <div className="team-saved-empty">No saved teams</div>
+            ) : (
+              savedTeams.map((t) => (
+                <div
+                  key={t.team_id}
+                  className={`team-saved-item${t.team_id === activeTeamId ? ' active' : ''}`}
+                  onClick={() => handleRestoreTeam(t.team_id)}
+                >
+                  <span className="team-saved-number">#{t.team_number ?? '?'}</span>
+                  <span className="team-saved-request">{t.user_request || '(no description)'}</span>
+                  <span className={`team-saved-status ${t.status}`}>{t.status}</span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
         {/* Agent Cards */}
         <div

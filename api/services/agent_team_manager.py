@@ -259,7 +259,9 @@ class AgentTeamManager:
     def list_all_teams(self) -> List[Dict[str, Any]]:
         """Return summary info for all known teams (in-memory + persisted)."""
         results = []
+        seen_ids: set = set()
         for team in self._teams.values():
+            seen_ids.add(team.team_id)
             results.append({
                 "team_id": team.team_id,
                 "team_number": team.team_number,
@@ -270,6 +272,28 @@ class AgentTeamManager:
                 "created_at": team.created_at,
                 "total_tokens": team.total_tokens,
             })
+        # Also include persisted teams not in memory
+        from .team_store import list_persisted_teams, TeamStore
+        for tid in list_persisted_teams():
+            if tid in seen_ids:
+                continue
+            try:
+                store = TeamStore(tid)
+                meta = store.load_team_meta()
+                if not meta:
+                    continue
+                results.append({
+                    "team_id": tid,
+                    "team_number": meta.get("team_number"),
+                    "status": meta.get("status", "complete"),
+                    "execution_mode": meta.get("execution_mode", "collaborative"),
+                    "user_request": (meta.get("user_request", "") or "")[:100],
+                    "agents": len(meta.get("agents", [])),
+                    "created_at": meta.get("created_at", ""),
+                    "total_tokens": meta.get("total_tokens", 0),
+                })
+            except Exception:
+                continue
         # Sort by team_number (None last)
         results.sort(key=lambda t: (t["team_number"] is None, t["team_number"] or 0))
         return results
