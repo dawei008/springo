@@ -4,6 +4,8 @@ import type {
   ConversationStatus,
 } from '@/types';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { useUIStore } from '@/stores/uiStore';
+import { useTeamStore } from '@/stores/teamStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
@@ -199,6 +201,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ working_dir: dir }),
       }).catch(() => {});
+    }
+
+    // Sync team panel with the new session
+    const teamIdForSession = useUIStore.getState().getSessionTeam(id);
+    const currentTeamId = useTeamStore.getState().activeTeamId;
+    if (teamIdForSession && teamIdForSession !== currentTeamId) {
+      useTeamStore.getState().loadTeamFromAPI(teamIdForSession);
+    } else if (!teamIdForSession && currentTeamId) {
+      useTeamStore.getState().resetTeam();
     }
   },
 
