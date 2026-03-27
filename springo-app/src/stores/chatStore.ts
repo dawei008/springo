@@ -1095,12 +1095,41 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const model = options.model || settingsState.getEffectiveModel();
       const mode = options.mode || 'collaborative';
 
+      // Build conversation context summary for team lead
+      const sessionContext = (() => {
+        const msgs = runtime.messages || [];
+        if (msgs.length === 0) return '';
+        const lines: string[] = [];
+        // Take recent messages (up to 20) and extract text
+        const recent = msgs.slice(-20);
+        for (const m of recent) {
+          const role = m.role === 'assistant' ? 'Assistant' : 'User';
+          let text = '';
+          if (typeof m.content === 'string') {
+            text = m.content;
+          } else if (Array.isArray(m.content)) {
+            text = (m.content as Array<Record<string, unknown>>)
+              .filter((b) => b.type === 'text')
+              .map((b) => String(b.text || ''))
+              .join('\n');
+          }
+          if (text.trim()) {
+            // Truncate each message to keep total context reasonable
+            lines.push(`[${role}]: ${text.slice(0, 500)}`);
+          }
+        }
+        const ctx = lines.join('\n\n');
+        // Cap at 4000 chars to stay within reasonable limits
+        return ctx.length > 4000 ? ctx.slice(-4000) : ctx;
+      })();
+
       // Step 1: Spawn team
       const spawnRes = await fetch(`${BASE_URL}/v1/teams/spawn`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           user_request: content,
+          context: sessionContext || undefined,
           mode,
           model,
           session_id: convId,
