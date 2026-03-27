@@ -880,14 +880,31 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
             return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={false} />;
           }
 
-          // File edit/write tools — show file artifact card for previewable files
-          const fileModTools = ['edit', 'write_file', 'create_file', 'write', 'str_replace_editor'];
-          if (fileModTools.includes(tool.name) && toolFilePath && getFilePreviewType(toolFilePath)) {
-            return <FileArtifactCard key={`file-${tool.id}`} filePath={toolFilePath} timestamp={message.timestamp || Date.now()} />;
-          }
-
           return null;
         })}
+        {/* Deduplicated file artifact cards for edit/write tools */}
+        {(() => {
+          const fileModTools = ['edit', 'write_file', 'create_file', 'write', 'str_replace_editor'];
+          const seen = new Set<string>();
+          const cards: { filePath: string; toolId: string }[] = [];
+          for (const tool of toolUses) {
+            if (!fileModTools.includes(tool.name)) continue;
+            const inp = tool.input || {};
+            const pathKeys = ['file_path', 'filePath', 'path', 'output_path', 'outputPath', 'filename'];
+            let fp: string | undefined;
+            for (const key of pathKeys) {
+              const v = inp[key];
+              if (typeof v === 'string' && v.startsWith('/')) { fp = v; break; }
+            }
+            if (fp && getFilePreviewType(fp) && !seen.has(fp)) {
+              seen.add(fp);
+              cards.push({ filePath: fp, toolId: tool.id });
+            }
+          }
+          return cards.map(({ filePath, toolId }) => (
+            <FileArtifactCard key={`file-${toolId}`} filePath={filePath} timestamp={message.timestamp || Date.now()} />
+          ));
+        })()}
       </div>
     </div>
   );
