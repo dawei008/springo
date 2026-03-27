@@ -75,6 +75,15 @@ export interface AskUserData {
   options: Array<{ label: string; description?: string }>;
 }
 
+interface PerTeamState {
+  agents: Record<string, StoreAgent>;
+  tasks: Record<string, StoreTask>;
+  messages: StoreMessage[];
+  teamStatus: TeamStatus;
+  userRequest: string;
+  askUser: AskUserData | null;
+}
+
 interface TeamState {
   activeTeamId: string | null;
   agents: Record<string, StoreAgent>;
@@ -83,6 +92,8 @@ interface TeamState {
   teamStatus: TeamStatus;
   userRequest: string;
   askUser: AskUserData | null;
+  /** Per-team state preserved across session switches */
+  sessionMap: Record<string, PerTeamState>;
 
   // Lifecycle
   setTeamSpawned: (teamId: string, agents: TeamAgent[], userRequest: string) => void;
@@ -120,8 +131,74 @@ interface TeamState {
 
 // ==================== Helpers ====================
 
-function guardTeam(activeTeamId: string | null, teamId: string): boolean {
-  return activeTeamId === teamId;
+function guardTeam(state: TeamState, teamId: string): boolean {
+  // Accept events for active team OR any team in sessionMap (background teams)
+  return state.activeTeamId === teamId || teamId in state.sessionMap;
+}
+
+function getTeamState(state: TeamState, teamId: string): PerTeamState | null {
+  if (state.activeTeamId === teamId) {
+    return { agents: state.agents, tasks: state.tasks, messages: state.messages, teamStatus: state.teamStatus, userRequest: state.userRequest, askUser: state.askUser };
+  }
+  return state.sessionMap[teamId] || null;
+}
+
+function setTeamState(state: TeamState, teamId: string, partial: Partial<PerTeamState>): Partial<TeamState> {
+  if (state.activeTeamId === teamId) {
+    return partial;
+  }
+  // Update background team in sessionMap
+  const existing = state.sessionMap[teamId];
+  if (!existing) return {};
+  return {
+    sessionMap: {
+      ...state.sessionMap,
+      [teamId]: { ...existing, ...partial },
+    },
+  };
+}
+
+function updateTeamAgents(
+  state: TeamState, teamId: string,
+  updater: (agents: Record<string, StoreAgent>) => Record<string, StoreAgent>,
+): Partial<TeamState> {
+  if (state.activeTeamId === teamId) {
+    return { agents: updater(state.agents) };
+  }
+  const ts = state.sessionMap[teamId];
+  if (!ts) return {};
+  return {
+    sessionMap: { ...state.sessionMap, [teamId]: { ...ts, agents: updater(ts.agents) } },
+  };
+}
+
+function updateTeamTasks(
+  state: TeamState, teamId: string,
+  updater: (tasks: Record<string, StoreTask>) => Record<string, StoreTask>,
+): Partial<TeamState> {
+  if (state.activeTeamId === teamId) {
+    return { tasks: updater(state.tasks) };
+  }
+  const ts = state.sessionMap[teamId];
+  if (!ts) return {};
+  return {
+    sessionMap: { ...state.sessionMap, [teamId]: { ...ts, tasks: updater(ts.tasks) } },
+  };
+}
+
+function appendTeamMsg(
+  state: TeamState, teamId: string, msg: StoreMessage,
+): Partial<TeamState> {
+  if (state.activeTeamId === teamId) {
+    const msgs = [...state.messages, msg];
+    return { messages: msgs.length > 200 ? msgs.slice(-200) : msgs };
+  }
+  const ts = state.sessionMap[teamId];
+  if (!ts) return {};
+  const msgs = [...ts.messages, msg];
+  return {
+    sessionMap: { ...state.sessionMap, [teamId]: { ...ts, messages: msgs.length > 200 ? msgs.slice(-200) : msgs } },
+  };
 }
 
 /**
@@ -164,13 +241,14 @@ export const useTeamStore = create<TeamState>((set, get) => ({
   teamStatus: 'idle',
   askUser: null,
   userRequest: '',
+  sessionMap: {},
 
   // ─── Lifecycle ───
 
   setTeamSpawned: (teamId, agents, userRequest) => {
+    const state = get();
     const agentMap: Record<string, StoreAgent> = {};
     for (const a of agents) {
-      // Key by agent_id (classic mode) or name (collaborative mode)
       const key: string = a.agent_id || a.name || `agent-${Object.keys(agentMap).length}`;
       const displayName: string = a.name || a.agent_id || a.role;
       agentMap[key] = {
@@ -183,6 +261,19 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         output: '',
       };
     }
+    // Save current active team to sessionMap before switching
+    const newSessionMap = { ...state.sessionMap };
+    if (state.activeTeamId) {
+      newSessionMap[state.activeTeamId] = {
+        agents: state.agents, tasks: state.tasks, messages: state.messages,
+        teamStatus: state.teamStatus, userRequest: state.userRequest, askUser: state.askUser,
+      };
+    }
+    // Also save new team to sessionMap
+    newSessionMap[teamId] = {
+      agents: agentMap, tasks: {}, messages: [],
+      teamStatus: 'executing', userRequest, askUser: null,
+    };
     set({
       activeTeamId: teamId,
       agents: agentMap,
@@ -191,30 +282,40 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       askUser: null,
       teamStatus: 'executing',
       userRequest,
+      sessionMap: newSessionMap,
     });
   },
 
   setTeamPlanning: (teamId) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set({ teamStatus: 'planning' });
+    if (!guardTeam(get(), teamId)) return;
+    set(setTeamState(get(), teamId, { teamStatus: 'planning' }));
   },
 
   setTeamSynthesizing: (teamId) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set({ teamStatus: 'synthesizing' });
+    if (!guardTeam(get(), teamId)) return;
+    set(setTeamState(get(), teamId, { teamStatus: 'synthesizing' }));
   },
 
   setTeamComplete: (teamId, _result?) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set({ teamStatus: 'complete' });
+    if (!guardTeam(get(), teamId)) return;
+    set(setTeamState(get(), teamId, { teamStatus: 'complete' }));
   },
 
   setTeamError: (teamId, _error) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set({ teamStatus: 'error' });
+    if (!guardTeam(get(), teamId)) return;
+    set(setTeamState(get(), teamId, { teamStatus: 'error' }));
   },
 
   resetTeam: () => {
+    const state = get();
+    const newSessionMap = { ...state.sessionMap };
+    // Save current active team to sessionMap before clearing
+    if (state.activeTeamId) {
+      newSessionMap[state.activeTeamId] = {
+        agents: state.agents, tasks: state.tasks, messages: state.messages,
+        teamStatus: state.teamStatus, userRequest: state.userRequest, askUser: state.askUser,
+      };
+    }
     set({
       activeTeamId: null,
       agents: {},
@@ -223,196 +324,134 @@ export const useTeamStore = create<TeamState>((set, get) => ({
       askUser: null,
       teamStatus: 'idle',
       userRequest: '',
+      sessionMap: newSessionMap,
     });
   },
 
   // ─── Agent Updates ───
 
   updateAgentStart: (teamId, agentId, role, taskTitle, agentName?) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const [key, agent] = ensureAgent(state.agents, agentId, role);
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const [key, agent] = ensureAgent(agents, agentId, role);
       const updated = { ...agent, role, status: 'working' as AgentStatus, purpose: taskTitle, output: '' };
-      // Always update display name when agent_name is provided (collaborative mode assigns human-readable names)
       if (agentName) updated.name = agentName;
-      return {
-        agents: { ...state.agents, [key]: updated },
-      };
-    });
+      return { ...agents, [key]: updated };
+    }));
   },
 
   updateAgentProgress: (teamId, agentId, status, preview?) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const [key, agent] = ensureAgent(state.agents, agentId);
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const [key, agent] = ensureAgent(agents, agentId);
       const newAgent = { ...agent, status: 'working' as AgentStatus };
       if (preview) newAgent.output = preview;
       if (status) newAgent.purpose = status;
-      return { agents: { ...state.agents, [key]: newAgent } };
-    });
+      return { ...agents, [key]: newAgent };
+    }));
   },
 
   appendAgentDelta: (teamId, agentId, delta) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const [key, agent] = ensureAgent(state.agents, agentId);
-      return {
-        agents: {
-          ...state.agents,
-          [key]: { ...agent, output: agent.output + delta },
-        },
-      };
-    });
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const [key, agent] = ensureAgent(agents, agentId);
+      return { ...agents, [key]: { ...agent, output: agent.output + delta } };
+    }));
   },
 
   updateAgentTool: (teamId, agentId, toolName, status) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const [key, agent] = ensureAgent(state.agents, agentId);
-      return {
-        agents: {
-          ...state.agents,
-          [key]: {
-            ...agent,
-            status: 'tool_calling',
-            currentTool: toolName,
-            toolStatus: status,
-          },
-        },
-      };
-    });
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const [key, agent] = ensureAgent(agents, agentId);
+      return { ...agents, [key]: { ...agent, status: 'tool_calling', currentTool: toolName, toolStatus: status } };
+    }));
   },
 
   updateAgentComplete: (teamId, agentId, role, findings) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const [key, agent] = ensureAgent(state.agents, agentId, role);
-      return {
-        agents: {
-          ...state.agents,
-          [key]: { ...agent, role, status: 'complete', findings },
-        },
-      };
-    });
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const [key, agent] = ensureAgent(agents, agentId, role);
+      return { ...agents, [key]: { ...agent, role, status: 'complete', findings } };
+    }));
   },
 
   updateAgentError: (teamId, agentId, error) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const [key, agent] = ensureAgent(state.agents, agentId);
-      return {
-        agents: {
-          ...state.agents,
-          [key]: { ...agent, status: 'error', error },
-        },
-      };
-    });
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const [key, agent] = ensureAgent(agents, agentId);
+      return { ...agents, [key]: { ...agent, status: 'error', error } };
+    }));
   },
 
   // ─── Task Board ───
 
   updateTaskBoard: (teamId, tasks) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
+    if (!guardTeam(get(), teamId)) return;
     const taskMap: Record<string, StoreTask> = {};
     for (const t of tasks) {
-      taskMap[t.id] = {
-        id: t.id,
-        title: t.title,
-        owner: t.owner,
-        status: t.status,
-        blockedBy: t.blockedBy,
-      };
+      taskMap[t.id] = { id: t.id, title: t.title, owner: t.owner, status: t.status, blockedBy: t.blockedBy };
     }
-    set({ tasks: taskMap });
+    set(setTeamState(get(), teamId, { tasks: taskMap }));
   },
 
   updateTaskCreated: (teamId, taskId, title, owner?) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => ({
-      tasks: {
-        ...state.tasks,
-        [taskId]: { id: taskId, title, owner, status: 'pending' },
-      },
-    }));
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamTasks(state, teamId, (tasks) => ({
+      ...tasks, [taskId]: { id: taskId, title, owner, status: 'pending' },
+    })));
   },
 
   updateTaskUpdated: (teamId, taskId, status, owner?, title?) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const existing = state.tasks[taskId] || { id: taskId, title: title || taskId, status: 'pending' };
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamTasks(state, teamId, (tasks) => {
+      const existing = tasks[taskId] || { id: taskId, title: title || taskId, status: 'pending' };
       return {
-        tasks: {
-          ...state.tasks,
-          [taskId]: {
-            ...existing,
-            status,
-            ...(owner !== undefined && { owner }),
-            ...(title !== undefined && { title }),
-          },
-        },
+        ...tasks,
+        [taskId]: { ...existing, status, ...(owner !== undefined && { owner }), ...(title !== undefined && { title }) },
       };
-    });
+    }));
   },
 
   updateTaskUnblocked: (teamId, taskId, owner?, title?) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const existing = state.tasks[taskId] || { id: taskId, title: title || taskId, status: 'pending' };
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamTasks(state, teamId, (tasks) => {
+      const existing = tasks[taskId] || { id: taskId, title: title || taskId, status: 'pending' };
       return {
-        tasks: {
-          ...state.tasks,
-          [taskId]: {
-            ...existing,
-            status: 'unblocked',
-            blockedBy: [],
-            ...(owner !== undefined && { owner }),
-            ...(title !== undefined && { title }),
-          },
-        },
+        ...tasks,
+        [taskId]: { ...existing, status: 'unblocked', blockedBy: [], ...(owner !== undefined && { owner }), ...(title !== undefined && { title }) },
       };
-    });
+    }));
   },
 
   // ─── Messages ───
 
   appendMessage: (teamId, sender, recipient, content, summary?, isBroadcast = false) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
+    if (!guardTeam(get(), teamId)) return;
     // Skip user ↔ team-lead messages (they belong in main chat)
     if (sender === 'user' || recipient === 'user') return;
-    set((state) => {
-      const msgs = [...state.messages, {
-        id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        sender,
-        recipient,
-        content,
-        summary,
-        isBroadcast,
-        timestamp: Date.now(),
-      }];
-      // Keep max 200 messages
-      return { messages: msgs.length > 200 ? msgs.slice(-200) : msgs };
-    });
+    const msg: StoreMessage = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      sender, recipient, content, summary, isBroadcast, timestamp: Date.now(),
+    };
+    set((state) => appendTeamMsg(state, teamId, msg));
   },
 
   updateAgentIdle: (teamId, agentId) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set((state) => {
-      const key = findAgentKey(state.agents, agentId);
-      if (!key) return state;
-      const agent = state.agents[key];
-      // Only set idle if not in terminal state
-      if (agent.status === 'complete' || agent.status === 'error') return state;
-      return {
-        agents: { ...state.agents, [key]: { ...agent, status: 'idle' } },
-      };
-    });
+    if (!guardTeam(get(), teamId)) return;
+    set((state) => updateTeamAgents(state, teamId, (agents) => {
+      const key = findAgentKey(agents, agentId);
+      if (!key) return agents;
+      const agent = agents[key];
+      if (agent.status === 'complete' || agent.status === 'error') return agents;
+      return { ...agents, [key]: { ...agent, status: 'idle' } };
+    }));
   },
 
   // ─── Ask User ───
 
   setAskUser: (teamId, agentName, question, options) => {
-    if (!guardTeam(get().activeTeamId, teamId)) return;
-    set({ askUser: { agentName, question, options } });
+    if (!guardTeam(get(), teamId)) return;
+    set(setTeamState(get(), teamId, { askUser: { agentName, question, options } }));
   },
 
   clearAskUser: () => {
@@ -492,13 +531,29 @@ export const useTeamStore = create<TeamState>((set, get) => ({
         }
       } catch { /* messages are optional */ }
 
+      const state = get();
+      const newSessionMap = { ...state.sessionMap };
+      // Save current active team before switching
+      if (state.activeTeamId && state.activeTeamId !== teamId) {
+        newSessionMap[state.activeTeamId] = {
+          agents: state.agents, tasks: state.tasks, messages: state.messages,
+          teamStatus: state.teamStatus, userRequest: state.userRequest, askUser: state.askUser,
+        };
+      }
+      const loadedStatus = teamStatusMap[data.status] || 'idle';
+      const loadedRequest = data.user_request || '';
+      newSessionMap[teamId] = {
+        agents: agentMap, tasks: taskMap, messages: messagesList,
+        teamStatus: loadedStatus, userRequest: loadedRequest, askUser: null,
+      };
       set({
         activeTeamId: teamId,
         agents: agentMap,
         tasks: taskMap,
         messages: messagesList,
-        teamStatus: teamStatusMap[data.status] || 'idle',
-        userRequest: data.user_request || '',
+        teamStatus: loadedStatus,
+        userRequest: loadedRequest,
+        sessionMap: newSessionMap,
       });
 
       return true;
