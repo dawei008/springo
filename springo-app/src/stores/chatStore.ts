@@ -1077,6 +1077,34 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendTeamMessage: async (convId, content, options = {}) => {
     const runtime = get().getRuntime(convId);
 
+    // Check if there's already an active team for this session
+    const existingTeamId = useUIStore.getState().getSessionTeam(convId);
+    const teamStore = useTeamStore.getState();
+    const teamIsActive = existingTeamId && teamStore.activeTeamId === existingTeamId
+      && (teamStore.teamStatus === 'executing' || teamStore.teamStatus === 'planning'
+          || teamStore.teamStatus === 'idle' || teamStore.teamStatus === 'synthesizing');
+
+    if (teamIsActive && existingTeamId) {
+      // Send message to existing team lead instead of spawning a new team
+      runtime.messages.push({ role: 'user', content, timestamp: Date.now() });
+      set((state) => ({
+        runtimes: { ...state.runtimes, [convId]: { ...runtime, messages: [...runtime.messages] } },
+      }));
+      try {
+        await fetch(`${BASE_URL}/v1/teams/${existingTeamId}/message`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content,
+            recipient: 'team-lead',
+          }),
+        });
+      } catch {
+        // Ignore — team may have finished
+      }
+      return;
+    }
+
     // Add user message to display
     runtime.messages.push({ role: 'user', content, timestamp: Date.now() });
 
