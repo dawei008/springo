@@ -7,9 +7,10 @@ interface FileEntry {
   name: string;
   type: 'file' | 'directory';
   size?: number;
+  modified?: number;
 }
 
-type SortKey = 'name' | 'size' | 'type';
+type SortKey = 'name' | 'size' | 'type' | 'modified';
 type SortDir = 'asc' | 'desc';
 
 // ─── Helpers ───
@@ -25,6 +26,62 @@ function formatFileSize(bytes: number): string {
 function getFileExtension(name: string): string {
   const dot = name.lastIndexOf('.');
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+/** Human-readable file type description */
+function getFileTypeLabel(name: string, type: 'file' | 'directory'): string {
+  if (type === 'directory') return 'Folder';
+  const ext = getFileExtension(name);
+  if (!ext) return 'File';
+  const map: Record<string, string> = {
+    ts: 'TypeScript', tsx: 'TSX', js: 'JavaScript', jsx: 'JSX',
+    mjs: 'ES Module', cjs: 'CommonJS',
+    py: 'Python', pyw: 'Python',
+    rs: 'Rust', go: 'Go', java: 'Java', c: 'C', cpp: 'C++',
+    h: 'C Header', hpp: 'C++ Header', cs: 'C#', rb: 'Ruby',
+    php: 'PHP', swift: 'Swift', kt: 'Kotlin',
+    json: 'JSON', yaml: 'YAML', yml: 'YAML', toml: 'TOML',
+    xml: 'XML', ini: 'INI', env: 'Env',
+    md: 'Markdown', mdx: 'MDX', txt: 'Text', rst: 'RST', log: 'Log',
+    css: 'CSS', scss: 'SCSS', less: 'LESS', html: 'HTML', svg: 'SVG',
+    png: 'PNG Image', jpg: 'JPEG Image', jpeg: 'JPEG Image',
+    gif: 'GIF Image', webp: 'WebP Image', bmp: 'Bitmap', ico: 'Icon',
+    pdf: 'PDF', doc: 'Word', docx: 'Word', xls: 'Excel',
+    xlsx: 'Excel', pptx: 'PowerPoint', csv: 'CSV',
+    sh: 'Shell', bash: 'Bash', zsh: 'Zsh', fish: 'Fish',
+    bat: 'Batch', ps1: 'PowerShell',
+    zip: 'ZIP', tar: 'TAR', gz: 'GZip', bz2: 'BZip2',
+    xz: 'XZ', '7z': '7-Zip', rar: 'RAR',
+    dmg: 'Disk Image', iso: 'ISO Image',
+    mp3: 'Audio', wav: 'Audio', mp4: 'Video', mkv: 'Video', avi: 'Video',
+    woff: 'Font', woff2: 'Font', ttf: 'Font', otf: 'Font',
+    lock: 'Lock', map: 'Source Map',
+  };
+  return map[ext] || ext.toUpperCase();
+}
+
+/** Format mtime to relative or short date */
+function formatDate(mtime: number): string {
+  const now = Date.now();
+  const d = new Date(mtime * 1000); // mtime is in seconds
+  const diffMs = now - d.getTime();
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHr = Math.floor(diffMs / 3600000);
+
+  if (diffMin < 1) return 'Just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr < 24) return `${diffHr}h ago`;
+
+  const diffDays = Math.floor(diffMs / 86400000);
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  // Show short date
+  const month = d.toLocaleString(undefined, { month: 'short' });
+  const day = d.getDate();
+  const year = d.getFullYear();
+  const thisYear = new Date().getFullYear();
+  return year === thisYear ? `${month} ${day}` : `${month} ${day}, ${year}`;
 }
 
 /** Classify extension into a category for icon coloring. */
@@ -47,7 +104,7 @@ function getFileCategory(ext: string): string {
 function FileIcon({ name, type }: { name: string; type: 'file' | 'directory' }) {
   if (type === 'directory') {
     return (
-      <svg className="item-icon folder" width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <svg className="item-icon folder" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
       </svg>
     );
@@ -57,7 +114,7 @@ function FileIcon({ name, type }: { name: string; type: 'file' | 'directory' }) 
   const cat = getFileCategory(ext);
 
   return (
-    <svg className={`item-icon file ${cat}`} width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <svg className={`item-icon file ${cat}`} width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
     </svg>
   );
@@ -172,7 +229,6 @@ function InlineRenameInput({
   useEffect(() => {
     if (ref.current) {
       ref.current.focus();
-      // Select name without extension
       const dot = initialValue.lastIndexOf('.');
       ref.current.setSelectionRange(0, dot > 0 ? dot : initialValue.length);
     }
@@ -269,13 +325,11 @@ export default function FileBrowser() {
   const displayEntries = useMemo(() => {
     let list = [...entries];
 
-    // Filter by search
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((e) => e.name.toLowerCase().includes(q));
     }
 
-    // Sort: directories first, then by sortKey
     list.sort((a, b) => {
       // Directories always first
       if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
@@ -291,6 +345,9 @@ export default function FileBrowser() {
         const extA = getFileExtension(a.name);
         const extB = getFileExtension(b.name);
         return extA.localeCompare(extB) * dir || a.name.localeCompare(b.name) * dir;
+      }
+      if (sortKey === 'modified') {
+        return ((a.modified || 0) - (b.modified || 0)) * dir;
       }
       return 0;
     });
@@ -348,11 +405,7 @@ export default function FileBrowser() {
     e.stopPropagation();
     setSelectedName(entry.name);
     setContextMenu({
-      visible: true,
-      x: e.clientX,
-      y: e.clientY,
-      entry,
-      fullPath: fullPathOf(entry),
+      visible: true, x: e.clientX, y: e.clientY, entry, fullPath: fullPathOf(entry),
     });
   }, [fullPathOf]);
 
@@ -376,7 +429,6 @@ export default function FileBrowser() {
 
   const handleRevealInFinder = useCallback(() => {
     if (contextMenu.entry) {
-      // Reveal parent dir for files, the dir itself for directories
       const reveal = contextMenu.entry.type === 'directory' ? contextMenu.fullPath : currentPath;
       window.electronAPI?.openFolder?.(reveal) || window.electronAPI?.openPath(reveal);
     }
@@ -444,12 +496,10 @@ export default function FileBrowser() {
   useEffect(() => {
     if (!fileBrowserOpen) return;
     const handler = (e: KeyboardEvent) => {
-      // Cmd/Ctrl+F to focus search
       if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
         e.preventDefault();
         searchRef.current?.focus();
       }
-      // Backspace to go up (when not in input)
       if (e.key === 'Backspace' && !(e.target instanceof HTMLInputElement)) {
         e.preventDefault();
         navigateUp();
@@ -467,7 +517,7 @@ export default function FileBrowser() {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     } else {
       setSortKey(key);
-      setSortDir('asc');
+      setSortDir(key === 'modified' ? 'desc' : 'asc');
     }
   }, [sortKey]);
 
@@ -485,6 +535,9 @@ export default function FileBrowser() {
   const folderName = currentPath.split('/').pop() || currentPath;
 
   if (!fileBrowserOpen) return null;
+
+  const sortArrow = (key: SortKey) =>
+    sortKey === key ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
 
   return (
     <div className={`file-browser-panel${fileBrowserOpen ? ' open' : ''}`} tabIndex={-1}>
@@ -563,26 +616,20 @@ export default function FileBrowser() {
         </button>
       </div>
 
-      {/* Sort bar */}
-      <div className="file-browser-sort-bar">
-        <button
-          className={`sort-btn${sortKey === 'name' ? ' active' : ''}`}
-          onClick={() => toggleSort('name')}
-        >
-          Name {sortKey === 'name' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
-        </button>
-        <button
-          className={`sort-btn${sortKey === 'type' ? ' active' : ''}`}
-          onClick={() => toggleSort('type')}
-        >
-          Type {sortKey === 'type' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
-        </button>
-        <button
-          className={`sort-btn${sortKey === 'size' ? ' active' : ''}`}
-          onClick={() => toggleSort('size')}
-        >
-          Size {sortKey === 'size' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
-        </button>
+      {/* Column header row */}
+      <div className="fb-col-header">
+        <div className="fb-col fb-col-name" onClick={() => toggleSort('name')}>
+          Name{sortArrow('name')}
+        </div>
+        <div className="fb-col fb-col-size" onClick={() => toggleSort('size')}>
+          Size{sortArrow('size')}
+        </div>
+        <div className="fb-col fb-col-type" onClick={() => toggleSort('type')}>
+          Type{sortArrow('type')}
+        </div>
+        <div className="fb-col fb-col-date" onClick={() => toggleSort('modified')}>
+          Modified{sortArrow('modified')}
+        </div>
       </div>
 
       {/* Content */}
@@ -613,26 +660,34 @@ export default function FileBrowser() {
           return (
             <div
               key={entry.name}
-              className={`file-browser-item${isSelected ? ' selected' : ''}${entry.type === 'directory' ? ' is-directory' : ''}`}
+              className={`fb-row${isSelected ? ' selected' : ''}${entry.type === 'directory' ? ' is-directory' : ''}`}
               draggable={entry.type === 'file'}
               onClick={() => handleItemClick(entry)}
               onDoubleClick={() => handleItemDoubleClick(entry)}
               onDragStart={(e) => handleItemDragStart(e, entry)}
               onContextMenu={(e) => handleContextMenu(e, entry)}
             >
-              <FileIcon name={entry.name} type={entry.type} />
-              {isRenaming ? (
-                <InlineRenameInput
-                  initialValue={entry.name}
-                  onConfirm={handleConfirmRename}
-                  onCancel={() => setRenamingName(null)}
-                />
-              ) : (
-                <span className="item-name" title={entry.name}>{entry.name}</span>
-              )}
-              {entry.type === 'file' && entry.size != null && (
-                <span className="item-info">{formatFileSize(entry.size)}</span>
-              )}
+              <div className="fb-col fb-col-name">
+                <FileIcon name={entry.name} type={entry.type} />
+                {isRenaming ? (
+                  <InlineRenameInput
+                    initialValue={entry.name}
+                    onConfirm={handleConfirmRename}
+                    onCancel={() => setRenamingName(null)}
+                  />
+                ) : (
+                  <span className="item-name" title={entry.name}>{entry.name}</span>
+                )}
+              </div>
+              <div className="fb-col fb-col-size">
+                {entry.type === 'file' && entry.size != null ? formatFileSize(entry.size) : '--'}
+              </div>
+              <div className="fb-col fb-col-type">
+                {getFileTypeLabel(entry.name, entry.type)}
+              </div>
+              <div className="fb-col fb-col-date">
+                {entry.modified ? formatDate(entry.modified) : '--'}
+              </div>
             </div>
           );
         })}
