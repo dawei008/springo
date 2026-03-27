@@ -236,6 +236,7 @@ export default function MessageInput() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             session_id: currentSessionId,
+            model: currentModel,
             extended_context: settings.enable1mContext === true,
           }),
         });
