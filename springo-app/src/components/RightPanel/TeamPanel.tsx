@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useMemo, useState } from 'react';
 import { useTeamStore, getRoleConfig, type AgentStatus, type StoreAgent, type StoreMessage } from '@/stores/teamStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
+import { useUIStore } from '@/stores/uiStore';
 
 // ─── Role SVG Paths ───
 
@@ -228,6 +229,24 @@ export default function TeamPanel() {
     useTeamStore.getState().setTeamComplete(activeTeamId);
   }, [activeTeamId]);
 
+  const handleNewTeam = useCallback(async () => {
+    if (!activeTeamId) return;
+    const convId = useSessionStore.getState().currentSessionId;
+    const running = teamStatus === 'planning' || teamStatus === 'executing' || teamStatus === 'synthesizing';
+
+    // Stop current team if running
+    if (running) {
+      if (convId) useChatStore.getState().stopTask(convId);
+      try {
+        await fetch(`http://127.0.0.1:8081/v1/teams/${activeTeamId}/shutdown`, { method: 'POST' });
+      } catch { /* ignore */ }
+    }
+
+    // Clear team state so next message spawns a new team
+    useTeamStore.getState().resetTeam();
+    if (convId) useUIStore.getState().setSessionTeam(convId, '');
+  }, [activeTeamId, teamStatus]);
+
   // Divider drag handler
   const handleDividerMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -310,6 +329,12 @@ export default function TeamPanel() {
                 Stop
               </button>
             )}
+            <button className="team-new-btn" onClick={handleNewTeam} title="Dismiss current team and start fresh">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 4v6h-6" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+              New Team
+            </button>
           </div>
         </div>
 
