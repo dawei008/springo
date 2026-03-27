@@ -245,6 +245,8 @@ class AgentTeamManager:
         self._stores: Dict[str, TeamStore] = {}
         self._running_tasks: Dict[str, List[asyncio.Task]] = {}  # team_id -> agent tasks
         self._cleanup_task: Optional[asyncio.Task] = None
+        self._teams_list_cache: Optional[List[Dict[str, Any]]] = None
+        self._teams_list_cache_time: float = 0
 
     def get_team(self, team_id: str) -> Optional[Team]:
         team = self._teams.get(team_id)
@@ -259,8 +261,15 @@ class AgentTeamManager:
                 return team
         return None
 
+    def _invalidate_teams_list_cache(self):
+        self._teams_list_cache = None
+
     def list_all_teams(self) -> List[Dict[str, Any]]:
         """Return summary info for all known teams (in-memory + persisted)."""
+        import time as _time
+        now = _time.time()
+        if self._teams_list_cache is not None and (now - self._teams_list_cache_time) < 30.0:
+            return self._teams_list_cache
         results = []
         seen_ids: set = set()
         for team in self._teams.values():
@@ -299,6 +308,8 @@ class AgentTeamManager:
                 continue
         # Sort by team_number (None last)
         results.sort(key=lambda t: (t["team_number"] is None, t["team_number"] or 0))
+        self._teams_list_cache = results
+        self._teams_list_cache_time = now
         return results
 
     def cancel_team(self, team_id: str, status: str = "error") -> None:
@@ -333,13 +344,17 @@ class AgentTeamManager:
         now = datetime.now()
         to_remove = []
         for tid, team in self._teams.items():
-            if team.status in ("complete", "error") and team.completed_at:
-                try:
-                    completed = datetime.fromisoformat(team.completed_at)
-                    if (now - completed).total_seconds() > cutoff:
-                        to_remove.append(tid)
-                except (ValueError, TypeError):
-                    pass
+            if team.status not in ("complete", "error"):
+                continue
+            if not team.completed_at:
+                to_remove.append(tid)
+                continue
+            try:
+                completed = datetime.fromisoformat(team.completed_at)
+                if (now - completed).total_seconds() > cutoff:
+                    to_remove.append(tid)
+            except (ValueError, TypeError):
+                to_remove.append(tid)
         for tid in to_remove:
             del self._teams[tid]
             self._running_tasks.pop(tid, None)
@@ -434,6 +449,7 @@ class AgentTeamManager:
             bus.register_agent("team-lead")
             get_or_create_task_manager(team.team_id, bus, store=store)
 
+        self._invalidate_teams_list_cache()
         logger.info(f"Team spawned: {team.team_id} mode={mode} for request: {request.user_request[:80]}")
         return team
 
@@ -1722,6 +1738,9 @@ class AgentTeamManager:
                             worker_mailbox = event["worker_mailbox"]
                             worker_initial = event["initial_message"]
 
+                            if worker_agent.name in spawned_workers:
+                                logger.warning(f"[Team:{team.team_id}] Duplicate worker name '{worker_agent.name}', skipping")
+                                continue
                             team.agents.append(worker_agent)
                             spawned_workers.add(worker_agent.name)
 
@@ -2107,6 +2126,10 @@ class AgentTeamManager:
                         worker_agent = event["worker_agent"]
                         worker_mailbox = event["worker_mailbox"]
                         worker_initial = event["initial_message"]
+                        existing_names = {a.name for a in team.agents}
+                        if worker_agent.name in existing_names:
+                            logger.warning(f"[Team:{team.team_id}] Duplicate worker name '{worker_agent.name}', skipping")
+                            continue
                         team.agents.append(worker_agent)
                         worker_task = asyncio.create_task(
                             run_agent_loop(
