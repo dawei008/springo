@@ -138,6 +138,8 @@ function FileContextMenu({
   onRename,
   onDelete,
   onRevealInFinder,
+  onNewFolder,
+  onNewFile,
 }: {
   menu: ContextMenuState;
   onClose: () => void;
@@ -146,6 +148,8 @@ function FileContextMenu({
   onRename: () => void;
   onDelete: () => void;
   onRevealInFinder: () => void;
+  onNewFolder: () => void;
+  onNewFile: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -163,7 +167,34 @@ function FileContextMenu({
     };
   }, [menu.visible, onClose]);
 
-  if (!menu.visible || !menu.entry) return null;
+  if (!menu.visible) return null;
+
+  // Background click (no entry) — show create actions only
+  if (!menu.entry) {
+    return (
+      <div
+        ref={ref}
+        className="file-context-menu show"
+        style={{ position: 'fixed', top: menu.y, left: menu.x, zIndex: 1000 }}
+      >
+        <div className="file-context-menu-item" onClick={() => { onNewFolder(); onClose(); }}>
+          <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+          </svg>
+          New Folder
+        </div>
+        <div className="file-context-menu-item" onClick={() => { onNewFile(); onClose(); }}>
+          <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/>
+            <line x1="12" y1="18" x2="12" y2="12"/>
+            <line x1="9" y1="15" x2="15" y2="15"/>
+          </svg>
+          New File
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -192,6 +223,20 @@ function FileContextMenu({
           <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
         </svg>
         Copy Path
+      </div>
+      <div className="file-context-menu-divider" />
+      <div className="file-context-menu-item" onClick={() => { onNewFolder(); onClose(); }}>
+        <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
+        </svg>
+        New Folder
+      </div>
+      <div className="file-context-menu-item" onClick={() => { onNewFile(); onClose(); }}>
+        <svg fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+        </svg>
+        New File
       </div>
       <div className="file-context-menu-divider" />
       <div className="file-context-menu-item" onClick={() => { onRename(); onClose(); }}>
@@ -268,6 +313,8 @@ export default function FileBrowser() {
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [renamingName, setRenamingName] = useState<string | null>(null);
+  /** 'folder' | 'file' when inline-creating, null otherwise */
+  const [creatingType, setCreatingType] = useState<'folder' | 'file' | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false, x: 0, y: 0, entry: null, fullPath: '',
   });
@@ -454,42 +501,57 @@ export default function FileBrowser() {
     }
   }, [renamingName, currentPath, execTool, loadDirectory]);
 
-  const handleDelete = useCallback(async () => {
+  const [pendingDelete, setPendingDelete] = useState<{ name: string; path: string } | null>(null);
+
+  const handleDelete = useCallback(() => {
     if (!contextMenu.entry) return;
-    const fp = contextMenu.fullPath;
-    const ok = confirm(`Delete "${contextMenu.entry.name}"?`);
-    if (!ok) return;
-    try {
-      await execTool('delete_file', { path: fp });
-      loadDirectory(currentPath);
-    } catch (e) {
-      alert('Delete failed: ' + (e as Error).message);
-    }
-  }, [contextMenu, currentPath, execTool, loadDirectory]);
+    setPendingDelete({ name: contextMenu.entry.name, path: contextMenu.fullPath });
+  }, [contextMenu]);
 
-  const handleNewFolder = useCallback(async () => {
-    const name = prompt('New folder name:');
-    if (!name?.trim()) return;
-    const path = `${currentPath}/${name.trim()}`.replace(/\/+/g, '/');
+  const confirmDelete = useCallback(async () => {
+    if (!pendingDelete) return;
     try {
-      await execTool('create_directory', { path });
+      await execTool('delete_file', { path: pendingDelete.path });
       loadDirectory(currentPath);
-    } catch (e) {
-      alert('Create folder failed: ' + (e as Error).message);
-    }
-  }, [currentPath, execTool, loadDirectory]);
+    } catch { /* ignore */ }
+    setPendingDelete(null);
+  }, [pendingDelete, execTool, loadDirectory, currentPath]);
 
-  const handleNewFile = useCallback(async () => {
-    const name = prompt('New file name:');
-    if (!name?.trim()) return;
-    const path = `${currentPath}/${name.trim()}`.replace(/\/+/g, '/');
+  const handleNewFolder = useCallback(() => {
+    setCreatingType('folder');
+    setSelectedName(null);
+  }, []);
+
+  const handleNewFile = useCallback(() => {
+    setCreatingType('file');
+    setSelectedName(null);
+  }, []);
+
+  const handleConfirmCreate = useCallback(async (name: string) => {
+    if (!name || !creatingType) { setCreatingType(null); return; }
+    const fp = `${currentPath}/${name}`.replace(/\/+/g, '/');
     try {
-      await execTool('write_file', { path, content: '' });
+      if (creatingType === 'folder') {
+        await execTool('create_directory', { path: fp });
+      } else {
+        await execTool('write_file', { path: fp, content: '' });
+      }
+      setCreatingType(null);
       loadDirectory(currentPath);
-    } catch (e) {
-      alert('Create file failed: ' + (e as Error).message);
+    } catch {
+      setCreatingType(null);
     }
-  }, [currentPath, execTool, loadDirectory]);
+  }, [creatingType, currentPath, execTool, loadDirectory]);
+
+  /** Right-click on empty area in the content panel */
+  const handleBgContextMenu = useCallback((e: React.MouseEvent) => {
+    // Only trigger if clicking the background, not a row
+    if ((e.target as HTMLElement).closest('.fb-row')) return;
+    e.preventDefault();
+    setContextMenu({
+      visible: true, x: e.clientX, y: e.clientY, entry: null, fullPath: '',
+    });
+  }, []);
 
   // ─── Keyboard shortcuts ───
 
@@ -633,7 +695,7 @@ export default function FileBrowser() {
       </div>
 
       {/* Content */}
-      <div className="file-browser-content">
+      <div className="file-browser-content" onContextMenu={handleBgContextMenu}>
         {loading && (
           <div className="file-browser-empty"><p>Loading...</p></div>
         )}
@@ -645,12 +707,28 @@ export default function FileBrowser() {
             <p>{error}</p>
           </div>
         )}
-        {!loading && !error && displayEntries.length === 0 && (
+        {!loading && !error && displayEntries.length === 0 && !creatingType && (
           <div className="file-browser-empty">
             <svg fill="none" stroke="currentColor" strokeWidth="1.5" viewBox="0 0 24 24" width="48" height="48">
               <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
             </svg>
             <p>{searchQuery ? 'No matches' : 'Empty folder'}</p>
+          </div>
+        )}
+        {/* Inline create row */}
+        {creatingType && (
+          <div className="fb-row creating">
+            <div className="fb-col fb-col-name">
+              <FileIcon name={creatingType === 'folder' ? '.' : 'untitled'} type={creatingType === 'folder' ? 'directory' : 'file'} />
+              <InlineRenameInput
+                initialValue={creatingType === 'folder' ? 'New Folder' : 'untitled.txt'}
+                onConfirm={handleConfirmCreate}
+                onCancel={() => setCreatingType(null)}
+              />
+            </div>
+            <div className="fb-col fb-col-size">--</div>
+            <div className="fb-col fb-col-type">{creatingType === 'folder' ? 'Folder' : 'File'}</div>
+            <div className="fb-col fb-col-date">--</div>
           </div>
         )}
         {!loading && !error && displayEntries.map((entry) => {
@@ -722,7 +800,22 @@ export default function FileBrowser() {
         onRename={handleStartRename}
         onDelete={handleDelete}
         onRevealInFinder={handleRevealInFinder}
+        onNewFolder={handleNewFolder}
+        onNewFile={handleNewFile}
       />
+
+      {/* Delete confirmation */}
+      {pendingDelete && (
+        <div className="fb-confirm-overlay">
+          <div className="fb-confirm-dialog">
+            <p>Delete &ldquo;{pendingDelete.name}&rdquo;?</p>
+            <div className="fb-confirm-actions">
+              <button onClick={() => setPendingDelete(null)}>Cancel</button>
+              <button className="danger" onClick={confirmDelete}>Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

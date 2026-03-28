@@ -493,6 +493,10 @@ class ExternalToolManager:
             del self.servers[name]
         if name in self.server_configs:
             del self.server_configs[name]
+        # Also remove from tools cache so it doesn't reappear after restart
+        if name in self._tools_cache:
+            del self._tools_cache[name]
+            self._save_tools_cache()
         self.save_config()
 
     def get_all_tools(self) -> List[Dict[str, Any]]:

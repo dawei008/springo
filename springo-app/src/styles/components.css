@@ -5602,6 +5602,69 @@
             margin: 4px 0;
         }
 
+        /* Inline create row */
+        .fb-row.creating {
+            background: var(--accent-light);
+            border-bottom: 1px solid var(--accent);
+        }
+
+        /* Delete confirmation dialog */
+        .fb-confirm-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.3);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+
+        .fb-confirm-dialog {
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+            min-width: 220px;
+            text-align: center;
+        }
+
+        .fb-confirm-dialog p {
+            font-size: 13px;
+            margin: 0 0 16px 0;
+            color: var(--text-primary);
+        }
+
+        .fb-confirm-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+
+        .fb-confirm-actions button {
+            padding: 6px 16px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
+        .fb-confirm-actions button:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .fb-confirm-actions button.danger {
+            background: var(--error);
+            color: white;
+            border-color: var(--error);
+        }
+
+        .fb-confirm-actions button.danger:hover {
+            opacity: 0.9;
+        }
+
         .file-context-menu-item .chat-title {
             flex: 1;
             overflow: hidden;
