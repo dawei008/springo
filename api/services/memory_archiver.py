@@ -18,21 +18,53 @@ logger = logging.getLogger(__name__)
 # Archive watermark state file (per-session)
 ARCHIVE_STATE_FILE = ".archive_state.json"
 
-# Prompt for session journal extraction
-_SESSION_EXTRACT_PROMPT = """You are a session journal writer. A user session has ended. Your job is to write a **detailed session journal** capturing what happened, what was decided, and what was learned.
+# Memory types for categorized extraction
+MEMORY_TYPES = ("user", "feedback", "project", "reference")
+
+# Prompt for session journal extraction (with typed memory categorization)
+_SESSION_EXTRACT_PROMPT = """You are a session journal writer. A user session has ended. Your job is to write a **detailed session journal** capturing what happened, and to extract **categorized memories** for future recall.
 
 Rules:
 - If the session contains only greetings or trivial chitchat, respond with exactly: NOTHING_TO_REMEMBER
-- Otherwise, write a detailed Markdown journal entry covering:
+- Otherwise, produce TWO sections:
+
+## Session Journal
+
+Write a detailed Markdown journal covering:
   - **What was done**: tasks attempted, tools used, commands run (include actual commands/code snippets)
   - **Key decisions**: why certain approaches were chosen over others
   - **Outcomes**: what worked, what failed, error messages encountered
-  - **User preferences**: any stated or implied preferences
   - **Open items**: unfinished tasks, next steps, blockers
 - Use Markdown headers (###), bullet lists, and fenced code blocks for commands/code
 - Include specific file paths, URLs, model names, config values — concrete details matter
-- Do NOT over-summarize — preserve enough context so a future reader can understand what happened without re-reading the original conversation
-- Aim for 1000-3000 words depending on session complexity
+
+## Categorized Memories
+
+Extract durable facts into these 4 categories. Use the exact format below. Only include categories that have content.
+
+### [user]
+User's role, goals, expertise, preferences, and knowledge. Things that help tailor future interactions.
+- Each fact as a bullet point
+
+### [feedback]
+User corrections ("don't do X"), confirmations ("yes, keep doing that"), and approach guidance.
+For each item, include **Why:** (the reason) and **How to apply:** (when this applies).
+- Correction or confirmation — **Why:** reason — **How to apply:** guidance
+
+### [project]
+Key decisions, architecture choices, ongoing work context, deadlines — things not derivable from code alone.
+For each item, include **Why:** (motivation) and **How to apply:** (how it shapes future work).
+- Decision or fact — **Why:** reason — **How to apply:** guidance
+
+### [reference]
+Pointers to external resources: URLs, dashboard links, ticket trackers, API endpoints, credentials references.
+- Resource description → location/URL
+
+**Important:**
+- Do NOT save code patterns, file paths, or git history (derivable from code)
+- Do NOT save ephemeral task details or debugging steps (one-time fixes)
+- DO save user preferences, corrections, architectural decisions, and external references
+- Aim for 5-15 categorized memory items depending on session richness
 
 Session messages:
 {messages_text}"""
@@ -284,14 +316,30 @@ DISTILL_COOLDOWN_HOURS = 6
 
 _DISTILL_PROMPT = """You are a memory curator. Below are daily memory logs from recent sessions and the current long-term memory file.
 
-Your job: produce an updated MEMORY.md that captures all **durable** facts worth remembering across sessions.
+Your job: produce an updated MEMORY.md organized by **memory type** that captures all durable facts worth remembering across sessions.
 
 Rules:
-- Keep: user preferences, project architecture, coding conventions, recurring decisions, key technical choices
+- Organize into exactly these 4 sections (omit empty sections):
+
+  ## User
+  User's role, expertise, goals, preferences, communication style.
+
+  ## Feedback
+  User corrections, confirmations, and approach guidance. Each item should include the rule, why it matters, and when to apply it. These are critical — never drop feedback items unless explicitly contradicted by newer feedback.
+
+  ## Project
+  Key architectural decisions, ongoing initiatives, deadlines, technical choices not derivable from code. Include why and how to apply.
+
+  ## Reference
+  External resources: URLs, dashboards, ticket trackers, API endpoints, credential references.
+
+- Keep: user preferences, corrections/confirmations, project decisions, external references
 - Remove: ephemeral task details, timestamps, session-specific debugging notes, one-off fixes
-- Merge new insights from daily logs into existing long-term memory (don't lose existing facts unless outdated or contradicted)
-- Organize with ## headers by topic (e.g., Preferences, Project, Decisions, Technical)
-- Keep total output under 2000 characters — be concise
+- Remove: code patterns, file paths, git history (derivable from current code)
+- Merge new insights from daily logs into existing long-term memory
+- Don't lose existing facts unless outdated or explicitly contradicted
+- Feedback items have highest retention priority — never silently drop them
+- Keep total output under 3000 characters — be concise but thorough
 - Use Markdown bullet lists
 - If daily logs contain nothing new worth adding, return the existing MEMORY.md unchanged
 - Output ONLY the MEMORY.md content, no explanations
@@ -396,8 +444,8 @@ async def distill_longterm_memory() -> Dict[str, Any]:
         if not response_text or not response_text.strip():
             return {"distilled": False, "reason": "empty_response"}
 
-        # Write distilled content to MEMORY.md (overwrite, hard cap 2000 chars)
-        distilled = response_text.strip()[:2000]
+        # Write distilled content to MEMORY.md (overwrite, hard cap 3000 chars)
+        distilled = response_text.strip()[:3000]
         mgr.write_longterm(distilled)
         logger.info(f"[Distill] MEMORY.md updated ({len(response_text)} chars)")
 

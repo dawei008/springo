@@ -282,12 +282,19 @@ def memory_search(query: str, scope: str = "auto", max_results: int = 10, days: 
     }
 
 
-def memory_write(target: str, content: str) -> Dict[str, Any]:
+# Valid memory types for categorized entries
+VALID_MEMORY_TYPES = ("user", "feedback", "project", "reference")
+
+
+def memory_write(target: str, content: str, memory_type: str = None) -> Dict[str, Any]:
     """Write content to memory files.
 
     Args:
         target: Where to write — "daily" (append to today's log) or "longterm" (overwrite MEMORY.md)
         content: Content to write (Markdown text)
+        memory_type: Optional category tag — "user", "feedback", "project", or "reference".
+                     When provided, the entry is prefixed with a type tag for better
+                     distillation into typed MEMORY.md sections.
 
     Returns:
         Dict with success status and file path
@@ -301,11 +308,20 @@ def memory_write(target: str, content: str) -> Dict[str, Any]:
 
     target = target.strip().lower()
 
+    # Validate and apply memory_type tag
+    if memory_type:
+        memory_type = memory_type.strip().lower()
+        if memory_type not in VALID_MEMORY_TYPES:
+            return {"error": f"Invalid memory_type '{memory_type}'. Use one of: {', '.join(VALID_MEMORY_TYPES)}", "target": target}
+        # Prefix content with type tag for downstream distillation
+        content = f"[{memory_type}] {content}"
+
     if target == "daily":
         try:
             path = mgr.append_daily(content)
             rel_path = os.path.relpath(path, mgr.workspace_dir)
-            return {"success": True, "target": "daily", "path": rel_path, "chars": len(content)}
+            return {"success": True, "target": "daily", "path": rel_path, "chars": len(content),
+                    "memory_type": memory_type}
         except Exception as e:
             return {"error": str(e), "target": "daily"}
 
@@ -319,7 +335,8 @@ def memory_write(target: str, content: str) -> Dict[str, Any]:
                 updated = content
             path = mgr.write_longterm(updated)
             rel_path = os.path.relpath(path, mgr.workspace_dir)
-            return {"success": True, "target": "longterm", "path": rel_path, "chars": len(updated)}
+            return {"success": True, "target": "longterm", "path": rel_path, "chars": len(updated),
+                    "memory_type": memory_type}
         except Exception as e:
             return {"error": str(e), "target": "longterm"}
 

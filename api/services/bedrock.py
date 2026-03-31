@@ -656,14 +656,45 @@ class BedrockService:
                 f"  - Project files: `path: \"{working_dir}\"`\n"
                 f"  - Skills/config: `path: \"{springo_config_dir}\"`\n"
             )
-        # Inject personal memory (MEMORY.md + recent daily logs)
+        # Inject personal memory (MEMORY.md + recent daily logs + per-turn relevant snippets)
         try:
-            from .memory_files import get_memory_file_manager
+            from .memory_files import get_memory_file_manager, find_relevant_memory_snippets
             mem_mgr = get_memory_file_manager()
             if mem_mgr:
                 memory_context = mem_mgr.get_context_for_prompt()
                 if memory_context:
                     system_prompt += "\n" + memory_context
+
+                # Per-turn dynamic memory retrieval: find snippets relevant to current message
+                messages_list = bedrock_body.get("messages", [])
+                if messages_list:
+                    last_user_text = ""
+                    for msg in reversed(messages_list):
+                        if msg.get("role") == "user":
+                            content = msg.get("content", "")
+                            if isinstance(content, str):
+                                last_user_text = content
+                            elif isinstance(content, list):
+                                last_user_text = " ".join(
+                                    b.get("text", "") for b in content
+                                    if isinstance(b, dict) and b.get("type") == "text"
+                                )
+                            break
+                    if last_user_text:
+                        relevant = find_relevant_memory_snippets(
+                            query=last_user_text,
+                            manager=mem_mgr,
+                            max_snippets=3,
+                            max_chars_per_snippet=400,
+                            days=mem_mgr.retention_days,
+                        )
+                        if relevant:
+                            system_prompt += (
+                                "\n\n## Relevant Past Context\n"
+                                "The following memory snippets were matched to the current message. "
+                                "Use them if relevant, but verify before acting on older entries.\n\n"
+                                + relevant
+                            )
         except Exception as e:
             logger.debug(f"Memory injection skipped: {e}")
         if api_format == "anthropic":
