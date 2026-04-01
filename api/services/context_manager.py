@@ -1366,6 +1366,21 @@ def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, An
             repaired.append({"role": "user", "content": merged})
             logger.info(f"Merged {len(dummy_results)} dummy tool_results into string user msg[{i}]")
             pending_orphans = []
+        elif role == "assistant" and pending_orphans:
+            # Consecutive assistant messages with pending orphan tool_uses from previous assistant.
+            # Insert a synthetic user message with dummy tool_results BEFORE this assistant message.
+            dummy_results = []
+            for tool_id, tool_name in pending_orphans:
+                dummy_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_id,
+                    "content": f"[Tool execution interrupted - {tool_name} result lost during context compaction]",
+                    "is_error": True,
+                })
+            repaired.append({"role": "user", "content": dummy_results})
+            logger.info(f"Inserted synthetic user msg with {len(dummy_results)} dummy tool_results before assistant msg[{i}]")
+            pending_orphans = []
+            repaired.append(msg)
         else:
             repaired.append(msg)
 
