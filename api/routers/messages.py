@@ -323,6 +323,9 @@ async def messages_auto_api(
                             meta["title"] = title or "New Chat"
 
                         meta["tokens"] = count_messages_tokens(msgs)
+                        # Persist working_dir so session can be restored with correct directory
+                        if working_dir:
+                            meta["working_dir"] = working_dir
                         if extra_meta:
                             meta.update(extra_meta)
 
@@ -460,10 +463,13 @@ async def messages_auto_api(
                         # Save compacted messages (with sync reset + memory re-queue)
                         try:
                             store = get_session_store()
-                            store.save_session_complete(session_id, messages, metadata={
+                            _compact_meta = {
                                 'compacted': True,
                                 'tokens': count_messages_tokens(messages),
-                            })
+                            }
+                            if working_dir:
+                                _compact_meta['working_dir'] = working_dir
+                            store.save_session_complete(session_id, messages, metadata=_compact_meta)
                             # Reset saved count — compaction rewrote the file
                             _saved_msg_count = len(messages)
                             logger.info(f"Session {session_id} persisted with compacted messages (sync reset)")
