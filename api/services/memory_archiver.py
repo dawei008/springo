@@ -57,13 +57,15 @@ For each item, include **Why:** (motivation) and **How to apply:** (how it shape
 - Decision or fact — **Why:** reason — **How to apply:** guidance
 
 ### [reference]
-Pointers to external resources: URLs, dashboard links, ticket trackers, API endpoints, credentials references.
-- Resource description → location/URL
+Pointers to external resources: URLs, dashboard links, ticket trackers, API endpoints, credentials, account info.
+- Resource description → location/URL/value
 
 **Important:**
 - Do NOT save code patterns, file paths, or git history (derivable from code)
 - Do NOT save ephemeral task details or debugging steps (one-time fixes)
 - DO save user preferences, corrections, architectural decisions, and external references
+- DO save account credentials, API keys, app IDs, secrets, tokens, and service configurations mentioned by the user or discovered during the session (e.g. "WeChat AppID: wx123...", "API key for service X: abc...")
+- DO save account names, usernames, profile names on platforms (e.g. "WeChat Official Account: 大卫AI")
 - Aim for 5-15 categorized memory items depending on session richness
 
 Session messages:
@@ -331,15 +333,16 @@ Rules:
   Key architectural decisions, ongoing initiatives, deadlines, technical choices not derivable from code. Include why and how to apply.
 
   ## Reference
-  External resources: URLs, dashboards, ticket trackers, API endpoints, credential references.
+  External resources: URLs, dashboards, ticket trackers, API endpoints, credentials (API keys, app IDs, secrets, tokens), account names/usernames on platforms.
 
 - Keep: user preferences, corrections/confirmations, project decisions, external references
+- Keep: account credentials, API keys, app IDs/secrets, service configurations, platform usernames
 - Remove: ephemeral task details, timestamps, session-specific debugging notes, one-off fixes
 - Remove: code patterns, file paths, git history (derivable from current code)
 - Merge new insights from daily logs into existing long-term memory
 - Don't lose existing facts unless outdated or explicitly contradicted
 - Feedback items have highest retention priority — never silently drop them
-- Keep total output under 3000 characters — be concise but thorough
+- Keep total output under 5000 characters — be concise but thorough
 - Use Markdown bullet lists
 - If daily logs contain nothing new worth adding, return the existing MEMORY.md unchanged
 - Output ONLY the MEMORY.md content, no explanations
@@ -444,8 +447,8 @@ async def distill_longterm_memory() -> Dict[str, Any]:
         if not response_text or not response_text.strip():
             return {"distilled": False, "reason": "empty_response"}
 
-        # Write distilled content to MEMORY.md (overwrite, hard cap 3000 chars)
-        distilled = response_text.strip()[:3000]
+        # Write distilled content to MEMORY.md (overwrite, hard cap 5000 chars)
+        distilled = response_text.strip()[:5000]
         mgr.write_longterm(distilled)
         logger.info(f"[Distill] MEMORY.md updated ({len(response_text)} chars)")
 
