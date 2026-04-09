@@ -38,6 +38,34 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+
+def _build_tool_result_content(tool_name: str, result: dict) -> Any:
+    """Build tool_result content, handling special cases like computer screenshots.
+
+    For computer use tool results containing screenshots, returns a list of
+    content blocks (image + optional text). For all other tools, returns a
+    JSON string as before.
+    """
+    if tool_name == "computer" and isinstance(result, dict) and result.get("type") == "computer_screenshot":
+        # Build image content block for Anthropic API
+        image_data = result.get("image", {})
+        content_blocks = [
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image_data.get("media_type", "image/jpeg"),
+                    "data": image_data.get("data", ""),
+                },
+            }
+        ]
+        return content_blocks
+
+    # Default: serialize to string
+    if isinstance(result, dict):
+        return json.dumps(result)
+    return str(result)
+
 # ── Session cancellation registry ──
 # Maps session_id → asyncio.Event.  When set(), the streaming loop breaks.
 _cancel_events: Dict[str, asyncio.Event] = {}
@@ -746,22 +774,24 @@ async def messages_auto_api(
                                 yield SSEEventBuilder.tool_result(
                                     tool["id"], tool["name"], result, is_error, elapsed
                                 )
-                                result_str = json.dumps(result) if isinstance(result, dict) else str(result)
-                                if session_id and len(result_str.encode('utf-8')) > MAX_INLINE_OUTPUT_SIZE:
-                                    saved = save_tool_result(session_id, tool["id"], result_str, tool["name"])
-                                    if not saved.get("inline"):
-                                        logger.info(f"Large tool result saved to file: {tool['name']} ({saved['size']:,} bytes)")
-                                        result_str = json.dumps({
-                                            "result_truncated": True,
-                                            "file_path": saved.get("file_path"),
-                                            "size": saved["size"],
-                                            "preview": saved.get("preview", result_str[:500]),
-                                            "message": f"Result saved to file ({saved['size']:,} bytes).",
-                                        })
+                                content = _build_tool_result_content(tool["name"], result)
+                                if isinstance(content, str):
+                                    # Standard text result — apply large-result truncation
+                                    if session_id and len(content.encode('utf-8')) > MAX_INLINE_OUTPUT_SIZE:
+                                        saved = save_tool_result(session_id, tool["id"], content, tool["name"])
+                                        if not saved.get("inline"):
+                                            logger.info(f"Large tool result saved to file: {tool['name']} ({saved['size']:,} bytes)")
+                                            content = json.dumps({
+                                                "result_truncated": True,
+                                                "file_path": saved.get("file_path"),
+                                                "size": saved["size"],
+                                                "preview": saved.get("preview", content[:500]),
+                                                "message": f"Result saved to file ({saved['size']:,} bytes).",
+                                            })
                                 tool_results.append({
                                     "type": "tool_result",
                                     "tool_use_id": tool["id"],
-                                    "content": result_str,
+                                    "content": content,
                                     "is_error": is_error,
                                 })
                         if _cancelled_tools:
@@ -840,22 +870,23 @@ async def messages_auto_api(
                             logger.info(f"Tool executed: {tool['name']} in {elapsed:.2f}s, error={is_error}")
                             yield SSEEventBuilder.tool_result(tool["id"], tool["name"], result, is_error, elapsed)
 
-                            result_str = json.dumps(result) if isinstance(result, dict) else str(result)
-                            if session_id and len(result_str.encode('utf-8')) > MAX_INLINE_OUTPUT_SIZE:
-                                saved = save_tool_result(session_id, tool["id"], result_str, tool["name"])
-                                if not saved.get("inline"):
-                                    logger.info(f"Large tool result saved to file: {tool['name']} ({saved['size']:,} bytes)")
-                                    result_str = json.dumps({
-                                        "result_truncated": True,
-                                        "file_path": saved.get("file_path"),
-                                        "size": saved["size"],
-                                        "preview": saved.get("preview", result_str[:500]),
-                                        "message": f"Result saved to file ({saved['size']:,} bytes).",
-                                    })
+                            content = _build_tool_result_content(tool["name"], result)
+                            if isinstance(content, str):
+                                if session_id and len(content.encode('utf-8')) > MAX_INLINE_OUTPUT_SIZE:
+                                    saved = save_tool_result(session_id, tool["id"], content, tool["name"])
+                                    if not saved.get("inline"):
+                                        logger.info(f"Large tool result saved to file: {tool['name']} ({saved['size']:,} bytes)")
+                                        content = json.dumps({
+                                            "result_truncated": True,
+                                            "file_path": saved.get("file_path"),
+                                            "size": saved["size"],
+                                            "preview": saved.get("preview", content[:500]),
+                                            "message": f"Result saved to file ({saved['size']:,} bytes).",
+                                        })
                             tool_results.append({
                                 "type": "tool_result",
                                 "tool_use_id": tool["id"],
-                                "content": result_str,
+                                "content": content,
                                 "is_error": is_error,
                             })
 

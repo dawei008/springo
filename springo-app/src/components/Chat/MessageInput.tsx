@@ -109,6 +109,7 @@ export default function MessageInput() {
   const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
   const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
   const activeTeamId = useUIStore((s) => s.activeTeamId);
+  const queueItems = useUIStore((s) => s.queueItems);
 
   // Token usage tracking
   const sessionUsage = useChatStore((s) =>
@@ -344,6 +345,23 @@ export default function MessageInput() {
         await api.teams.message(activeTeamId, { content, sender: 'user' });
       } catch (e) {
         useUIStore.getState().showToast('Failed to send message to team', 'error');
+      }
+      return;
+    }
+
+    // Queue: if streaming (and not team), enqueue instead of blocking
+    if (isStreaming && !activeTeamId && content) {
+      const atts = attachments.map((a) => ({
+        type: a.type,
+        data: a.data,
+        name: a.name,
+        path: a.path,
+      }));
+      useUIStore.getState().enqueueItem(content, atts);
+      setText('');
+      setAttachments([]);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
       }
       return;
     }
@@ -626,6 +644,32 @@ export default function MessageInput() {
     useUIStore.getState().cycleTeamMode();
   }, []);
 
+  // Queue auto-processing: when streaming ends and queue has items, send next
+  const prevStreamingRef = useRef(isStreaming);
+  useEffect(() => {
+    const wasStreaming = prevStreamingRef.current;
+    prevStreamingRef.current = isStreaming;
+
+    // Transition: streaming → not streaming
+    if (wasStreaming && !isStreaming) {
+      const next = useUIStore.getState().dequeueItem();
+      if (next && currentSessionId) {
+        // Small delay to let backend finalize
+        setTimeout(() => {
+          const currentSettings = useSettingsStore.getState().settings;
+          useChatStore.getState().sendMessage(currentSessionId, next.content, next.attachments, {
+            model: currentSettings.model,
+            maxTokens: currentSettings.maxTokens,
+            temperature: currentSettings.temperature,
+            systemPrompt: currentSettings.systemPrompt,
+            compactModel: currentSettings.compactModel,
+            sessionId: currentSessionId,
+          });
+        }, 500);
+      }
+    }
+  }, [isStreaming, currentSessionId]);
+
   // Render context breakdown data into HTML (matching legacy renderContextBreakdown)
   const renderContextBreakdown = useCallback((data: Record<string, unknown>) => {
     const breakdown = data.breakdown as Record<string, { count: number; tokens: number; percent: number }>;
@@ -742,7 +786,7 @@ export default function MessageInput() {
     ? getFilteredSkillItems(text.substring(1).toLowerCase())
     : [];
 
-  const canSend = (text.trim() || attachments.length > 0) && (!isStreaming || !!activeTeamId);
+  const canSend = (text.trim() || attachments.length > 0) && !isStreaming;
 
   // Determine context indicator class
   const contextIndicatorClass =
@@ -772,6 +816,33 @@ export default function MessageInput() {
           <button className="skill-clear" onClick={() => useUIStore.getState().clearActiveSkill()}>
             &times;
           </button>
+        </div>
+      )}
+
+      {/* Queue widget */}
+      {queueItems.length > 0 && (
+        <div className="queue-widget">
+          <div className="queue-widget-header">
+            <span className="queue-widget-title">Queue ({queueItems.length})</span>
+            <button className="queue-widget-clear" onClick={() => useUIStore.getState().clearQueue()}>
+              Clear
+            </button>
+          </div>
+          <div className="queue-widget-list">
+            {queueItems.map((item) => (
+              <div key={item.id} className="queue-widget-item">
+                <span className="queue-widget-item-text">
+                  {item.content.length > 80 ? item.content.slice(0, 80) + '...' : item.content}
+                </span>
+                <button
+                  className="queue-widget-item-remove"
+                  onClick={() => useUIStore.getState().removeQueueItem(item.id)}
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -869,11 +940,15 @@ export default function MessageInput() {
             placeholder={
               activeSkill
                 ? `Using /${activeSkill.name} skill - Enter your request...`
-                : teamCollaborativeMode
-                  ? 'Team Collaborative Mode - agents work together...'
-                  : teamModeEnabled
-                    ? 'Team Mode - multi-agent collaboration...'
-                    : 'Message Springo... (/ for skills)'
+                : isStreaming && !activeTeamId
+                  ? queueItems.length > 0
+                    ? `Type to add to queue (${queueItems.length} queued)...`
+                    : 'Type to queue next message...'
+                  : teamCollaborativeMode
+                    ? 'Team Collaborative Mode - agents work together...'
+                    : teamModeEnabled
+                      ? 'Team Mode - multi-agent collaboration...'
+                      : 'Message Springo... (/ for skills)'
             }
             rows={1}
             value={text}
@@ -883,56 +958,38 @@ export default function MessageInput() {
             onPaste={handlePaste}
           />
 
-          <button
-            id="team-toggle"
-            className={`team-toggle-btn${teamModeEnabled ? ' active' : ''}${teamCollaborativeMode ? ' collab' : ''}`}
-            onClick={toggleTeamMode}
-            title={
-              teamCollaborativeMode
-                ? 'Collaborative Mode (click to disable)'
-                : teamModeEnabled
-                  ? 'Classic Team Mode (click for collaborative)'
-                  : 'Team Mode - multi-agent collaboration'
-            }
-          >
-            <svg
-              width="18"
-              height="18"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          {isStreaming && !activeTeamId ? (
+            <>
+              <button
+                id="stop-btn"
+                onClick={handleStop}
+                title="Stop (Esc)"
+              >
+                <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+              <button
+                id="queue-btn"
+                className="queue-btn"
+                onClick={handleSend}
+                disabled={!text.trim() && attachments.length === 0}
+                title={queueItems.length > 0 ? `${queueItems.length} in queue` : 'Add to queue — runs after current task'}
+              >
+                {'\u21B3'} Queue{queueItems.length > 0 ? ` (${queueItems.length})` : ''}
+              </button>
+            </>
+          ) : (
+            <button
+              id="send-btn"
+              onClick={handleSend}
+              disabled={!canSend}
             >
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-          </button>
-
-          <button
-            id="send-btn"
-            onClick={handleSend}
-            disabled={!canSend}
-            style={{ display: (isStreaming && !activeTeamId) ? 'none' : 'flex' }}
-          >
-            <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M5 12l5-5 5 5" />
-            </svg>
-          </button>
-
-          <button
-            id="stop-btn"
-            onClick={handleStop}
-            title="Stop (Esc)"
-            style={{ display: (isStreaming && !activeTeamId) ? 'flex' : 'none' }}
-          >
-            <svg width="16" height="16" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="6" width="12" height="12" rx="2" />
-            </svg>
-          </button>
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M5 12l5-5 5 5" />
+              </svg>
+            </button>
+          )}
         </div>
 
         {/* Bottom status row */}

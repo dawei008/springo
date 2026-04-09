@@ -8,6 +8,7 @@
     "dev:electron": "vite build && electron .",
     "build:renderer": "vite build",
     "start": "electron .",
+    "restart": "pkill -f 'electron \\.' 2>/dev/null; sleep 1; electron .",
     "test": "playwright test",
     "test:unit": "vitest run",
     "test:headed": "playwright test --headed",

@@ -391,7 +391,11 @@ function FileArtifactCard({ filePath, timestamp }: { filePath: string; timestamp
     try {
       const result = await window.electronAPI.readFileBase64(filePath);
       if (!result.success || !result.data) return;
-      const content = atob(result.data);
+      // Decode base64 → binary → UTF-8 (atob alone mangles multi-byte chars like Chinese)
+      const binary = atob(result.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const content = new TextDecoder('utf-8').decode(bytes);
       let finalContent = content;
       if (type === 'markdown' && ext !== '.md' && ext !== '.markdown' && ext !== '.mdx' && ext !== '.txt') {
         finalContent = '```' + ext.replace('.', '') + '\n' + content + '\n```';

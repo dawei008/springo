@@ -716,7 +716,8 @@
         }
 
         .right-panel-section.active {
-            display: block;
+            display: flex;
+            flex-direction: column;
         }
 
         .panel-placeholder {
@@ -2930,7 +2931,7 @@
             background: var(--error);
             color: white;
             cursor: pointer;
-            display: none;
+            display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
@@ -6441,45 +6442,180 @@
     word-break: break-word;
 }
 
-/* ============ Team Toggle Button ============ */
+/* ============ Queue Button ============ */
 
-.team-toggle-btn {
-    width: 32px;
+.queue-btn {
     height: 32px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text-tertiary);
+    padding: 0 14px;
+    border: none;
+    border-radius: 10px;
+    background: #d4a574;
+    color: white;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    gap: 2px;
+    transition: background 0.15s ease;
+}
+
+.queue-btn:hover {
+    background: #c4925e;
+}
+
+.queue-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+[data-theme="dark"] .queue-btn {
+    background: #b08050;
+}
+
+[data-theme="dark"] .queue-btn:hover {
+    background: #a07040;
+}
+
+/* ============ Queue Widget ============ */
+
+.queue-widget {
+    background: var(--bg-secondary, #f8f8f8);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin: 0 8px 6px;
+    overflow: hidden;
+}
+
+.queue-widget-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.queue-widget-title {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+.queue-widget-clear {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0 4px;
+}
+
+.queue-widget-clear:hover {
+    color: var(--error, #e74c3c);
+}
+
+.queue-widget-list {
+    max-height: 120px;
+    overflow-y: auto;
+}
+
+.queue-widget-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-bottom: 1px solid var(--border-light, rgba(0,0,0,0.05));
+}
+
+.queue-widget-item:last-child {
+    border-bottom: none;
+}
+
+.queue-widget-item-text {
+    flex: 1;
+    font-size: 12px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queue-widget-item-remove {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-tertiary);
+    font-size: 14px;
+    padding: 0 2px;
+    line-height: 1;
+    flex-shrink: 0;
+}
+
+.queue-widget-item-remove:hover {
+    color: var(--error, #e74c3c);
+}
+
+/* ============ Team Mode Toggle (in TeamPanel) ============ */
+
+.team-mode-toggle-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.team-mode-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.team-mode-toggle-pill {
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: transparent;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 500;
     transition: all 0.2s ease;
 }
 
-.team-toggle-btn:hover {
+.team-mode-toggle-pill.off {
+    color: var(--text-tertiary);
+}
+
+.team-mode-toggle-pill.off:hover {
     color: var(--text-primary);
     border-color: var(--text-secondary);
 }
 
-.team-toggle-btn.active {
+.team-mode-toggle-pill.classic {
     color: #7c3aed;
     border-color: #7c3aed;
     background: rgba(124, 58, 237, 0.1);
 }
 
-.team-toggle-btn.active:hover {
+.team-mode-toggle-pill.classic:hover {
     background: rgba(124, 58, 237, 0.2);
 }
 
-.team-toggle-btn.collab {
+.team-mode-toggle-pill.collab {
     color: var(--success-text);
     border-color: var(--success-text);
     background: rgba(5, 150, 105, 0.1);
 }
 
-.team-toggle-btn.collab:hover {
+.team-mode-toggle-pill.collab:hover {
     background: rgba(5, 150, 105, 0.2);
 }
 

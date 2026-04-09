@@ -107,6 +107,22 @@ _TOOL_BUDGET_RATIO = 0.25
 _TOOL_BUDGET_FLOOR = 20_000
 
 
+def _strip_internal_tool_markers(tools: list) -> list:
+    """Strip internal markers (keys starting with '_') from tool definitions.
+
+    These markers (e.g. _bedrock_tool_type) are used internally by Springo
+    but must not be sent to the Bedrock API.
+    """
+    cleaned = []
+    for tool in tools:
+        if any(k.startswith("_") for k in tool):
+            clean = {k: v for k, v in tool.items() if not k.startswith("_")}
+            cleaned.append(clean)
+        else:
+            cleaned.append(tool)
+    return cleaned
+
+
 def _estimate_tools_tokens(tools: list) -> int:
     """Rough token estimate for a list of tool definitions (~4 chars/token)."""
     import json as _json
@@ -718,6 +734,13 @@ class BedrockService:
                 max_t = get_max_tools(model)
                 if max_t > 0 and len(raw_tools) > max_t:
                     raw_tools = _prioritize_tools(raw_tools, max_t)
+
+                # Strip internal markers from tools (e.g. _bedrock_tool_type)
+                # Computer tool is sent as a regular tool — Bedrock doesn't
+                # support the computer_20250124 beta type.  Screenshots are
+                # returned as image blocks in tool_result instead.
+                raw_tools = _strip_internal_tool_markers(raw_tools)
+
                 if api_format == "anthropic" and raw_tools:
                     # Strip stale cache_control from all tools first — tool dicts
                     # are reused across auto-loop iterations, so previous calls may

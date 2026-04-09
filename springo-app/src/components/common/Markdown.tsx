@@ -42,7 +42,11 @@ async function openFileInArtifactPanel(filePath: string) {
       window.electronAPI?.openPath(filePath);
       return;
     }
-    const content = atob(result.data);
+    // Decode base64 → binary → UTF-8 (atob alone mangles multi-byte chars like Chinese)
+    const binary = atob(result.data);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const content = new TextDecoder('utf-8').decode(bytes);
     const fileName = filePath.split('/').pop() || filePath;
     const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';
 

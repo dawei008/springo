@@ -3,6 +3,7 @@ Context Manager for Springo FastAPI
 Token 计数、上下文统计、自动摘要、结构化信息提取、工具结果文件管理
 """
 
+import copy
 import json
 import os
 import re
@@ -1167,13 +1168,64 @@ def truncate_tool_results(
     return result
 
 
+def _strip_old_images(
+    messages: List[Dict[str, Any]],
+    keep_recent_images: int = 3,
+) -> List[Dict[str, Any]]:
+    """Strip image blocks from older tool_results, keeping only recent ones.
+
+    Bedrock enforces stricter dimension limits for many-image requests
+    (2000px max). To avoid this, we replace older screenshot images with
+    a text placeholder, keeping only the N most recent images.
+
+    Args:
+        messages: Message list (mutated in place for efficiency).
+        keep_recent_images: Number of most recent images to preserve.
+
+    Returns:
+        Messages with old images replaced by text placeholders.
+    """
+    # First pass: find all image positions (msg_idx, block_idx, sub_block_idx)
+    image_positions = []
+    for i, msg in enumerate(messages):
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for j, block in enumerate(content):
+            if block.get("type") != "tool_result":
+                continue
+            rc = block.get("content", "")
+            if not isinstance(rc, list):
+                continue
+            for k, sub in enumerate(rc):
+                if sub.get("type") == "image":
+                    image_positions.append((i, j, k))
+
+    if len(image_positions) <= keep_recent_images:
+        return messages
+
+    # Strip older images (keep the last N)
+    to_strip = image_positions[:-keep_recent_images]
+    result = copy.deepcopy(messages)
+
+    for msg_idx, block_idx, sub_idx in reversed(to_strip):
+        block = result[msg_idx]["content"][block_idx]
+        rc = block["content"]
+        # Replace image block with text placeholder
+        rc[sub_idx] = {
+            "type": "text",
+            "text": "[screenshot removed from history]",
+        }
+
+    return result
+
+
 def prepare_messages_for_api(
     messages: List[Dict[str, Any]],
     keep_recent: int = 3,
 ) -> List[Dict[str, Any]]:
     """
     为 API 调用准备消息：截断旧工具结果，保留最近的完整。
-    截断旧工具结果，保留最近的完整。
 
     Args:
         messages: 消息列表
@@ -1188,14 +1240,17 @@ def prepare_messages_for_api(
     user_msg_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
 
     if len(user_msg_indices) <= keep_recent:
-        return messages
+        # Still need to strip old images even if messages are few
+        return _strip_old_images(messages)
 
     cutoff_idx = user_msg_indices[-keep_recent] if keep_recent > 0 else len(messages)
 
     older = truncate_tool_results(messages[:cutoff_idx])
     recent = messages[cutoff_idx:]
 
-    return older + recent
+    combined = older + recent
+    # Strip old screenshot images to avoid Bedrock many-image limits
+    return _strip_old_images(combined)
 
 
 def repair_orphan_tool_uses(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

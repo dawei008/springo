@@ -39,6 +39,8 @@ from .handlers import (
     memory_search, memory_get, memory_write,
     # ACP agent tools
     acp_prompt, acp_list_agents, acp_new_session,
+    # Computer use
+    computer,
 )
 
 # Skill loader import
@@ -125,6 +127,8 @@ TOOL_HANDLERS = {
     "acp_prompt": acp_prompt,
     "acp_list_agents": acp_list_agents,
     "acp_new_session": acp_new_session,
+    # Computer use
+    "computer": computer,
 }
 
 

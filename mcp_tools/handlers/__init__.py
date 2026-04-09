@@ -96,3 +96,5 @@ from .acp_tools import (
     acp_list_agents,
     acp_new_session,
 )
+
+from .computer_tools import computer

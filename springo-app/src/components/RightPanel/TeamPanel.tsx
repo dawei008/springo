@@ -194,6 +194,46 @@ function TeamMessages({ messages }: { messages: StoreMessage[] }) {
 
 // ─── Main Component ───
 
+function TeamModeToggle() {
+  const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
+  const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
+
+  const cycleTeamMode = useCallback(() => {
+    useUIStore.getState().cycleTeamMode();
+  }, []);
+
+  const modeLabel = teamCollaborativeMode
+    ? 'Collaborative'
+    : teamModeEnabled
+      ? 'Classic'
+      : 'Off';
+
+  const modeClass = teamCollaborativeMode
+    ? 'collab'
+    : teamModeEnabled
+      ? 'classic'
+      : 'off';
+
+  return (
+    <div className="team-mode-toggle-bar">
+      <span className="team-mode-label">Team Mode</span>
+      <button
+        className={`team-mode-toggle-pill ${modeClass}`}
+        onClick={cycleTeamMode}
+        title={
+          teamCollaborativeMode
+            ? 'Collaborative Mode (click to disable)'
+            : teamModeEnabled
+              ? 'Classic Mode (click for collaborative)'
+              : 'Off (click to enable classic mode)'
+        }
+      >
+        <span className="team-mode-pill-text">{modeLabel}</span>
+      </button>
+    </div>
+  );
+}
+
 export default function TeamPanel() {
   const activeTeamId = useTeamStore((s) => s.activeTeamId);
   const teamStatus = useTeamStore((s) => s.teamStatus);
@@ -310,6 +350,7 @@ export default function TeamPanel() {
   if (!activeTeamId) {
     return (
       <div className="team-split-panel">
+        <TeamModeToggle />
         <div className="team-split-placeholder">
           <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.5">
             <path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2" />
@@ -352,6 +393,7 @@ export default function TeamPanel() {
 
   return (
     <div className="team-split-panel">
+      <TeamModeToggle />
       <div className="team-split-content" ref={containerRef}>
         {/* Header */}
         <div className="team-split-header">

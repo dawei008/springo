@@ -450,6 +450,69 @@ Cron format: "minute hour day month weekday"
         }
     },
 
+    # ============ Computer Use Tool ============
+    {
+        "name": "computer",
+        "description": """Control the computer screen, mouse, and keyboard. Take screenshots to see what's on screen, click elements, type text, scroll, and perform other GUI interactions.
+
+**Multi-display:** Use list_displays to see all monitors, switch_display to target a specific one. After switching, all actions target that display.
+
+**Important guidelines:**
+- Always take a screenshot first to see what's on screen before acting.
+- If a floating toolbar or overlay is blocking the target, tell the user to close it manually rather than repeatedly trying to dismiss it.
+- Do NOT loop more than 2-3 times on the same failed action. If stuck, explain the problem and ask the user for help.
+- Coordinates are relative to the active display's screenshot. Use list_displays if unsure which display is active.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "screenshot", "left_click", "right_click", "middle_click",
+                        "double_click", "triple_click", "mouse_move",
+                        "left_click_drag", "key", "type", "scroll",
+                        "cursor_position", "wait",
+                        "list_displays", "switch_display"
+                    ],
+                    "description": "The action to perform. Use list_displays to see all monitors, switch_display to target a specific one."
+                },
+                "coordinate": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "[x, y] position for click/move actions"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Text to type (for 'type') or key combo (for 'key', e.g. 'ctrl+c')"
+                },
+                "duration": {
+                    "type": "integer",
+                    "description": "Duration in seconds (for 'wait' action)"
+                },
+                "scroll_direction": {
+                    "type": "string",
+                    "enum": ["up", "down", "left", "right"],
+                    "description": "Scroll direction"
+                },
+                "scroll_amount": {
+                    "type": "integer",
+                    "description": "Number of scroll steps (default 3)"
+                },
+                "start_coordinate": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "description": "[x, y] start position for drag"
+                },
+                "display": {
+                    "type": "integer",
+                    "description": "Target display index (1-based). Sets active display for this and subsequent calls. Use list_displays to see available monitors."
+                }
+            },
+            "required": ["action"]
+        },
+        # Marker for Bedrock integration: transform to computer_20250124 beta format
+        "_bedrock_tool_type": "computer_20250124",
+    },
     # ============ LSP (Language Server Protocol) Tools ============
     {
         "name": "lsp_go_to_definition",

@@ -20,6 +20,13 @@ export interface ActiveSkill {
 
 export type RightPanelTab = 'tasks' | 'team' | 'schedules' | 'meeting';
 
+export interface QueueItem {
+  id: string;
+  content: string;
+  attachments: Array<{ type: string; data?: string; name?: string; path?: string }>;
+  addedAt: number;
+}
+
 export interface AskUserOption {
   label: string;
   description?: string;
@@ -70,6 +77,10 @@ interface UIState {
   /** Maps sessionId → teamId for sessions that had team executions */
   sessionTeamMap: Record<string, string>;
 
+  // Queue state
+  queueEnabled: boolean;
+  queueItems: QueueItem[];
+
   // Actions
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
@@ -103,6 +114,14 @@ interface UIState {
   closeFileBrowser: () => void;
   setSessionTeam: (sessionId: string, teamId: string) => void;
   getSessionTeam: (sessionId: string) => string | null;
+
+  // Queue actions
+  toggleQueue: () => void;
+  setQueueEnabled: (enabled: boolean) => void;
+  enqueueItem: (content: string, attachments?: QueueItem['attachments']) => void;
+  dequeueItem: () => QueueItem | undefined;
+  removeQueueItem: (id: string) => void;
+  clearQueue: () => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -135,6 +154,8 @@ export const useUIStore = create<UIState>((set, get) => ({
       return {};
     }
   })(),
+  queueEnabled: false,
+  queueItems: [],
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -227,4 +248,25 @@ export const useUIStore = create<UIState>((set, get) => ({
   getSessionTeam: (sessionId) => {
     return get().sessionTeamMap[sessionId] || null;
   },
+
+  // Queue actions
+  toggleQueue: () => set((state) => ({ queueEnabled: !state.queueEnabled })),
+  setQueueEnabled: (enabled) => set({ queueEnabled: enabled }),
+  enqueueItem: (content, attachments = []) =>
+    set((state) => ({
+      queueItems: [
+        ...state.queueItems,
+        { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content, attachments, addedAt: Date.now() },
+      ],
+    })),
+  dequeueItem: () => {
+    const items = get().queueItems;
+    if (items.length === 0) return undefined;
+    const [first, ...rest] = items;
+    set({ queueItems: rest });
+    return first;
+  },
+  removeQueueItem: (id) =>
+    set((state) => ({ queueItems: state.queueItems.filter((item) => item.id !== id) })),
+  clearQueue: () => set({ queueItems: [] }),
 }));
