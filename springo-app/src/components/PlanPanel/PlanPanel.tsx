@@ -15,7 +15,7 @@ import type { PlanSection } from '@/types';
 const STATUS_CONFIG: Record<PlanSection['status'], { icon: string; label: string; cls: string }> = {
   pending:     { icon: '○', label: 'Pending',     cls: 'pending' },
   approved:    { icon: '✓', label: 'Approved',    cls: 'approved' },
-  rejected:    { icon: '✗', label: 'Rejected',    cls: 'rejected' },
+  rejected:    { icon: '—', label: 'Skipped',     cls: 'rejected' },
   in_progress: { icon: '◎', label: 'Running',     cls: 'running' },
   completed:   { icon: '●', label: 'Completed',   cls: 'completed' },
   failed:      { icon: '✗', label: 'Failed',      cls: 'failed' },
@@ -62,10 +62,12 @@ function PlanSectionView({ section }: { section: PlanSection }) {
   const [showFeedback, setShowFeedback] = useState(false);
   const approveSection = usePlanStore((s) => s.approveSection);
   const rejectSection = usePlanStore((s) => s.rejectSection);
+  const skipSection = usePlanStore((s) => s.skipSection);
   const isExecuting = usePlanStore((s) => s.isExecuting);
+  const isRegenerating = usePlanStore((s) => s.regeneratingSections.has(section.id));
 
   const cfg = STATUS_CONFIG[section.status];
-  const canAct = section.status === 'pending' || section.status === 'rejected';
+  const canAct = (section.status === 'pending' || section.status === 'rejected') && !isRegenerating;
 
   const handleReject = useCallback(() => {
     if (feedbackText.trim()) {
@@ -78,11 +80,20 @@ function PlanSectionView({ section }: { section: PlanSection }) {
   return (
     <div className="plan-section-view">
       <div className="plan-section-header">
-        <span className={`plan-section-badge ${cfg.cls}`}>{cfg.label}</span>
+        <span className={`plan-section-badge ${cfg.cls}`}>
+          {isRegenerating ? 'Revising...' : cfg.label}
+        </span>
         <h3>{section.title}</h3>
       </div>
 
-      <div className="plan-section-body">
+      {isRegenerating && (
+        <div className="plan-section-regenerating">
+          <div className="plan-spinner small" />
+          <span>Regenerating section based on your feedback...</span>
+        </div>
+      )}
+
+      <div className={`plan-section-body${isRegenerating ? ' dimmed' : ''}`}>
         <Markdown content={section.description} />
 
         {section.steps.length > 0 && (
@@ -113,6 +124,13 @@ function PlanSectionView({ section }: { section: PlanSection }) {
             onClick={() => setShowFeedback(!showFeedback)}
           >
             Revise
+          </button>
+          <button
+            className="plan-btn skip"
+            onClick={() => skipSection(section.id)}
+            title="Skip this section — it won't be executed"
+          >
+            Skip
           </button>
         </div>
       )}
@@ -207,8 +225,10 @@ export default function PlanPanel() {
 
   const sections = currentPlan?.sections || [];
   const activeItem = sections.find((s) => s.id === activeSection) || sections[0];
-  const allApproved = sections.length > 0 && sections.every((s) => s.status === 'approved');
+  const hasApproved = sections.some((s) => s.status === 'approved');
   const hasPending = sections.some((s) => s.status === 'pending');
+  const allDecided = sections.every((s) => s.status === 'approved' || s.status === 'rejected');
+  const approvedCount = sections.filter((s) => s.status === 'approved').length;
   const completedCount = sections.filter((s) => s.status === 'completed').length;
   const progress = sections.length > 0 ? Math.round((completedCount / sections.length) * 100) : 0;
 
@@ -292,17 +312,22 @@ export default function PlanPanel() {
                 Approve All
               </button>
             )}
-            {allApproved && !isExecuting && currentSessionId && (
+            {hasApproved && !isExecuting && currentSessionId && allDecided && (
               <button
                 className="plan-btn execute"
                 onClick={() => executePlan(currentSessionId)}
               >
-                Execute Plan
+                Execute {approvedCount}/{sections.length} Sections
               </button>
+            )}
+            {hasApproved && !isExecuting && !allDecided && (
+              <span className="plan-footer-hint">
+                Review remaining sections to execute
+              </span>
             )}
             {isExecuting && (
               <span className="plan-executing-label">
-                Executing... {completedCount}/{sections.length}
+                Executing... {completedCount}/{approvedCount}
               </span>
             )}
           </div>

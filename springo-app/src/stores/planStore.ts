@@ -14,6 +14,7 @@ interface PlanStoreState {
   isExecuting: boolean;
   activeSection: string | null;
   error: string | null;
+  regeneratingSections: Set<string>;
 
   // Actions
   generatePlan: (taskDescription: string, sessionId?: string, model?: string) => Promise<void>;
@@ -21,6 +22,7 @@ interface PlanStoreState {
   updateSection: (sectionId: string, updates: Partial<PlanSection>) => void;
   approveSection: (sectionId: string) => Promise<void>;
   rejectSection: (sectionId: string, feedback: string) => Promise<void>;
+  skipSection: (sectionId: string) => void;
   approveAll: () => Promise<void>;
   executePlan: (sessionId: string) => Promise<void>;
   setActiveSection: (sectionId: string | null) => void;
@@ -34,6 +36,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   isExecuting: false,
   activeSection: null,
   error: null,
+  regeneratingSections: new Set(),
 
   generatePlan: async (taskDescription, sessionId, model) => {
     set({ isGenerating: true, error: null, currentPlan: null });
@@ -131,6 +134,10 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
     const plan = get().currentPlan;
     if (!plan) return;
 
+    // Mark as regenerating
+    const regen = new Set(get().regeneratingSections);
+    regen.add(sectionId);
+    set({ regeneratingSections: regen });
     get().updateSection(sectionId, { status: 'rejected', feedback });
 
     try {
@@ -180,7 +187,15 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       set({ error: msg });
+    } finally {
+      const done = new Set(get().regeneratingSections);
+      done.delete(sectionId);
+      set({ regeneratingSections: done });
     }
+  },
+
+  skipSection: (sectionId) => {
+    get().updateSection(sectionId, { status: 'rejected' });
   },
 
   approveAll: async () => {

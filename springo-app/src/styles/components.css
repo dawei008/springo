@@ -8431,6 +8431,13 @@
 .plan-btn.reject:hover {
     background: rgba(220, 60, 60, 0.08);
 }
+.plan-btn.skip {
+    color: var(--text-tertiary);
+    border-color: var(--border);
+}
+.plan-btn.skip:hover {
+    background: var(--bg-tertiary);
+}
 .plan-btn.execute {
     background: var(--accent);
     border-color: var(--accent);
@@ -8492,5 +8499,29 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--accent);
+}
+.plan-footer-hint {
+    font-size: 12px;
+    color: var(--text-tertiary);
+    font-style: italic;
+}
+
+/* Regenerating state */
+.plan-section-regenerating {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+    font-size: 12px;
+    color: var(--accent);
+}
+.plan-spinner.small {
+    width: 14px;
+    height: 14px;
+    border-width: 2px;
+}
+.plan-section-body.dimmed {
+    opacity: 0.4;
+    pointer-events: none;
 }
 
