@@ -371,10 +371,10 @@ export default function MessageInput() {
 
     if (isStreaming) return;
 
-    // Plan mode: /plan or /ultraplan command triggers plan generation
-    const planMatch = content.match(/^\/(plan|ultraplan)\s+(.+)/);
+    // Plan mode: /plan, /ultraplan, or bare "ultraplan" triggers plan generation
+    const planMatch = content.match(/^(?:\/(?:plan|ultraplan)|ultraplan)\s+(.+)/);
     if (planMatch) {
-      const taskDesc = planMatch[2].trim();
+      const taskDesc = planMatch[1].trim();
       if (taskDesc) {
         setText('');
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
