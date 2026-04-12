@@ -77,9 +77,10 @@ interface UIState {
   /** Maps sessionId → teamId for sessions that had team executions */
   sessionTeamMap: Record<string, string>;
 
-  // Queue state
+  // Queue state (per-session)
   queueEnabled: boolean;
   queueItems: QueueItem[];
+  sessionQueueMap: Record<string, QueueItem[]>;
 
   // Actions
   toggleSidebar: () => void;
@@ -115,13 +116,14 @@ interface UIState {
   setSessionTeam: (sessionId: string, teamId: string) => void;
   getSessionTeam: (sessionId: string) => string | null;
 
-  // Queue actions
+  // Queue actions (per-session)
   toggleQueue: () => void;
   setQueueEnabled: (enabled: boolean) => void;
-  enqueueItem: (content: string, attachments?: QueueItem['attachments']) => void;
-  dequeueItem: () => QueueItem | undefined;
-  removeQueueItem: (id: string) => void;
-  clearQueue: () => void;
+  enqueueItem: (sessionId: string, content: string, attachments?: QueueItem['attachments']) => void;
+  dequeueItem: (sessionId: string) => QueueItem | undefined;
+  removeQueueItem: (sessionId: string, id: string) => void;
+  clearQueue: (sessionId: string) => void;
+  switchSessionQueue: (sessionId: string | null) => void;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -156,6 +158,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   })(),
   queueEnabled: false,
   queueItems: [],
+  sessionQueueMap: {},
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
@@ -249,24 +252,41 @@ export const useUIStore = create<UIState>((set, get) => ({
     return get().sessionTeamMap[sessionId] || null;
   },
 
-  // Queue actions
+  // Queue actions (per-session)
   toggleQueue: () => set((state) => ({ queueEnabled: !state.queueEnabled })),
   setQueueEnabled: (enabled) => set({ queueEnabled: enabled }),
-  enqueueItem: (content, attachments = []) =>
-    set((state) => ({
-      queueItems: [
-        ...state.queueItems,
-        { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content, attachments, addedAt: Date.now() },
-      ],
-    })),
-  dequeueItem: () => {
-    const items = get().queueItems;
+  enqueueItem: (sessionId, content, attachments = []) => {
+    const item: QueueItem = { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content, attachments, addedAt: Date.now() };
+    set((state) => {
+      const map = { ...state.sessionQueueMap };
+      map[sessionId] = [...(map[sessionId] || []), item];
+      return { sessionQueueMap: map, queueItems: map[sessionId] };
+    });
+  },
+  dequeueItem: (sessionId) => {
+    const items = get().sessionQueueMap[sessionId] || [];
     if (items.length === 0) return undefined;
     const [first, ...rest] = items;
-    set({ queueItems: rest });
+    set((state) => {
+      const map = { ...state.sessionQueueMap };
+      map[sessionId] = rest;
+      return { sessionQueueMap: map, queueItems: rest };
+    });
     return first;
   },
-  removeQueueItem: (id) =>
-    set((state) => ({ queueItems: state.queueItems.filter((item) => item.id !== id) })),
-  clearQueue: () => set({ queueItems: [] }),
+  removeQueueItem: (sessionId, id) =>
+    set((state) => {
+      const map = { ...state.sessionQueueMap };
+      map[sessionId] = (map[sessionId] || []).filter((item) => item.id !== id);
+      return { sessionQueueMap: map, queueItems: map[sessionId] };
+    }),
+  clearQueue: (sessionId) =>
+    set((state) => {
+      const map = { ...state.sessionQueueMap };
+      map[sessionId] = [];
+      return { sessionQueueMap: map, queueItems: [] };
+    }),
+  switchSessionQueue: (sessionId) => {
+    set({ queueItems: sessionId ? (get().sessionQueueMap[sessionId] || []) : [] });
+  },
 }));

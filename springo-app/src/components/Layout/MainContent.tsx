@@ -362,11 +362,12 @@ export default function MainContent() {
 
   // Restore team panel and clear stale UI state when switching sessions
   useEffect(() => {
-    // Restore todos for the session (or clear if none saved)
+    // Restore todos and queue for the session (or clear if none saved)
     const savedTodos = currentSessionId
       ? useUIStore.getState().getSessionTodos(currentSessionId)
       : [];
     useUIStore.getState().setTodos(savedTodos);
+    useUIStore.getState().switchSessionQueue(currentSessionId ?? null);
 
     if (!currentSessionId) {
       useTeamStore.getState().resetTeam();

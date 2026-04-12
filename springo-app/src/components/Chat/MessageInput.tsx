@@ -360,7 +360,7 @@ export default function MessageInput() {
         name: a.name,
         path: a.path,
       }));
-      useUIStore.getState().enqueueItem(content, atts);
+      useUIStore.getState().enqueueItem(currentSessionId!, content, atts);
       setText('');
       setAttachments([]);
       if (textareaRef.current) {
@@ -667,9 +667,9 @@ export default function MessageInput() {
     prevStreamingRef.current = isStreaming;
 
     // Transition: streaming → not streaming
-    if (wasStreaming && !isStreaming) {
-      const next = useUIStore.getState().dequeueItem();
-      if (next && currentSessionId) {
+    if (wasStreaming && !isStreaming && currentSessionId) {
+      const next = useUIStore.getState().dequeueItem(currentSessionId);
+      if (next) {
         // Small delay to let backend finalize
         setTimeout(() => {
           const currentSettings = useSettingsStore.getState().settings;
@@ -840,7 +840,7 @@ export default function MessageInput() {
         <div className="queue-widget">
           <div className="queue-widget-header">
             <span className="queue-widget-title">Queue ({queueItems.length})</span>
-            <button className="queue-widget-clear" onClick={() => useUIStore.getState().clearQueue()}>
+            <button className="queue-widget-clear" onClick={() => currentSessionId && useUIStore.getState().clearQueue(currentSessionId)}>
               Clear
             </button>
           </div>
@@ -852,7 +852,7 @@ export default function MessageInput() {
                 </span>
                 <button
                   className="queue-widget-item-remove"
-                  onClick={() => useUIStore.getState().removeQueueItem(item.id)}
+                  onClick={() => currentSessionId && useUIStore.getState().removeQueueItem(currentSessionId, item.id)}
                 >
                   &times;
                 </button>
