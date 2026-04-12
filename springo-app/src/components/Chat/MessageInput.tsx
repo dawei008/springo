@@ -4,6 +4,7 @@ import { useChatStore } from '@/stores/chatStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useToolsStore } from '@/stores/toolsStore';
+import { usePlanStore } from '@/stores/planStore';
 import { api } from '@/services/api';
 import type { Attachment, Skill, UsageData } from '@/types';
 
@@ -74,6 +75,7 @@ const BUILT_IN_COMMANDS = [
   { name: 'rename', description: 'Alias for /name', isBuiltIn: true as const },
   { name: 'clear', description: 'Clear current session messages', isBuiltIn: true as const },
   { name: 'terminal', description: 'Execute a command inline (usage: /terminal ls -la)', isBuiltIn: true as const },
+  { name: 'plan', description: 'Generate a structured plan (usage: /plan Migrate auth to JWT)', isBuiltIn: true as const },
 ];
 
 export default function MessageInput() {
@@ -367,6 +369,18 @@ export default function MessageInput() {
     }
 
     if (isStreaming) return;
+
+    // Plan mode: /plan command triggers plan generation
+    if (content.startsWith('/plan ')) {
+      const taskDesc = content.slice(6).trim();
+      if (taskDesc) {
+        setText('');
+        if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        const currentSettings = useSettingsStore.getState().settings;
+        usePlanStore.getState().generatePlan(taskDesc, currentSessionId || undefined, currentSettings.model);
+        return;
+      }
+    }
 
     let convId = currentSessionId;
     if (!convId) {

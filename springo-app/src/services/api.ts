@@ -31,6 +31,8 @@ import type {
   TerminalExecuteRequest,
   TerminalExecuteResponse,
   ContentBlock,
+  PlanStructure,
+  PlanSection,
 } from '../types';
 import { CONFIG } from '../types';
 
@@ -417,6 +419,62 @@ export const api = {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response;
     },
+  },
+
+  // ======================== Plans ========================
+
+  plans: {
+    generate: async (body: { task_description: string; session_id?: string; model?: string; max_tokens?: number }, signal?: AbortSignal): Promise<Response> => {
+      const baseUrl = getBaseUrl();
+      return fetchWithRetry(
+        `${baseUrl}/v1/plans/generate`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        },
+        1,
+        CONFIG.TIMEOUTS.STREAMING,
+        signal,
+      );
+    },
+    get: (planId: string) => get<PlanStructure>(`/plans/${planId}`),
+    list: () => get<{ plans: PlanStructure[] }>('/plans'),
+    feedback: (planId: string, body: { section_id: string; action: string; feedback?: string }) =>
+      post<{ ok: boolean; section?: PlanSection; plan_status?: string }>(`/plans/${planId}/feedback`, body),
+    feedbackStream: async (planId: string, body: { section_id: string; action: string; feedback?: string }, signal?: AbortSignal): Promise<Response> => {
+      const baseUrl = getBaseUrl();
+      return fetchWithRetry(
+        `${baseUrl}/v1/plans/${planId}/feedback`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal,
+        },
+        1,
+        CONFIG.TIMEOUTS.STREAMING,
+        signal,
+      );
+    },
+    approveAll: (planId: string) => post<{ ok: boolean; plan: PlanStructure }>(`/plans/${planId}/approve-all`),
+    execute: async (planId: string, sessionId: string, signal?: AbortSignal): Promise<Response> => {
+      const baseUrl = getBaseUrl();
+      return fetchWithRetry(
+        `${baseUrl}/v1/plans/${planId}/execute`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId }),
+          signal,
+        },
+        1,
+        CONFIG.TIMEOUTS.STREAMING,
+        signal,
+      );
+    },
+    delete: (planId: string) => del<{ ok: boolean }>(`/plans/${planId}`),
   },
 
   // ======================== Memory ========================

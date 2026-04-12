@@ -151,6 +151,37 @@ class SSEToolResult(BaseModel):
     elapsed: float
 
 
+# Plan Mode Models
+class PlanStep(BaseModel):
+    """计划步骤"""
+    description: str
+    tool_name: Optional[str] = None
+    tool_input: Optional[Dict[str, Any]] = None
+
+
+class PlanSection(BaseModel):
+    """计划段落"""
+    id: str
+    title: str
+    description: str
+    steps: List[str] = Field(default_factory=list)
+    status: Literal["pending", "approved", "rejected", "in_progress", "completed", "failed"] = "pending"
+    feedback: Optional[str] = None
+    result: Optional[str] = None
+
+
+class PlanStructure(BaseModel):
+    """完整计划"""
+    id: str
+    title: str
+    summary: str
+    sections: List[PlanSection] = Field(default_factory=list)
+    status: Literal["draft", "reviewing", "approved", "executing", "completed", "failed"] = "draft"
+    created_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now().isoformat())
+    session_id: Optional[str] = None
+
+
 class SessionInfo(BaseModel):
     """会话信息"""
     id: str

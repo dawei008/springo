@@ -583,6 +583,37 @@ class SSEEventBuilder:
             'timestamp': datetime.now().isoformat(),
         })
 
+    # === Plan Mode SSE Events ===
+
+    @staticmethod
+    def plan_generated(plan: dict) -> str:
+        """Plan generation complete"""
+        return format_sse_event('plan_generated', {
+            'type': 'plan_generated',
+            'plan': plan,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def plan_section_update(plan_id: str, section: dict) -> str:
+        """A plan section was updated"""
+        return format_sse_event('plan_section_update', {
+            'type': 'plan_section_update',
+            'plan_id': plan_id,
+            'section': section,
+            'timestamp': datetime.now().isoformat(),
+        })
+
+    @staticmethod
+    def plan_error(plan_id: str, error: str) -> str:
+        """Plan-level error"""
+        return format_sse_event('plan_error', {
+            'type': 'plan_error',
+            'plan_id': plan_id,
+            'error': error,
+            'timestamp': datetime.now().isoformat(),
+        })
+
     @staticmethod
     def done() -> str:
         """构建完成标记"""

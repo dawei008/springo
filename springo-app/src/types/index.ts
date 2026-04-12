@@ -836,3 +836,26 @@ export const EXT_TO_MEDIA_TYPE: Record<string, string> = {
   gif: 'image/gif',
   webp: 'image/webp',
 };
+
+// ======================== Plan Mode ========================
+
+export interface PlanSection {
+  id: string;
+  title: string;
+  description: string;
+  steps: string[];
+  status: 'pending' | 'approved' | 'rejected' | 'in_progress' | 'completed' | 'failed';
+  feedback?: string | null;
+  result?: string | null;
+}
+
+export interface PlanStructure {
+  id: string;
+  title: string;
+  summary: string;
+  sections: PlanSection[];
+  status: 'draft' | 'reviewing' | 'approved' | 'executing' | 'completed' | 'failed';
+  created_at: string;
+  updated_at: string;
+  session_id?: string;
+}

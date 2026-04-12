@@ -119,3 +119,23 @@ class SessionUpdateRequest(BaseModel):
     """会话更新请求"""
     messages: List[Dict[str, Any]] = Field(..., description="Messages to save")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Updated metadata")
+
+
+class PlanGenerateRequest(BaseModel):
+    """计划生成请求"""
+    task_description: str = Field(..., description="Task to plan")
+    session_id: Optional[str] = Field(default=None, description="Session ID for context")
+    model: str = Field(default="claude-sonnet-4-6", description="Model to use")
+    max_tokens: int = Field(default=8192, description="Max tokens for plan generation")
+
+
+class PlanFeedbackRequest(BaseModel):
+    """Section 反馈请求"""
+    section_id: str = Field(..., description="Section ID")
+    action: Literal["approve", "reject", "comment"] = Field(..., description="Feedback action")
+    feedback: Optional[str] = Field(default=None, description="User feedback text")
+
+
+class PlanExecuteRequest(BaseModel):
+    """计划执行请求"""
+    session_id: str = Field(..., description="Session ID")
