@@ -5383,8 +5383,37 @@
             color: var(--text-primary);
         }
 
+        /* Column resize grip (right edge of each header cell) */
+        .fb-col-header .fb-col {
+            position: relative;
+        }
+        .fb-col-grip {
+            position: absolute;
+            top: 0;
+            right: -4px;
+            width: 8px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 2;
+        }
+        .fb-col-grip::after {
+            content: '';
+            position: absolute;
+            top: 20%;
+            bottom: 20%;
+            left: 3px;
+            width: 1px;
+            background: var(--border);
+            transition: background 0.15s;
+        }
+        .fb-col-grip:hover::after {
+            background: var(--text-secondary);
+            width: 2px;
+            left: 3px;
+        }
+
         /* Column widths */
-        .fb-col-name  { flex: 1; min-width: 0; }
+        .fb-col-name  { flex: 1; min-width: 80px; }
         .fb-col-size  { width: 64px; text-align: right; flex-shrink: 0; }
         .fb-col-type  { width: 72px; flex-shrink: 0; }
         .fb-col-date  { width: 76px; text-align: right; flex-shrink: 0; }

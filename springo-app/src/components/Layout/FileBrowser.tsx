@@ -572,6 +572,41 @@ export default function FileBrowser() {
     return () => panel?.removeEventListener('keydown', handler as EventListener);
   }, [fileBrowserOpen, navigateUp]);
 
+  // ─── Column resize ───
+
+  const [colWidths, setColWidths] = useState({ name: 180, size: 64, type: 72, date: 76 });
+  const [isColResizing, setIsColResizing] = useState(false);
+  type ColKey = 'name' | 'size' | 'type' | 'date';
+  const resizingColRef = useRef<{ col: ColKey; startX: number; startW: number } | null>(null);
+
+  const handleColResizeStart = useCallback((e: React.MouseEvent, col: ColKey) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const cur = colWidths[col];
+    resizingColRef.current = { col, startX: e.clientX, startW: cur };
+    setIsColResizing(true);
+
+    const onMove = (ev: MouseEvent) => {
+      if (!resizingColRef.current) return;
+      const delta = ev.clientX - resizingColRef.current.startX;
+      const minW = col === 'name' ? 80 : 40;
+      const newW = Math.max(minW, resizingColRef.current.startW + delta);
+      setColWidths((prev) => ({ ...prev, [resizingColRef.current!.col]: newW }));
+    };
+    const onUp = () => {
+      resizingColRef.current = null;
+      setIsColResizing(false);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [colWidths]);
+
   // ─── Toggle sort ───
 
   const toggleSort = useCallback((key: SortKey) => {
@@ -602,7 +637,11 @@ export default function FileBrowser() {
     sortKey === key ? (sortDir === 'asc' ? ' \u2191' : ' \u2193') : '';
 
   return (
-    <div className={`file-browser-panel${fileBrowserOpen ? ' open' : ''}`} tabIndex={-1}>
+    <div
+      className={`file-browser-panel${fileBrowserOpen ? ' open' : ''}${isColResizing ? ' resizing' : ''}`}
+      tabIndex={-1}
+      style={fileBrowserOpen ? { width: colWidths.name + colWidths.size + colWidths.type + colWidths.date + 40 } : undefined}
+    >
       {/* Header */}
       <div className="file-browser-header">
         <h3>
@@ -680,16 +719,19 @@ export default function FileBrowser() {
 
       {/* Column header row */}
       <div className="fb-col-header">
-        <div className="fb-col fb-col-name" onClick={() => toggleSort('name')}>
+        <div className="fb-col fb-col-name" style={{ width: colWidths.name, flex: 'none' }} onClick={() => toggleSort('name')}>
           Name{sortArrow('name')}
+          <span className="fb-col-grip" onMouseDown={(e) => handleColResizeStart(e, 'name')} />
         </div>
-        <div className="fb-col fb-col-size" onClick={() => toggleSort('size')}>
+        <div className="fb-col fb-col-size" style={{ width: colWidths.size }} onClick={() => toggleSort('size')}>
           Size{sortArrow('size')}
+          <span className="fb-col-grip" onMouseDown={(e) => handleColResizeStart(e, 'size')} />
         </div>
-        <div className="fb-col fb-col-type" onClick={() => toggleSort('type')}>
+        <div className="fb-col fb-col-type" style={{ width: colWidths.type }} onClick={() => toggleSort('type')}>
           Type{sortArrow('type')}
+          <span className="fb-col-grip" onMouseDown={(e) => handleColResizeStart(e, 'type')} />
         </div>
-        <div className="fb-col fb-col-date" onClick={() => toggleSort('modified')}>
+        <div className="fb-col fb-col-date" style={{ width: colWidths.date }} onClick={() => toggleSort('modified')}>
           Modified{sortArrow('modified')}
         </div>
       </div>
@@ -718,7 +760,7 @@ export default function FileBrowser() {
         {/* Inline create row */}
         {creatingType && (
           <div className="fb-row creating">
-            <div className="fb-col fb-col-name">
+            <div className="fb-col fb-col-name" style={{ width: colWidths.name, flex: 'none' }}>
               <FileIcon name={creatingType === 'folder' ? '.' : 'untitled'} type={creatingType === 'folder' ? 'directory' : 'file'} />
               <InlineRenameInput
                 initialValue={creatingType === 'folder' ? 'New Folder' : 'untitled.txt'}
@@ -726,9 +768,9 @@ export default function FileBrowser() {
                 onCancel={() => setCreatingType(null)}
               />
             </div>
-            <div className="fb-col fb-col-size">--</div>
-            <div className="fb-col fb-col-type">{creatingType === 'folder' ? 'Folder' : 'File'}</div>
-            <div className="fb-col fb-col-date">--</div>
+            <div className="fb-col fb-col-size" style={{ width: colWidths.size }}>--</div>
+            <div className="fb-col fb-col-type" style={{ width: colWidths.type }}>{creatingType === 'folder' ? 'Folder' : 'File'}</div>
+            <div className="fb-col fb-col-date" style={{ width: colWidths.date }}>--</div>
           </div>
         )}
         {!loading && !error && displayEntries.map((entry) => {
@@ -745,7 +787,7 @@ export default function FileBrowser() {
               onDragStart={(e) => handleItemDragStart(e, entry)}
               onContextMenu={(e) => handleContextMenu(e, entry)}
             >
-              <div className="fb-col fb-col-name">
+              <div className="fb-col fb-col-name" style={{ width: colWidths.name, flex: 'none' }}>
                 <FileIcon name={entry.name} type={entry.type} />
                 {isRenaming ? (
                   <InlineRenameInput
@@ -757,13 +799,13 @@ export default function FileBrowser() {
                   <span className="item-name" title={entry.name}>{entry.name}</span>
                 )}
               </div>
-              <div className="fb-col fb-col-size">
+              <div className="fb-col fb-col-size" style={{ width: colWidths.size }}>
                 {entry.type === 'file' && entry.size != null ? formatFileSize(entry.size) : '--'}
               </div>
-              <div className="fb-col fb-col-type">
+              <div className="fb-col fb-col-type" style={{ width: colWidths.type }}>
                 {getFileTypeLabel(entry.name, entry.type)}
               </div>
-              <div className="fb-col fb-col-date">
+              <div className="fb-col fb-col-date" style={{ width: colWidths.date }}>
                 {entry.modified ? formatDate(entry.modified) : '--'}
               </div>
             </div>
