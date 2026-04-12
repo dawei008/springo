@@ -2147,7 +2147,92 @@
             padding: 20px 24px;
             font-size: 14px;
             line-height: 1.7;
+            color: var(--text-primary);
         }
+
+        .artifact-panel-markdown h1 { font-size: 1.6em; margin: 24px 0 12px; font-weight: 700; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+        .artifact-panel-markdown h2 { font-size: 1.35em; margin: 20px 0 10px; font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+        .artifact-panel-markdown h3 { font-size: 1.15em; margin: 16px 0 8px; font-weight: 600; }
+        .artifact-panel-markdown h4 { font-size: 1em; margin: 12px 0 6px; font-weight: 600; }
+        .artifact-panel-markdown h5,
+        .artifact-panel-markdown h6 { font-size: 0.95em; margin: 8px 0 4px; font-weight: 600; color: var(--text-secondary); }
+        .artifact-panel-markdown h1:first-child,
+        .artifact-panel-markdown h2:first-child,
+        .artifact-panel-markdown h3:first-child { margin-top: 0; }
+
+        .artifact-panel-markdown p { margin: 0 0 12px; }
+        .artifact-panel-markdown p:last-child { margin-bottom: 0; }
+
+        .artifact-panel-markdown ul, .artifact-panel-markdown ol {
+            margin: 8px 0 12px;
+            padding-left: 24px;
+        }
+        .artifact-panel-markdown li { margin-bottom: 4px; }
+
+        .artifact-panel-markdown blockquote {
+            border-left: 3px solid var(--accent);
+            padding: 4px 0 4px 16px;
+            margin: 12px 0;
+            color: var(--text-secondary);
+        }
+
+        .artifact-panel-markdown pre {
+            background: var(--code-bg);
+            border-radius: 8px;
+            padding: 16px;
+            overflow-x: auto;
+            margin: 12px 0;
+            color: #c9d1d9;
+        }
+        .artifact-panel-markdown pre code { color: inherit; }
+
+        .artifact-panel-markdown code {
+            font-family: 'SF Mono', Monaco, 'Courier New', monospace;
+            font-size: 13px;
+        }
+        .artifact-panel-markdown :not(pre) > code {
+            background: var(--bg-tertiary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+
+        .artifact-panel-markdown table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 12px 0;
+            font-size: 14px;
+        }
+        .artifact-panel-markdown th, .artifact-panel-markdown td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+        .artifact-panel-markdown th {
+            background: var(--bg-secondary);
+            font-weight: 600;
+        }
+        .artifact-panel-markdown tr:nth-child(even) {
+            background: var(--bg-secondary);
+        }
+
+        .artifact-panel-markdown img {
+            max-width: 100%;
+            border-radius: 8px;
+            margin: 8px 0;
+        }
+
+        .artifact-panel-markdown hr {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 20px 0;
+        }
+
+        .artifact-panel-markdown a {
+            color: var(--accent);
+            text-decoration: none;
+        }
+        .artifact-panel-markdown a:hover { text-decoration: underline; }
 
         .artifact-panel-empty {
             display: flex;
