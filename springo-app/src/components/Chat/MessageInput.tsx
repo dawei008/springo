@@ -76,6 +76,7 @@ const BUILT_IN_COMMANDS = [
   { name: 'clear', description: 'Clear current session messages', isBuiltIn: true as const },
   { name: 'terminal', description: 'Execute a command inline (usage: /terminal ls -la)', isBuiltIn: true as const },
   { name: 'plan', description: 'Generate a structured plan (usage: /plan Migrate auth to JWT)', isBuiltIn: true as const },
+  { name: 'ultraplan', description: 'Alias for /plan — generate a structured plan', isBuiltIn: true as const },
 ];
 
 export default function MessageInput() {
@@ -370,9 +371,10 @@ export default function MessageInput() {
 
     if (isStreaming) return;
 
-    // Plan mode: /plan command triggers plan generation
-    if (content.startsWith('/plan ')) {
-      const taskDesc = content.slice(6).trim();
+    // Plan mode: /plan or /ultraplan command triggers plan generation
+    const planMatch = content.match(/^\/(plan|ultraplan)\s+(.+)/);
+    if (planMatch) {
+      const taskDesc = planMatch[2].trim();
       if (taskDesc) {
         setText('');
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
