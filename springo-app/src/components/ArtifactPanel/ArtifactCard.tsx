@@ -4,6 +4,7 @@ import { useArtifactStore, type ArtifactItem } from '@/stores/artifactStore'
 interface ArtifactCardProps {
   artifact: ArtifactItem
   onClickOverride?: () => void
+  defaultCollapsed?: boolean
 }
 
 function TypeIcon({ type }: { type: ArtifactItem['type'] }) {
@@ -166,13 +167,35 @@ function ContextMenu({ x, y, artifact, onClose }: { x: number; y: number; artifa
   )
 }
 
-export default function ArtifactCard({ artifact, onClickOverride }: ArtifactCardProps) {
+export default function ArtifactCard({ artifact, onClickOverride, defaultCollapsed = false }: ArtifactCardProps) {
   const openArtifact = useArtifactStore((s) => s.openArtifact)
   const activeId = useArtifactStore((s) => s.activeArtifact?.id)
   const panelOpen = useArtifactStore((s) => s.panelOpen)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
   const isActive = panelOpen && activeId === artifact.id
+
+  // Collapsed view: compact single-line header
+  if (collapsed) {
+    return (
+      <div
+        className="artifact-card collapsed"
+        onClick={() => setCollapsed(false)}
+      >
+        <div className="artifact-card-icon">
+          <TypeIcon type={artifact.type} />
+        </div>
+        <div className="artifact-card-info">
+          <span className="artifact-card-title">{artifact.title}</span>
+          <span className="artifact-card-type">{TYPE_LABELS[artifact.type]}</span>
+        </div>
+        <svg className="artifact-card-chevron" width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+        </svg>
+      </div>
+    )
+  }
 
   return (
     <>
@@ -213,6 +236,15 @@ export default function ArtifactCard({ artifact, onClickOverride }: ArtifactCard
             onClick={(e) => { e.stopPropagation(); saveArtifact(artifact) }}
           >
             <DownloadIcon />
+          </button>
+          <button
+            className="artifact-card-action"
+            title="Collapse"
+            onClick={(e) => { e.stopPropagation(); setCollapsed(true) }}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
         </div>
       </div>

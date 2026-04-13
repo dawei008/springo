@@ -787,6 +787,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                       filePath: toolFilePath, url: toolUrl,
                       timestamp: message.timestamp || Date.now(),
                     }}
+                    defaultCollapsed={!isStreaming}
                   />
                 );
               }
@@ -807,6 +808,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                   filePath: toolFilePath,
                   timestamp: message.timestamp || Date.now(),
                 }}
+                defaultCollapsed={!isStreaming}
               />
             );
           }
@@ -834,6 +836,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                     filePath: toolFilePath,
                     timestamp: message.timestamp || Date.now(),
                   }}
+                  defaultCollapsed={!isStreaming}
                 />
               );
             }
@@ -853,6 +856,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                   filePath: toolFilePath,
                   timestamp: message.timestamp || Date.now(),
                 }}
+                defaultCollapsed={!isStreaming}
               />
             );
           }
@@ -872,6 +876,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
                     filePath: toolFilePath,
                     timestamp: message.timestamp || Date.now(),
                   }}
+                  defaultCollapsed={!isStreaming}
                 />
               );
             }
@@ -881,7 +886,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           const hasImageUrl = /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp))/i.test(rs);
           const hasImagePath = /(?<!\w)(\/[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/i.test(rs);
           if (hasImageUrl || hasImagePath) {
-            return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={false} />;
+            return <ToolVisualContent key={`vis-${tool.id}`} toolUse={tool} defaultCollapsed={!isStreaming} />;
           }
 
           return null;

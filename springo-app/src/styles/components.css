@@ -2335,6 +2335,34 @@
             background: var(--bg-hover);
         }
 
+        .artifact-card.collapsed {
+            padding: 6px 12px;
+            opacity: 0.7;
+            max-width: 300px;
+        }
+        .artifact-card.collapsed:hover {
+            opacity: 1;
+        }
+        .artifact-card.collapsed .artifact-card-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 6px;
+        }
+        .artifact-card.collapsed .artifact-card-title {
+            font-size: 12px;
+        }
+        .artifact-card.collapsed .artifact-card-type {
+            display: none;
+        }
+        .artifact-card-chevron {
+            flex-shrink: 0;
+            color: var(--text-tertiary);
+            transition: transform 0.15s;
+        }
+        .artifact-card.collapsed:hover .artifact-card-chevron {
+            color: var(--accent);
+        }
+
         /* Artifact Context Menu */
         .artifact-context-menu {
             background: var(--bg-primary);
