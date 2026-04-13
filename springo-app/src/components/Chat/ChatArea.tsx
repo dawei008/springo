@@ -104,6 +104,31 @@ export default function ChatArea() {
 
   // Track message count to force scroll on new user message
   const prevMsgCountRef = useRef(0);
+  // Track whether user has manually scrolled away during streaming
+  const userScrolledAwayRef = useRef(false);
+
+  // Reset "scrolled away" flag when user scrolls near bottom
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distFromBottom < 150) {
+        userScrolledAwayRef.current = false;
+      } else if (isStreaming) {
+        userScrolledAwayRef.current = true;
+      }
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, [isStreaming]);
+
+  // Reset scrolled-away when streaming starts
+  useEffect(() => {
+    if (isStreaming) {
+      userScrolledAwayRef.current = false;
+    }
+  }, [isStreaming]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -113,10 +138,13 @@ export default function ChatArea() {
       const prevCount = prevMsgCountRef.current;
       prevMsgCountRef.current = msgCount;
 
-      // Force scroll when a new message is added (user just sent or assistant starts)
+      // Force scroll when a new user message is sent (not during streaming content updates)
       const newMessageAdded = msgCount > prevCount;
       const isNearBottom =
         el.scrollHeight - el.scrollTop - el.clientHeight < 150;
+
+      // Don't auto-scroll if user has intentionally scrolled away during streaming
+      if (userScrolledAwayRef.current) return;
 
       if (newMessageAdded || isNearBottom) {
         requestAnimationFrame(() => {
