@@ -107,6 +107,29 @@ export default function ChatArea() {
   // Track whether user has manually scrolled away during streaming
   const userScrolledAwayRef = useRef(false);
 
+  // Track scroll position to show/hide scroll-to-bottom button
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      setShowScrollBtn(distanceFromBottom > 300);
+    };
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    return () => el.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const scrollToBottom = useCallback(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
+    }
+  }, []);
+
+  const isStreaming = useMemo(() => {
+    if (!currentSessionId) return false;
+    return runtimes[currentSessionId]?.isStreaming === true;
+  }, [currentSessionId, runtimes]);
+
   // Reset "scrolled away" flag when user scrolls near bottom
   useEffect(() => {
     const el = containerRef.current;
@@ -130,52 +153,21 @@ export default function ChatArea() {
     }
   }, [isStreaming]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages (respects user scroll-away)
   useEffect(() => {
     if (containerRef.current) {
       const el = containerRef.current;
       const msgCount = messages.length;
       const prevCount = prevMsgCountRef.current;
       prevMsgCountRef.current = msgCount;
-
-      // Force scroll when a new user message is sent (not during streaming content updates)
       const newMessageAdded = msgCount > prevCount;
-      const isNearBottom =
-        el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-
-      // Don't auto-scroll if user has intentionally scrolled away during streaming
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 150;
       if (userScrolledAwayRef.current) return;
-
       if (newMessageAdded || isNearBottom) {
-        requestAnimationFrame(() => {
-          el.scrollTop = el.scrollHeight;
-        });
+        requestAnimationFrame(() => { el.scrollTop = el.scrollHeight; });
       }
     }
   }, [messages]);
-
-  // Track scroll position to show/hide scroll-to-bottom button
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handleScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setShowScrollBtn(distanceFromBottom > 300);
-    };
-    el.addEventListener('scroll', handleScroll, { passive: true });
-    return () => el.removeEventListener('scroll', handleScroll);
-  }, []);
-
-  const scrollToBottom = useCallback(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
-    }
-  }, []);
-
-  const isStreaming = useMemo(() => {
-    if (!currentSessionId) return false;
-    return runtimes[currentSessionId]?.isStreaming === true;
-  }, [currentSessionId, runtimes]);
 
   const hasMessages = messages.length > 0 && !messages.every((m) => m.isThinking);
 

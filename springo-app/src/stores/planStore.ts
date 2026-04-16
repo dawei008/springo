@@ -14,7 +14,7 @@ interface PlanStoreState {
   isExecuting: boolean;
   activeSection: string | null;
   error: string | null;
-  regeneratingSections: Set<string>;
+  regeneratingSections: string[];
 
   // Actions
   generatePlan: (taskDescription: string, sessionId?: string, model?: string) => Promise<void>;
@@ -36,7 +36,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   isExecuting: false,
   activeSection: null,
   error: null,
-  regeneratingSections: new Set(),
+  regeneratingSections: [],
 
   generatePlan: async (taskDescription, sessionId, model) => {
     set({ isGenerating: true, error: null, currentPlan: null });
@@ -135,8 +135,8 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
     if (!plan) return;
 
     // Mark as regenerating
-    const regen = new Set(get().regeneratingSections);
-    regen.add(sectionId);
+    const regen = [...get().regeneratingSections];
+    if (!regen.includes(sectionId)) regen.push(sectionId);
     set({ regeneratingSections: regen });
     get().updateSection(sectionId, { status: 'rejected', feedback });
 
@@ -188,9 +188,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       const msg = e instanceof Error ? e.message : String(e);
       set({ error: msg });
     } finally {
-      const done = new Set(get().regeneratingSections);
-      done.delete(sectionId);
-      set({ regeneratingSections: done });
+      set({ regeneratingSections: get().regeneratingSections.filter(id => id !== sectionId) });
     }
   },
 
@@ -252,11 +250,27 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
               const event = JSON.parse(data);
 
               if (event.type === 'plan_section_start') {
-                get().updateSection(event.section_id, { status: 'in_progress' });
+                get().updateSection(event.section_id, { status: 'in_progress', result: '' });
+              } else if (event.type === 'plan_section_delta') {
+                // Accumulate execution output for the section
+                const plan = get().currentPlan;
+                if (plan) {
+                  const sec = plan.sections.find((s) => s.id === event.section_id);
+                  const prev = sec?.result || '';
+                  if (event.delta_type === 'text') {
+                    get().updateSection(event.section_id, { result: prev + (event.content || '') });
+                  } else if (event.delta_type === 'tool_call') {
+                    get().updateSection(event.section_id, { result: prev + `\n🔧 ${event.tool_name}\n` });
+                  } else if (event.delta_type === 'tool_result') {
+                    const snippet = (event.content || '').slice(0, 300);
+                    const suffix = event.is_error ? ' ❌' : ' ✓';
+                    get().updateSection(event.section_id, { result: prev + snippet + suffix + '\n' });
+                  }
+                }
               } else if (event.type === 'plan_section_complete') {
                 get().updateSection(event.section_id, {
                   status: event.success ? 'completed' : 'failed',
-                  result: event.error || 'Completed',
+                  result: event.result || event.error || 'Completed',
                 });
               } else if (event.type === 'plan_execution_complete') {
                 const updated = get().currentPlan;

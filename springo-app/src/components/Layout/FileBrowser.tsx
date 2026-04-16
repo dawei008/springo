@@ -587,11 +587,12 @@ export default function FileBrowser() {
     setIsColResizing(true);
 
     const onMove = (ev: MouseEvent) => {
-      if (!resizingColRef.current) return;
-      const delta = ev.clientX - resizingColRef.current.startX;
-      const minW = col === 'name' ? 80 : 40;
-      const newW = Math.max(minW, resizingColRef.current.startW + delta);
-      setColWidths((prev) => ({ ...prev, [resizingColRef.current!.col]: newW }));
+      const cur = resizingColRef.current;
+      if (!cur) return;
+      const delta = ev.clientX - cur.startX;
+      const minW = cur.col === 'name' ? 80 : 40;
+      const newW = Math.max(minW, cur.startW + delta);
+      setColWidths((prev) => ({ ...prev, [cur.col]: newW }));
     };
     const onUp = () => {
       resizingColRef.current = null;

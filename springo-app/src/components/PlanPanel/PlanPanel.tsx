@@ -64,7 +64,7 @@ function PlanSectionView({ section }: { section: PlanSection }) {
   const rejectSection = usePlanStore((s) => s.rejectSection);
   const skipSection = usePlanStore((s) => s.skipSection);
   const isExecuting = usePlanStore((s) => s.isExecuting);
-  const isRegenerating = usePlanStore((s) => s.regeneratingSections.has(section.id));
+  const isRegenerating = usePlanStore((s) => s.regeneratingSections.includes(section.id));
 
   const cfg = STATUS_CONFIG[section.status];
   const canAct = (section.status === 'pending' || section.status === 'rejected') && !isRegenerating;
@@ -109,7 +109,7 @@ function PlanSectionView({ section }: { section: PlanSection }) {
 
         {section.result && (
           <div className={`plan-section-result ${section.status === 'failed' ? 'error' : ''}`}>
-            {section.result}
+            <Markdown content={section.result} />
           </div>
         )}
       </div>

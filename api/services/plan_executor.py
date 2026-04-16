@@ -194,6 +194,7 @@ async def execute_plan(
                 "plan_id": plan_id,
                 "section_id": section_id,
                 "success": True,
+                "result": collected_text[:2000] if collected_text else "Completed successfully",
                 "timestamp": datetime.now().isoformat(),
             })
 
