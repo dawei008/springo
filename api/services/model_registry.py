@@ -61,6 +61,18 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude models  (api_format = "anthropic")
     # -----------------------------------------------------------------------
+    "claude-opus-4-7": {
+        "vendor": "bedrock",
+        "bedrock_id": "us.anthropic.claude-opus-4-7",
+        "provider": "anthropic",
+        "display_name": "Claude Opus 4.7",
+        "context_window": 1000000,
+        "max_output": 64000,
+        "supports_vision": True,
+        "supports_thinking": False,
+        "supports_tools": True,
+        "api_format": "anthropic",
+    },
     "claude-opus-4-6": {
         "vendor": "bedrock",
         "bedrock_id": "us.anthropic.claude-opus-4-6-v1",

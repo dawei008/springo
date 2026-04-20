@@ -1,10 +1,11 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
-import ArtifactRenderer, { extractModelArtifacts } from '@/components/Visual/ArtifactRenderer';
+import ArtifactRenderer, { extractModelArtifacts, parseSpringoFiles } from '@/components/Visual/ArtifactRenderer';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import type { ArtifactType } from '@/stores/artifactStore';
+import { useDesignStore, createDesignId } from '@/stores/designStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -556,6 +557,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
   const isDelegationResult = message.isDelegationResult || false;
   const isTaskResult = message.isTaskResult || false;
   const isThinking = message.isThinking || false;
+  const designActive = useDesignStore((s) => s.active);
 
   const { avatar, label, extraClass } = useMemo(() => {
     if (isDelegationResult) {
@@ -585,8 +587,84 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
   const { textAfterArtifacts, modelArtifacts } = useMemo(() => {
     if (message.role !== 'assistant' || !rawText) return { textAfterArtifacts: rawText, modelArtifacts: [] };
     const { cleaned, artifacts } = extractModelArtifacts(rawText);
+
+    // Design mode: route artifacts to design store as new versions
+    if (designActive) {
+      // Handle complete artifacts
+      for (let ai = 0; ai < artifacts.length; ai++) {
+        const a = artifacts[ai];
+        const isProject = (a as any)._isProject === true;
+        const isHtml = a.type === 'html' && !isProject;
+        if (!isProject && !isHtml) continue;
+
+        const stableId = `design-${message.id}-${ai}`;
+        const store = useDesignStore.getState();
+        const existingIdx = store.versions.findIndex((v) => v.id === stableId);
+        const title = a.title || `Design v${store.versions.length + 1}`;
+        const ts = message.timestamp || Date.now();
+
+        if (isProject) {
+          const files = parseSpringoFiles(a.content);
+          if (existingIdx === -1) {
+            store.addVersion({
+              id: stableId, html: '', files, title, prompt: '', timestamp: ts,
+              entryFile: files.find(f => f.path === 'index.html')?.path || files[0]?.path,
+            });
+          } else {
+            // Update existing version with latest files (streaming refinement)
+            store.updateVersion(stableId, { files, title });
+          }
+        } else if (existingIdx === -1) {
+          store.addVersion({
+            id: stableId, html: a.content, files: [], title, prompt: '', timestamp: ts,
+          });
+        } else {
+          store.updateVersion(stableId, { html: a.content, title });
+        }
+      }
+
+      // Handle streaming: incomplete artifact (opening tag but no closing tag yet)
+      if (artifacts.length === 0) {
+        const incompleteMatch = rawText.match(/<springo-artifact\s+([^>]*?)>([\s\S]*)$/);
+        if (incompleteMatch) {
+          const attrs = incompleteMatch[1];
+          const partialContent = incompleteMatch[2];
+          const titleMatch = attrs.match(/title="([^"]*)"/);
+          const rawType = attrs.match(/type="([^"]*)"/)?.[1] || '';
+          const isProject = rawType === 'design/project';
+          const title = titleMatch?.[1] || 'Generating...';
+          const stableId = `design-${message.id}-0`;
+          const store = useDesignStore.getState();
+          const existingIdx = store.versions.findIndex((v) => v.id === stableId);
+          const ts = message.timestamp || Date.now();
+
+          if (isProject) {
+            const files = parseSpringoFiles(partialContent);
+            if (files.length > 0) {
+              if (existingIdx === -1) {
+                store.addVersion({
+                  id: stableId, html: '', files, title, prompt: '', timestamp: ts,
+                  entryFile: files.find(f => f.path === 'index.html')?.path || files[0]?.path,
+                });
+              } else {
+                store.updateVersion(stableId, { files, title });
+              }
+            }
+          } else if (partialContent.length > 100) {
+            if (existingIdx === -1) {
+              store.addVersion({
+                id: stableId, html: partialContent, files: [], title, prompt: '', timestamp: ts,
+              });
+            } else {
+              store.updateVersion(stableId, { html: partialContent, title });
+            }
+          }
+        }
+      }
+    }
+
     return { textAfterArtifacts: cleaned, modelArtifacts: artifacts };
-  }, [message.role, rawText]);
+  }, [message.role, rawText, message.timestamp, designActive]);
 
   // Detect skill-wrapped user messages
   const skillInfo = useMemo(() => {

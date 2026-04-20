@@ -3,6 +3,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useReplayStore } from '@/stores/replayStore';
 import { useVoiceStore } from '@/stores/voiceStore';
+import { useDesignStore } from '@/stores/designStore';
 
 export default function Header() {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
@@ -10,6 +11,8 @@ export default function Header() {
   const rightPanelOpen = useUIStore((s) => s.rightPanelOpen);
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isTranscribing = useVoiceStore((s) => s.isTranscribing);
+  const designActive = useDesignStore((s) => s.active);
+  const toggleDesignMode = useDesignStore((s) => s.toggleDesignMode);
 
   const handleVoiceToggle = () => {
     if (isTranscribing) {
@@ -97,6 +100,17 @@ export default function Header() {
         </span>
       </div>
       <div className="header-actions">
+        <button
+          className={`header-design-btn${designActive ? ' active' : ''}`}
+          onClick={toggleDesignMode}
+          title={designActive ? 'Exit design mode' : 'Enter design mode'}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="M21 15l-5-5L5 21" />
+          </svg>
+        </button>
         <button
           className={`header-voice-btn${isTranscribing ? ' active' : ''}`}
           onClick={handleVoiceToggle}

@@ -27,7 +27,7 @@ class Settings(BaseSettings):
         description="Model for natural language to command parsing"
     )
     default_chat_model: str = Field(
-        default="claude-opus-4-6",
+        default="claude-opus-4-7",
         description="Default chat model for new sessions"
     )
 

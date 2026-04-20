@@ -360,9 +360,13 @@ interface ChatState {
       compactModel?: string;
       enable1mContext?: boolean;
       sessionId?: string;
+      designMode?: boolean;
+      designSystem?: Record<string, unknown>;
+      designContext?: string;
       onTextUpdate?: (text: string, tools: ToolUse[]) => void;
       onComplete?: () => void;
       onError?: (error: Error) => void;
+      [key: string]: unknown;
     },
   ) => Promise<void>;
   sendTeamMessage: (
@@ -740,6 +744,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
         session_id: options.sessionId || convId,
         compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
         extended_context: options.enable1mContext === true,
+        ...(options.designMode ? {
+          design_mode: true,
+          ...(options.designSystem ? { design_system: options.designSystem } : {}),
+          ...(options.designContext ? { design_context: options.designContext } : {}),
+        } : {}),
       };
 
       // Use api.messages.sendAutoRaw for fetchWithRetry + proper error handling

@@ -100,6 +100,11 @@ class MessageAutoRequest(MessageRequest):
     parallel_tool_execution: bool = Field(default=True, description="Enable parallel tool execution")
     working_directory: Optional[str] = Field(default=None, description="Override working directory for tool execution")
 
+    # Design mode
+    design_mode: bool = Field(default=False, description="Enable design mode — LLM generates visual HTML designs")
+    design_system: Optional[Dict[str, Any]] = Field(default=None, description="Design system config (colors, fonts, components)")
+    design_context: Optional[str] = Field(default=None, description="Previous design HTML for iterative refinement")
+
 
 class ToolExecuteRequest(BaseModel):
     """工具执行请求"""

@@ -36,6 +36,7 @@ function escapeHtml(str: string): string {
 
 /** Map springo-artifact type attr to internal type */
 function mapArtifactType(typeAttr: string): ModelArtifact['type'] {
+  if (typeAttr === 'design/project') return 'html'  // multi-file project treated as html for card display
   if (typeAttr.includes('html')) return 'html'
   if (typeAttr.includes('svg')) return 'svg'
   if (typeAttr.includes('code')) return 'code'
@@ -43,6 +44,32 @@ function mapArtifactType(typeAttr: string): ModelArtifact['type'] {
 }
 
 let modelArtifactCounter = 0
+
+import type { DesignFile, DesignFileType } from '@/types'
+
+/**
+ * Parse <springo-file> tags from within a design/project artifact.
+ */
+export function parseSpringoFiles(content: string): DesignFile[] {
+  const files: DesignFile[] = []
+  const re = /<springo-file\s+([^>]*?)>([\s\S]*?)<\/springo-file>/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content)) !== null) {
+    const attrs = m[1]
+    const body = m[2]
+    const pathMatch = attrs.match(/path="([^"]*)"/)
+    const typeMatch = attrs.match(/type="([^"]*)"/)
+    const path = pathMatch?.[1] || `file-${files.length}`
+    const rawType = typeMatch?.[1] || ''
+    let fileType: DesignFileType = 'text'
+    if (rawType.includes('jsx') || path.endsWith('.jsx') || path.endsWith('.tsx')) fileType = 'jsx'
+    else if (rawType.includes('css') || path.endsWith('.css')) fileType = 'css'
+    else if (rawType.includes('html') || path.endsWith('.html')) fileType = 'html'
+    else if (rawType.includes('json') || path.endsWith('.json')) fileType = 'json'
+    files.push({ path, type: fileType, content: body.trim() })
+  }
+  return files
+}
 
 /**
  * Extract <springo-artifact> tags from model output.
@@ -52,19 +79,30 @@ export function extractModelArtifacts(text: string): { cleaned: string; artifact
   if (!text || typeof text !== 'string') return { cleaned: text, artifacts: [] }
 
   const artifacts: ModelArtifact[] = []
-  const cleaned = text.replace(
+  let cleaned = text.replace(
     /<springo-artifact\s+([^>]*?)>([\s\S]*?)<\/springo-artifact>/g,
     (_match, attrs: string, content: string) => {
       const typeMatch = attrs.match(/type="([^"]*)"/)
       const titleMatch = attrs.match(/title="([^"]*)"/)
       const idMatch = attrs.match(/id="([^"]*)"/)
-      const type = mapArtifactType(typeMatch?.[1] || 'text/markdown')
+      const rawType = typeMatch?.[1] || 'text/markdown'
+      const type = mapArtifactType(rawType)
       const title = titleMatch?.[1] || 'Artifact'
       const id = idMatch?.[1] || `mart-${++modelArtifactCounter}`
-      artifacts.push({ id, type, title, content: content.trim() })
+      artifacts.push({
+        id, type, title, content: content.trim(),
+        _isProject: rawType === 'design/project',
+      } as ModelArtifact & { _isProject?: boolean })
       return '' // Remove from inline text
     }
   )
+
+  // During streaming, the closing tag may not have arrived yet.
+  // Strip incomplete artifact content to prevent raw code from showing in chat.
+  const incompleteIdx = cleaned.indexOf('<springo-artifact')
+  if (incompleteIdx !== -1) {
+    cleaned = cleaned.substring(0, incompleteIdx)
+  }
 
   return { cleaned: cleaned.trim(), artifacts }
 }

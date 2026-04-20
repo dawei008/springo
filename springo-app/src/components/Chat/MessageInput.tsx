@@ -5,10 +5,21 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useToolsStore } from '@/stores/toolsStore';
 import { usePlanStore } from '@/stores/planStore';
+import { useDesignStore } from '@/stores/designStore';
 import { api } from '@/services/api';
-import type { Attachment, Skill, UsageData } from '@/types';
+import type { Attachment, Skill, UsageData, DesignVersion } from '@/types';
 
 const BASE_URL = 'http://127.0.0.1:8081';
+
+/** Build design context string for iteration — serializes multi-file projects as springo-file blocks */
+function buildDesignContext(design: DesignVersion): string {
+  if (design.files && design.files.length > 0) {
+    return design.files.map(f =>
+      `<springo-file path="${f.path}" type="text/${f.type}">\n${f.content}\n</springo-file>`
+    ).join('\n\n');
+  }
+  return design.html;
+}
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -77,6 +88,7 @@ const BUILT_IN_COMMANDS = [
   { name: 'terminal', description: 'Execute a command inline (usage: /terminal ls -la)', isBuiltIn: true as const },
   { name: 'plan', description: 'Generate a structured plan (usage: /plan Migrate auth to JWT)', isBuiltIn: true as const },
   { name: 'ultraplan', description: 'Alias for /plan — generate a structured plan', isBuiltIn: true as const },
+  { name: 'design', description: 'Enter design mode — generate visual designs via chat', isBuiltIn: true as const },
 ];
 
 export default function MessageInput() {
@@ -371,6 +383,46 @@ export default function MessageInput() {
 
     if (isStreaming) return;
 
+    // Design mode: /design activates design mode (with optional initial prompt)
+    const designMatch = content.match(/^\/design(?:\s+(.+))?/);
+    if (designMatch) {
+      const designPrompt = designMatch[1]?.trim();
+      // Ensure session exists BEFORE activating design mode
+      // (switchSession resets active for new sessions without snapshots)
+      let convId = currentSessionId;
+      if (!convId) convId = useSessionStore.getState().createSession();
+      // Activate design mode AFTER session is established
+      useDesignStore.getState().activateDesignMode();
+      if (!designPrompt) {
+        // Just activate design mode, no message to send
+        setText('');
+        if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        return;
+      }
+      // Fall through with the prompt text — design_mode flag will be attached below
+      setText('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      // Replace content with just the design prompt for sending
+      const designContent = designPrompt;
+      setAttachments([]);
+      const currentSettings = useSettingsStore.getState().settings;
+      const designSystem = useDesignStore.getState().designSystem;
+      const prevDesign = useDesignStore.getState().currentDesign();
+      const designContext = prevDesign ? buildDesignContext(prevDesign) : undefined;
+      await useChatStore.getState().sendMessage(convId, designContent, [], {
+        model: currentSettings.model,
+        maxTokens: currentSettings.maxTokens,
+        temperature: currentSettings.temperature,
+        systemPrompt: currentSettings.systemPrompt,
+        compactModel: currentSettings.compactModel,
+        sessionId: convId,
+        designMode: true,
+        designSystem: designSystem as unknown as Record<string, unknown> || undefined,
+        designContext,
+      });
+      return;
+    }
+
     // Plan mode: /plan, /ultraplan, or bare "ultraplan" triggers plan generation
     const planMatch = content.match(/^(?:\/(?:plan|ultraplan)|ultraplan)\s+(.+)/);
     if (planMatch) {
@@ -414,6 +466,10 @@ export default function MessageInput() {
     }));
 
     const currentSettings = useSettingsStore.getState().settings;
+    const isDesignMode = useDesignStore.getState().active;
+    const designSystem = isDesignMode ? useDesignStore.getState().designSystem : null;
+    const prevDesign = isDesignMode ? useDesignStore.getState().currentDesign() : null;
+    const designContext = prevDesign ? buildDesignContext(prevDesign) : undefined;
     await useChatStore.getState().sendMessage(convId, content, atts, {
       model: currentSettings.model,
       maxTokens: currentSettings.maxTokens,
@@ -421,6 +477,11 @@ export default function MessageInput() {
       systemPrompt: currentSettings.systemPrompt,
       compactModel: currentSettings.compactModel,
       sessionId: convId,
+      ...(isDesignMode ? {
+        designMode: true,
+        designSystem: designSystem as unknown as Record<string, unknown> || undefined,
+        designContext,
+      } : {}),
     });
 
     if (useUIStore.getState().activeSkill) {

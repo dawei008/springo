@@ -249,6 +249,7 @@ export const api = {
         session_id?: string;
         max_tool_iterations?: number;
         compact_model?: string;
+        [key: string]: unknown;
       },
       signal?: AbortSignal,
     ): Promise<Response> => {
@@ -513,6 +514,17 @@ export const api = {
     refreshTools: () => post<{ ok: boolean }>('/mcp/refresh-tools'),
     listTools: () => get<{ tools: ToolInfo[] }>('/mcp/tools'),
     initialize: () => post<{ ok: boolean }>('/mcp/initialize'),
+  },
+
+  // ======================== Design ========================
+
+  design: {
+    extractSystem: (dir: string) =>
+      post<{ colors: Record<string, string>; fonts: { heading: string; body: string }; components: string[]; brandName?: string; raw?: string }>('/design/extract-system', { directory: dir }),
+    exportPdf: (html: string) =>
+      post<Blob>('/design/export/pdf', { html }, { parseJson: false, timeout: 60_000 }),
+    exportPptx: (html: string) =>
+      post<Blob>('/design/export/pptx', { html }, { parseJson: false, timeout: 60_000 }),
   },
 
   // ======================== Tool Results ========================

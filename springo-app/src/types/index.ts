@@ -837,6 +837,35 @@ export const EXT_TO_MEDIA_TYPE: Record<string, string> = {
   webp: 'image/webp',
 };
 
+// ======================== Design Mode ========================
+
+export type DesignFileType = 'html' | 'jsx' | 'css' | 'json' | 'text';
+
+export interface DesignFile {
+  path: string;           // Virtual path e.g. "components/Header.jsx"
+  type: DesignFileType;
+  content: string;
+}
+
+export interface DesignVersion {
+  id: string;
+  html: string;           // Legacy: single HTML string
+  files: DesignFile[];    // Multi-file project (empty for legacy single-HTML)
+  title: string;
+  prompt: string;
+  timestamp: number;
+  entryFile?: string;     // Entry point file path (default: "index.html")
+}
+
+export interface DesignSystemConfig {
+  colors: Record<string, string>;
+  fonts: { heading: string; body: string };
+  components: string[];
+  brandName?: string;
+  sourceDir?: string;
+  raw?: string;
+}
+
 // ======================== Plan Mode ========================
 
 export interface PlanSection {
