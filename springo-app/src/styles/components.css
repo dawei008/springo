@@ -2108,26 +2108,25 @@
 
         /* Tool Visual Content (auto-rendered images, SVG from tool results) */
         .tool-visual-content {
-            margin: 8px 0;
-            border: 1px solid var(--border);
-            border-radius: 10px;
+            margin: 12px 0;
+            border: 1px solid var(--border-default);
+            border-radius: var(--radius-md);
             overflow: hidden;
-            background: #fff;
+            background: var(--bg-elevated);
         }
 
         .tool-visual-header {
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 6px 12px;
-            background: var(--bg-secondary);
+            gap: 10px;
+            padding: 10px 14px;
             border-bottom: 1px solid var(--border);
             font-size: 12px;
             color: var(--text-secondary);
             cursor: pointer;
             user-select: none;
         }
-        .tool-visual-header:hover { background: var(--bg-hover, var(--bg-secondary)); }
+        .tool-visual-header:hover { background: var(--bg-hover); }
 
         .tool-visual-content.collapsed .tool-visual-header {
             border-bottom: none;
