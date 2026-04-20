@@ -6,6 +6,8 @@ import { useUIStore } from '@/stores/uiStore'
 import TeamPanel from '@/components/RightPanel/TeamPanel'
 import SchedulesPanel from '@/components/RightPanel/SchedulesPanel'
 import MeetingPanel from '@/components/RightPanel/MeetingPanel'
+import PlanCanvasPanel from '@/components/RightPanel/PlanCanvasPanel'
+import RecordingCanvasPanel from '@/components/RightPanel/RecordingCanvasPanel'
 
 // ==================== HTML Renderer ====================
 
@@ -190,6 +192,10 @@ function ComponentRenderer({ artifact }: { artifact: ArtifactItem }) {
       return <SchedulesPanel />
     case 'meeting':
       return <MeetingPanel />
+    case 'plan':
+      return <PlanCanvasPanel />
+    case 'recording':
+      return <RecordingCanvasPanel />
     default:
       return <div className="artifact-panel-empty">Unknown component</div>
   }

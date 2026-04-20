@@ -105,5 +105,6 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
       panelOpen: restored?.panelOpen ?? false,
     })
   },
-}))
+}));
+
 

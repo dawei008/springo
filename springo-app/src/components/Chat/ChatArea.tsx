@@ -6,7 +6,7 @@ import { useReplayStore } from '@/stores/replayStore';
 import WelcomeScreen from './WelcomeScreen';
 import MessageList from './MessageList';
 import ToolPanel from './ToolPanel';
-import RecordingBar from './RecordingBar';
+
 import { useUIStore } from '@/stores/uiStore';
 import type { Message } from '@/types';
 
@@ -175,7 +175,6 @@ export default function ChatArea() {
 
   return (
     <div className="chat-container" ref={containerRef}>
-      <RecordingBar />
       {isReplaying && (
         <div className="replay-bar">
           <span className="replay-icon">&#9654;</span>

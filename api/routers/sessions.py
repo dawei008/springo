@@ -32,6 +32,7 @@ class SessionInfo(BaseModel):
     working_dir: str = ""
     title: str = ""
     message_count: int = 0
+    session_mode: str = "general"
 
 
 class SessionsListResponse(BaseModel):

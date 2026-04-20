@@ -8,7 +8,7 @@ import MainContent from '@/components/Layout/MainContent'
 import SettingsModal from '@/components/Settings/SettingsModal'
 import ImagePreview from '@/components/common/ImagePreview'
 import AskUserModal from '@/components/common/AskUserModal'
-import PlanApprovalModal, { PlanModeIndicator } from '@/components/common/PlanModeModal'
+import PlanApprovalModal from '@/components/common/PlanModeModal'
 import { useUIStore } from '@/stores/uiStore'
 import { useToolsStore } from '@/stores/toolsStore'
 import { useScheduleStore } from '@/stores/scheduleStore'
@@ -32,7 +32,11 @@ export default function App() {
     loadSettings()
     loadModels()
     loadWorkingDir()
-    loadSessions()
+    loadSessions().then(() => {
+      import('@/stores/modeStore').then(({ useModeStore }) => {
+        useModeStore.getState().hydrateFromSessions();
+      });
+    })
     useToolsStore.getState().fetchAll()
     useScheduleStore.getState().loadTasks()
   }, [loadSettings, loadModels, loadWorkingDir, loadSessions])
@@ -103,7 +107,7 @@ export default function App() {
             const ok = await recStore.startRecording()
             if (!ok) { useUIStore.getState().showToast('Failed to start recording', 'error'); return }
             const { useReplayStore } = await import('@/stores/replayStore')
-            const replaySessionId = useSessionStore.getState().createSession('Replay')
+            const replaySessionId = useSessionStore.getState().createSession('Replay', 'recording')
             useReplayStore.getState().startReplay(currentSessionId, replaySessionId)
           } else {
             const ok = await recStore.startRecording()
@@ -202,7 +206,6 @@ export default function App() {
       <Sidebar />
       <FileBrowser />
       <MainContent />
-      <PlanModeIndicator />
       {settingsOpen && <SettingsModal />}
       {imagePreview && <ImagePreview />}
       {askUserData && <AskUserModal />}

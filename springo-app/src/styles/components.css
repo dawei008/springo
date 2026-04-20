@@ -471,6 +471,51 @@
             50% { opacity: 0.4; transform: scale(0.8); }
         }
 
+        /* Session mode icon (replaces status dot in session list) */
+        .session-mode-icon {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-tertiary);
+            opacity: 0.55;
+            flex-shrink: 0;
+        }
+        .session-item.active .session-mode-icon {
+            color: var(--accent);
+            opacity: 1;
+        }
+        .session-mode-icon.animated {
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        .session-mode-icon.error {
+            color: var(--error);
+            opacity: 1;
+        }
+        .session-mode-icon.completed-unseen {
+            color: var(--info);
+            opacity: 1;
+            animation: pulse 2s ease-in-out infinite;
+        }
+
+        /* Mode section items */
+        .mode-item {
+            position: relative;
+        }
+        .mode-item.disabled {
+            opacity: 0.4;
+            pointer-events: none;
+        }
+        .mode-active-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent);
+            flex-shrink: 0;
+            margin-left: auto;
+        }
+
         /* Delegation badges */
         .delegation-badges {
             display: flex;
@@ -8468,75 +8513,94 @@
     height: 100%;
 }
 
-.meeting-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
+.meeting-canvas-controls {
+    padding: 12px 16px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
-.meeting-toolbar-spacer {
-    flex: 1;
-}
-
-.meeting-lang-btn {
-    padding: 2px 8px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--bg-secondary);
-    color: var(--text-secondary);
-    font-size: 11px;
+.meeting-canvas-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
     font-weight: 600;
-    cursor: pointer;
-    transition: all 0.15s;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
 }
 
-.meeting-lang-btn:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.meeting-live-dot {
-    font-size: 10px;
-    font-weight: 700;
-    color: #e53935;
-    letter-spacing: 0.5px;
+.meeting-canvas-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e53935;
+    flex-shrink: 0;
     animation: voice-pulse 1.2s ease-in-out infinite;
 }
 
-.meeting-action-btn {
-    width: 28px;
-    height: 28px;
-    border: none;
-    background: transparent;
-    color: var(--text-tertiary);
-    cursor: pointer;
+.meeting-canvas-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.meeting-canvas-buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.meeting-canvas-btn {
     display: flex;
     align-items: center;
-    justify-content: center;
-    border-radius: 4px;
+    gap: 5px;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    cursor: pointer;
     transition: all 0.15s;
 }
 
-.meeting-action-btn:hover {
+.meeting-canvas-btn:hover {
     background: var(--bg-tertiary);
-    color: var(--text-primary);
+}
+
+.meeting-canvas-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.meeting-canvas-btn:disabled:hover {
+    background: var(--bg-secondary);
+}
+
+.meeting-canvas-stop {
+    border-color: #e53935;
+    color: #e53935;
+}
+
+.meeting-canvas-stop:hover {
+    background: rgba(229, 57, 53, 0.08);
+}
+
+.meeting-canvas-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex: 1;
+    color: var(--text-tertiary);
+    font-size: 13px;
+    padding: 24px;
 }
 
 .meeting-content {
     flex: 1;
     overflow-y: auto;
-    padding: 12px;
-}
-
-.meeting-empty {
-    color: var(--text-tertiary);
-    font-size: 13px;
-    text-align: center;
-    padding: 24px 12px;
-    line-height: 1.6;
+    padding: 12px 16px;
 }
 
 .meeting-text {
@@ -8550,6 +8614,263 @@
 .meeting-partial {
     color: var(--text-tertiary);
     font-style: italic;
+}
+
+/* ==================== Meeting Transcribe Button ==================== */
+
+.meeting-transcribe-btn {
+    width: 28px;
+    height: 28px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.15s;
+}
+
+.meeting-transcribe-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.meeting-transcribe-btn.active {
+    color: #e53935;
+    animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+/* ==================== Plan Canvas Panel ==================== */
+
+.plan-canvas-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px;
+}
+
+.plan-canvas-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+.plan-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.plan-status-dot.active {
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent);
+    animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.plan-canvas-approval {
+    flex: 1;
+    overflow-y: auto;
+}
+
+.plan-canvas-summary {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+}
+
+.plan-canvas-steps h4,
+.plan-canvas-files h4 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 12px 0 6px;
+}
+
+.plan-canvas-steps ol {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text-primary);
+}
+
+.plan-canvas-files ul {
+    margin: 0;
+    padding-left: 18px;
+    font-size: 12px;
+    line-height: 1.8;
+}
+
+.plan-canvas-files code {
+    background: var(--bg-tertiary);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.plan-canvas-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.plan-reject-btn,
+.plan-approve-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.plan-reject-btn {
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.plan-reject-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.plan-approve-btn {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
+.plan-approve-btn:hover {
+    filter: brightness(1.1);
+}
+
+.plan-canvas-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex: 1;
+    color: var(--text-tertiary);
+    font-size: 13px;
+}
+
+/* ==================== Recording Canvas Panel ==================== */
+
+.recording-canvas-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 16px;
+}
+
+.recording-canvas-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 16px;
+}
+
+.recording-canvas-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e53935;
+    flex-shrink: 0;
+    animation: voice-pulse 1.2s ease-in-out infinite;
+}
+
+.recording-canvas-dot.paused {
+    background: var(--text-tertiary);
+    animation: none;
+}
+
+.recording-canvas-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.recording-canvas-timer {
+    font-size: 36px;
+    font-weight: 300;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+    text-align: center;
+    margin: 24px 0;
+}
+
+.recording-canvas-controls {
+    display: flex;
+    gap: 12px;
+    justify-content: center;
+}
+
+.recording-canvas-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.recording-canvas-btn:hover {
+    background: var(--bg-tertiary);
+}
+
+.recording-canvas-stop {
+    border-color: #e53935;
+    color: #e53935;
+}
+
+.recording-canvas-stop:hover {
+    background: rgba(229, 57, 53, 0.08);
+}
+
+.recording-canvas-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    flex: 1;
+    color: var(--text-tertiary);
+    font-size: 13px;
+}
+
+.recording-canvas-start-btn {
+    margin-top: 8px;
+    padding: 8px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.recording-canvas-start-btn:hover {
+    background: var(--bg-tertiary);
 }
 
 /* ==================== Replay Bar ==================== */
@@ -9194,7 +9515,7 @@
     display: flex;
     flex-direction: column;
     background: var(--bg-primary);
-    border-left: 1px solid var(--border-primary);
+    border-left: 1px solid var(--border);
     position: relative;
     flex-shrink: 0;
 }
@@ -9209,17 +9530,20 @@
 }
 .design-resize-handle:hover,
 .design-resize-handle.dragging {
-    background: var(--accent-primary);
+    background: var(--accent);
     opacity: 0.3;
 }
 
-/* Design Panel Header */
+/* Design Panel Header — matches .artifact-panel-header */
 .design-panel-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-primary);
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+    gap: 8px;
+    min-height: 44px;
     flex-shrink: 0;
 }
 .design-header-left {
@@ -9261,7 +9585,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 12px;
-    border-bottom: 1px solid var(--border-primary);
+    border-bottom: 1px solid var(--border);
     gap: 8px;
     flex-shrink: 0;
 }
@@ -9298,12 +9622,12 @@
 }
 .design-viewport-btn.active {
     background: var(--bg-primary);
-    color: var(--accent-primary);
+    color: var(--accent);
     box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
 .design-version-select {
     background: var(--bg-secondary);
-    border: 1px solid var(--border-primary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text-primary);
     font-size: 12px;
@@ -9319,7 +9643,7 @@
     align-items: center;
     gap: 4px;
     background: none;
-    border: 1px solid var(--border-primary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     color: var(--text-secondary);
     font-size: 12px;
@@ -9348,8 +9672,8 @@
 }
 .design-canvas-viewport-tablet,
 .design-canvas-viewport-mobile {
-    border-left: 1px solid var(--border-primary);
-    border-right: 1px solid var(--border-primary);
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
     background: var(--bg-primary);
     box-shadow: 0 0 20px rgba(0,0,0,0.1);
 }
@@ -9375,7 +9699,7 @@
     display: flex;
     gap: 4px;
     padding: 8px 12px;
-    border-top: 1px solid var(--border-primary);
+    border-top: 1px solid var(--border);
     overflow-x: auto;
     flex-shrink: 0;
 }
@@ -9384,7 +9708,7 @@
     align-items: center;
     gap: 4px;
     padding: 4px 10px;
-    border: 1px solid var(--border-primary);
+    border: 1px solid var(--border);
     border-radius: 6px;
     background: var(--bg-secondary);
     color: var(--text-secondary);
@@ -9398,9 +9722,9 @@
     color: var(--text-primary);
 }
 .design-version-item.active {
-    background: var(--accent-primary);
+    background: var(--accent);
     color: white;
-    border-color: var(--accent-primary);
+    border-color: var(--accent);
 }
 .design-version-num {
     font-weight: 600;
@@ -9430,7 +9754,7 @@
 .design-file-browser {
     width: 200px;
     flex-shrink: 0;
-    border-right: 1px solid var(--border-primary);
+    border-right: 1px solid var(--border);
     background: var(--bg-primary);
     overflow-y: auto;
     padding: 8px 0;
@@ -9463,7 +9787,7 @@
     background: var(--bg-hover);
 }
 .design-file-item.active {
-    background: var(--accent-primary);
+    background: var(--accent);
     color: white;
 }
 .design-file-item.active .design-file-type {
@@ -9545,7 +9869,7 @@
     align-items: center;
     justify-content: space-between;
     padding: 6px 12px;
-    border-bottom: 1px solid var(--border-primary);
+    border-bottom: 1px solid var(--border);
     background: var(--bg-secondary);
     flex-shrink: 0;
 }
@@ -9598,7 +9922,7 @@
     color: var(--text-primary);
 }
 .header-design-btn.active {
-    color: var(--accent-primary);
-    background: rgba(var(--accent-primary-rgb, 99, 102, 241), 0.1);
+    color: var(--accent);
+    background: var(--accent-light);
 }
 

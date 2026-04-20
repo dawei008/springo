@@ -83,7 +83,8 @@ class SessionStore:
                     "modified": stat.st_mtime * 1000,  # Convert to milliseconds for JS Date compatibility
                     "working_dir": metadata.get("working_dir", ""),
                     "title": metadata.get("title", ""),
-                    "message_count": metadata.get("message_count", 0)
+                    "message_count": metadata.get("message_count", 0),
+                    "session_mode": metadata.get("session_mode", "general")
                 }
 
                 # 过滤工作目录

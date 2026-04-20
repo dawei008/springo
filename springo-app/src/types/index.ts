@@ -106,6 +106,8 @@ export type ConversationStatus = 'idle' | 'running' | 'completed' | 'error' | 'c
 /** Alias used by session store */
 export type SessionStatus = ConversationStatus;
 
+export type SessionMode = 'general' | 'design' | 'plan' | 'team' | 'meeting' | 'recording';
+
 export interface Conversation {
   id: string;
   title: string;
@@ -114,6 +116,7 @@ export interface Conversation {
   status: ConversationStatus;
   workingDir: string;
   isCustomTitle: boolean;
+  mode?: SessionMode;
   messages: Message[];
   todos?: TodoItem[];
 }

@@ -7,6 +7,8 @@ import { useVoiceStore } from '@/stores/voiceStore';
 import { useDesignStore } from '@/stores/designStore';
 import { useReplayStore } from '@/stores/replayStore';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
+import { useModeStore } from '@/stores/modeStore';
+import type { SessionMode } from '@/types';
 
 function getStatusTitle(visualStatus: string): string {
   const titles: Record<string, string> = {
@@ -172,53 +174,129 @@ function NavItem({
   );
 }
 
-// ─── Apps Section (mockup: General / Design / Office with sub-items) ───
+// ─── Session Mode Icon (used in session list) ───
+
+function SessionModeIcon({ mode, status }: { mode?: SessionMode; status?: string }) {
+  const isAnimated = status === 'running' || status === 'compacting';
+  const statusClass = ['error', 'completed-unseen'].includes(status || '') ? ` ${status}` : '';
+  const cls = `session-mode-icon${isAnimated ? ' animated' : ''}${statusClass}`;
+
+  switch (mode) {
+    case 'design':
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17 2h2a2 2 0 0 1 2 2v2"/><path d="M2 17v2a2 2 0 0 0 2 2h2"/><circle cx="10.5" cy="17.5" r="2.5"/><path d="M2 7V4a2 2 0 0 1 2-2h3"/><path d="M22 17v3a2 2 0 0 1-2 2h-3"/></svg>
+        </div>
+      );
+    case 'plan':
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        </div>
+      );
+    case 'team':
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+      );
+    case 'meeting':
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>
+        </div>
+      );
+    case 'recording':
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>
+        </div>
+      );
+    default:
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+      );
+  }
+}
+
+// ─── Mode Section ───
+
+function ModeSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const activeMode = useModeStore((s) => s.activeMode);
+  const switchMode = useModeStore((s) => s.switchMode);
+  const hasSession = useSessionStore((s) => !!s.currentSessionId);
+
+  const modes: { mode: SessionMode; label: string; icon: React.ReactNode }[] = [
+    {
+      mode: 'general',
+      label: 'General',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+    },
+    {
+      mode: 'design',
+      label: 'Design',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17 2h2a2 2 0 0 1 2 2v2"/><path d="M2 17v2a2 2 0 0 0 2 2h2"/><circle cx="10.5" cy="17.5" r="2.5"/><path d="M2 7V4a2 2 0 0 1 2-2h3"/><path d="M22 17v3a2 2 0 0 1-2 2h-3"/></svg>,
+    },
+    {
+      mode: 'plan',
+      label: 'UltraPlan',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>,
+    },
+    {
+      mode: 'team',
+      label: 'Team',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+    },
+  ];
+
+  return (
+    <div className="nav-section">
+      <SectionHeader title="Mode" collapsed={collapsed} onToggle={onToggle} />
+      {!collapsed && (
+        <>
+          {modes.map((m) => (
+            <div
+              key={m.mode}
+              className={`nav-item mode-item${activeMode === m.mode ? ' active' : ''}${!hasSession ? ' disabled' : ''}`}
+              onClick={() => hasSession && switchMode(m.mode)}
+            >
+              <div className="nav-item-icon">{m.icon}</div>
+              <div className="nav-item-label">{m.label}</div>
+              {activeMode === m.mode && <div className="mode-active-dot" />}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Apps Section (capture tools) ───
 
 function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
-  const [officeOpen, setOfficeOpen] = useState(false);
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isTranscribing = useVoiceStore((s) => s.isTranscribing);
   const language = useVoiceStore((s) => s.language);
-  const designActive = useDesignStore((s) => s.active);
-  const toggleDesignMode = useDesignStore((s) => s.toggleDesignMode);
-  const meetingArtifactRef = useRef<string | null>(null);
 
   const handleMeetingToggle = useCallback(() => {
     if (isTranscribing) {
       useVoiceStore.getState().stopTranscription();
       return;
     }
-    let sid = useSessionStore.getState().currentSessionId;
-    if (!sid) {
-      sid = useSessionStore.getState().createSession();
-    }
-    const artId = createArtifactId();
-    meetingArtifactRef.current = artId;
-    // Delay to let session switch settle (switchSession resets artifact state)
+    const sid = useSessionStore.getState().createSession(undefined, 'meeting');
     setTimeout(() => {
       useArtifactStore.getState().openArtifact({
-        id: artId,
-        type: 'markdown',
-        title: 'Meeting Notes (Live)',
-        content: '*Transcription starting...*',
+        id: createArtifactId(),
+        type: 'component',
+        title: 'Meeting Notes',
+        content: '',
+        componentId: 'meeting',
         timestamp: Date.now(),
       });
     }, 100);
     useVoiceStore.getState().startTranscription(sid);
-  }, [isTranscribing]);
-
-  useEffect(() => {
-    if (!meetingArtifactRef.current) return;
-    const artId = meetingArtifactRef.current;
-    const unsub = useVoiceStore.subscribe((state) => {
-      const sessionId = useSessionStore.getState().currentSessionId;
-      if (!sessionId) return;
-      const transcript = state.transcripts[sessionId] || '';
-      const partial = state.partialText || '';
-      const content = (transcript + (partial ? `\n\n*${partial}*` : '')) || '*Listening...*';
-      useArtifactStore.getState().updateArtifact(artId, content);
-    });
-    return unsub;
   }, [isTranscribing]);
 
   const handleRecordToggle = useCallback(async () => {
@@ -228,7 +306,18 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
       }
       await useRecordingStore.getState().stopRecording();
     } else {
+      useSessionStore.getState().createSession(undefined, 'recording');
       await useRecordingStore.getState().startRecording();
+      setTimeout(() => {
+        useArtifactStore.getState().openArtifact({
+          id: createArtifactId(),
+          type: 'component',
+          title: 'Screen Recording',
+          content: '',
+          componentId: 'recording',
+          timestamp: Date.now(),
+        });
+      }, 100);
     }
   }, [isRecording]);
 
@@ -237,55 +326,35 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
       <SectionHeader title="Apps" collapsed={collapsed} onToggle={onToggle} />
       {!collapsed && (
         <>
+          <div className="nav-item-with-action">
+            <NavItem
+              icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>}
+              label="Meeting Notes"
+              status={isTranscribing ? 'rec' : undefined}
+              active={isTranscribing}
+              onClick={handleMeetingToggle}
+            />
+            {isTranscribing && (
+              <button
+                className="meeting-lang-toggle"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  const cur = useVoiceStore.getState().language;
+                  const cycle: Record<string, string> = { zh: 'en', en: 'auto', auto: 'zh' };
+                  useVoiceStore.getState().setLanguage(cycle[cur] || 'auto');
+                }}
+                title="Switch language"
+              >
+                {language === 'zh' ? 'ZH' : language === 'en' ? 'EN' : 'AUTO'}
+              </button>
+            )}
+          </div>
           <NavItem
-            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>}
-            label="Chat"
-            onClick={() => { useSessionStore.getState().createSession(); }}
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>}
+            label="Screen Recording"
+            status={isRecording ? 'rec' : undefined}
+            onClick={handleRecordToggle}
           />
-          <NavItem
-            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17 2h2a2 2 0 0 1 2 2v2"/><path d="M2 17v2a2 2 0 0 0 2 2h2"/><circle cx="10.5" cy="17.5" r="2.5"/><path d="M2 7V4a2 2 0 0 1 2-2h3"/><path d="M22 17v3a2 2 0 0 1-2 2h-3"/></svg>}
-            label="Design"
-            active={designActive}
-            onClick={toggleDesignMode}
-          />
-          <NavItem
-            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>}
-            label="Office"
-            onClick={() => setOfficeOpen((p) => !p)}
-          />
-          {officeOpen && (
-            <div className="nav-sub">
-              <div className="nav-item-with-action">
-                <NavItem
-                  icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>}
-                  label="Meeting Notes"
-                  status={isTranscribing ? 'rec' : undefined}
-                  active={isTranscribing}
-                  onClick={handleMeetingToggle}
-                />
-                {isTranscribing && (
-                  <button
-                    className="meeting-lang-toggle"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const cur = useVoiceStore.getState().language;
-                      const cycle: Record<string, string> = { zh: 'en', en: 'auto', auto: 'zh' };
-                      useVoiceStore.getState().setLanguage(cycle[cur] || 'auto');
-                    }}
-                    title="Switch language"
-                  >
-                    {language === 'zh' ? 'ZH' : language === 'en' ? 'EN' : 'AUTO'}
-                  </button>
-                )}
-              </div>
-              <NavItem
-                icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>}
-                label="Screen Recording"
-                status={isRecording ? 'rec' : undefined}
-                onClick={handleRecordToggle}
-              />
-            </div>
-          )}
         </>
       )}
     </div>
@@ -306,7 +375,7 @@ function openCanvasPanel(componentId: string, title: string) {
   });
 }
 
-function BackgroundTasksSection({
+function SchedulesSection({
   collapsed,
   onToggle,
 }: {
@@ -321,7 +390,7 @@ function BackgroundTasksSection({
 
   return (
     <div className="nav-section">
-      <SectionHeader title="Background" collapsed={collapsed} onToggle={onToggle} />
+      <SectionHeader title="Schedules" collapsed={collapsed} onToggle={onToggle} />
       {!collapsed && (
         <>
           <NavItem
@@ -330,12 +399,6 @@ function BackgroundTasksSection({
             badge={todos.length > 0 ? todos.length : undefined}
             active={activeArtifact?.componentId === 'tasks'}
             onClick={() => openCanvasPanel('tasks', 'Tasks')}
-          />
-          <NavItem
-            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>}
-            label="Team"
-            active={activeArtifact?.componentId === 'team'}
-            onClick={() => openCanvasPanel('team', 'Team')}
           />
           <NavItem
             icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>}
@@ -454,7 +517,8 @@ export default function Sidebar() {
               }
             }
 
-            if (newTitle && newTitle !== 'New Chat' && newTitle !== 'Untitled') {
+            const defaultTitles = ['New Chat', 'New Design', 'New Plan', 'Team Chat', 'Meeting Notes', 'Screen Recording', 'Untitled'];
+            if (newTitle && !defaultTitles.includes(newTitle)) {
               useSessionStore.setState((s) => ({
                 sessions: s.sessions.map((sess) =>
                   sess.id === id ? { ...sess, title: newTitle } : sess,
@@ -687,45 +751,21 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Search bar */}
-      <div className="sidebar-search">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="11" cy="11" r="7" />
-          <path d="m20 20-3.5-3.5" />
-        </svg>
-        <input
-          type="text"
-          placeholder="Search conversations..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          id="sidebar-search"
-        />
-        {searchQuery ? (
-          <button
-            className="search-clear-btn"
-            onClick={() => setSearchQuery('')}
-          >
-            <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M2 2l8 8M10 2l-8 8"/>
-            </svg>
-          </button>
-        ) : (
-          <span className="kbd">⌘K</span>
-        )}
-      </div>
-
       {/* Scrollable content */}
       <div className="sidebar-scroll">
-        {/* Apps section */}
-        <AppsSection collapsed={!!collapsed.apps} onToggle={() => toggleSection('apps')} />
+        {/* Mode section */}
+        <ModeSection collapsed={!!collapsed.mode} onToggle={() => toggleSection('mode')} />
 
-        {/* Background Tasks section */}
-        <BackgroundTasksSection
-          collapsed={!!collapsed.tasks}
-          onToggle={() => toggleSection('tasks')}
+        {/* Schedules section */}
+        <SchedulesSection
+          collapsed={!!collapsed.schedules}
+          onToggle={() => toggleSection('schedules')}
         />
 
-        {/* Recent conversations */}
+        {/* Apps section (capture tools) */}
+        <AppsSection collapsed={!!collapsed.apps} onToggle={() => toggleSection('apps')} />
+
+        {/* Conversations */}
         <div className="nav-section">
           <SectionHeader
             title={`Conversations (${totalCount})`}
@@ -733,6 +773,33 @@ export default function Sidebar() {
             onToggle={() => toggleSection('conversations')}
           />
           {!collapsed.conversations && (
+            <>
+              {/* Search bar inside conversations */}
+              <div className="sidebar-search">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m20 20-3.5-3.5" />
+                </svg>
+                <input
+                  type="text"
+                  placeholder="Search conversations..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  id="sidebar-search"
+                />
+                {searchQuery ? (
+                  <button
+                    className="search-clear-btn"
+                    onClick={() => setSearchQuery('')}
+                  >
+                    <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                      <path d="M2 2l8 8M10 2l-8 8"/>
+                    </svg>
+                  </button>
+                ) : (
+                  <span className="kbd">⌘K</span>
+                )}
+              </div>
             <div className="session-list">
               {groupedSessions.map((group) => (
                 <div key={group.label}>
@@ -761,10 +828,7 @@ export default function Sidebar() {
                         onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
                         data-id={session.id}
                       >
-                        <div
-                          className={`conversation-status ${visualStatus}`}
-                          title={getStatusTitle(visualStatus)}
-                        />
+                        <SessionModeIcon mode={session.mode} status={visualStatus} />
                         <div className="session-content">
                           {isRenaming ? (
                             <input
@@ -818,6 +882,7 @@ export default function Sidebar() {
                 </div>
               ))}
             </div>
+            </>
           )}
         </div>
       </div>

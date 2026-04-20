@@ -3,6 +3,24 @@ import { useToolsStore } from '@/stores/toolsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 
+function SessionModeIconSmall({ mode }: { mode?: string }) {
+  const props = { width: '14', height: '14', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  switch (mode) {
+    case 'design':
+      return <svg {...props}><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17 2h2a2 2 0 0 1 2 2v2"/><path d="M2 17v2a2 2 0 0 0 2 2h2"/><circle cx="10.5" cy="17.5" r="2.5"/><path d="M2 7V4a2 2 0 0 1 2-2h3"/><path d="M22 17v3a2 2 0 0 1-2 2h-3"/></svg>;
+    case 'plan':
+      return <svg {...props}><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>;
+    case 'team':
+      return <svg {...props}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>;
+    case 'meeting':
+      return <svg {...props}><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>;
+    case 'recording':
+      return <svg {...props}><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>;
+    default:
+      return <svg {...props}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>;
+  }
+}
+
 const SEEN_KEY = 'springo-seen-capabilities';
 
 function getSeenSet(): Set<string> {
@@ -80,8 +98,9 @@ function RecentSessions() {
   const switchSession = useSessionStore((s) => s.switchSession);
 
   const recent = useMemo(() => {
+    const defaultTitles = new Set(['New Chat', 'New Design', 'New Plan', 'Team Chat', 'Meeting Notes', 'Screen Recording']);
     return sessions
-      .filter((s) => s.title && s.title !== 'New Chat')
+      .filter((s) => s.title && !defaultTitles.has(s.title))
       .slice(0, 3);
   }, [sessions]);
 
@@ -96,9 +115,7 @@ function RecentSessions() {
           className="welcome-row clickable"
           onClick={() => switchSession(s.id)}
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
+          <SessionModeIconSmall mode={s.mode} />
           <span className="welcome-row-label">{s.title}</span>
           <span className="welcome-row-meta">
             {formatRelativeTime(s.updatedAt || s.createdAt || 0)}

@@ -69,3 +69,4 @@ Springo-Installer.sh
 
 # Test screenshots in springo-app
 springo-app/tests/*.png
+.gstack/

@@ -12,6 +12,7 @@ import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
 import { useArtifactStore } from '@/stores/artifactStore';
 import { useDesignStore } from '@/stores/designStore';
+import { useModeStore } from '@/stores/modeStore';
 
 // ==================== StatusBar ====================
 
@@ -209,10 +210,11 @@ export default function MainContent() {
     }
   }, [currentSessionId]);
 
-  // Save/restore artifact panel state per session
+  // Save/restore artifact panel, design, and mode state per session
   useEffect(() => {
     useArtifactStore.getState().switchSession(currentSessionId ?? null);
     useDesignStore.getState().switchSession(currentSessionId ?? null);
+    useModeStore.getState().switchSession(currentSessionId ?? null);
   }, [currentSessionId]);
 
   return (

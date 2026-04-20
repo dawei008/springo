@@ -388,12 +388,10 @@ export default function MessageInput() {
     const designMatch = content.match(/^\/design(?:\s+(.+))?/);
     if (designMatch) {
       const designPrompt = designMatch[1]?.trim();
-      // Ensure session exists BEFORE activating design mode
-      // (switchSession resets active for new sessions without snapshots)
       let convId = currentSessionId;
       if (!convId) convId = useSessionStore.getState().createSession();
-      // Activate design mode AFTER session is established
-      useDesignStore.getState().activateDesignMode();
+      const { useModeStore } = await import('@/stores/modeStore');
+      useModeStore.getState().switchMode('design');
       if (!designPrompt) {
         // Just activate design mode, no message to send
         setText('');

@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import type {
   Conversation,
   ConversationStatus,
+  SessionMode,
 } from '@/types';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
@@ -48,7 +49,7 @@ interface SessionState {
   unseenCompletedSessions: Set<string>;
 
   loadSessions: (workingDir?: string) => Promise<void>;
-  createSession: (title?: string) => string;
+  createSession: (title?: string, mode?: SessionMode) => string;
   switchSession: (id: string) => void;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
@@ -112,6 +113,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               status: 'idle' as ConversationStatus,
               workingDir: (meta.workingDir || s.workingDir || '') as string,
               isCustomTitle: (meta.isCustomTitle || false) as boolean,
+              mode: ((meta.session_mode || s.session_mode || 'general') as SessionMode),
               messages: [],
             };
           })
@@ -136,12 +138,23 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     set({ loading: false });
   },
 
-  createSession: (title?: string) => {
+  createSession: (title?: string, mode?: SessionMode) => {
     // Fire-and-forget: archive the old session's messages to memory/*.md
     const oldSessionId = get().currentSessionId;
     if (oldSessionId) {
       archiveSession(oldSessionId);
     }
+
+    const defaultTitles: Record<string, string> = {
+      general: 'New Chat',
+      design: 'New Design',
+      plan: 'New Plan',
+      team: 'Team Chat',
+      meeting: 'Meeting Notes',
+      recording: 'Screen Recording',
+    };
+    const sessionMode = mode || 'general';
+    const sessionTitle = title || defaultTitles[sessionMode] || 'New Chat';
 
     // Use unique ID with random suffix to avoid collisions (matches legacy)
     const id =
@@ -153,12 +166,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     const defaultDir = settings.defaultWorkingFolder || settings.workingDir || '';
     const session: Conversation = {
       id,
-      title: title || 'New Chat',
+      title: sessionTitle,
       createdAt: Date.now(),
       updatedAt: Date.now(),
       status: 'idle',
       workingDir: defaultDir,
       isCustomTitle: !!title,
+      mode: sessionMode,
       messages: [],
     };
 
@@ -166,6 +180,22 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: [session, ...state.sessions],
       currentSessionId: id,
     }));
+
+    // Persist initial metadata to backend
+    fetch(`${BASE_URL}/v1/sessions/${id}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messages: [],
+        metadata: {
+          title: sessionTitle,
+          session_mode: sessionMode,
+          createdAt: Date.now(),
+          workingDir: defaultDir,
+          isCustomTitle: !!title,
+        },
+      }),
+    }).catch(() => {});
 
     // Sync working dir to backend so tools use the correct directory
     if (defaultDir) {
@@ -254,6 +284,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
             status: 'idle',
             workingDir: '',
             isCustomTitle: false,
+            mode: 'general',
             messages: [],
           };
           sessions.push(newSession);
