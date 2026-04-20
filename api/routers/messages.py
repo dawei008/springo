@@ -581,14 +581,30 @@ async def messages_auto_api(
                     _current_block_idx = -1
 
                     # Stream response (with safety net for token limit errors)
+                    # Wrap with heartbeat so the frontend SSE timeout doesn't fire
+                    # while Bedrock is connecting / thinking before the first chunk.
                     _prompt_too_long = False
+                    _stream_start = asyncio.get_event_loop().time()
+                    _hb_interval = settings.sse_heartbeat_interval
                     try:
-                        async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
-                            # Check cancellation during streaming
+                        _stream_iter = bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format).__aiter__()
+                        while True:
+                            # Check cancellation
                             if cancel_event and cancel_event.is_set():
                                 logger.info(f"[Auto] Cancelled during Bedrock stream at iteration {iteration}")
                                 stop_reason = "cancelled"
                                 break
+
+                            # Wait for next chunk with heartbeat fallback
+                            try:
+                                event = await asyncio.wait_for(_stream_iter.__anext__(), timeout=_hb_interval)
+                            except StopAsyncIteration:
+                                break
+                            except asyncio.TimeoutError:
+                                elapsed = asyncio.get_event_loop().time() - _stream_start
+                                yield SSEEventBuilder.heartbeat(elapsed, f"llm_iter_{iteration}")
+                                continue
+
                             yield event
 
                             # Parse event to track content and tool uses
