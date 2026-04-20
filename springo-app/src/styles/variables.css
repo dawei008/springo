@@ -1,43 +1,52 @@
 /* ============================================
    Springo CSS Custom Properties
+   Claude-style warm palette redesign
    ============================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300..700;1,9..40,300..700&family=Playfair+Display:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-    /* === Colors: Light Theme === */
-    --bg-primary: #FAF9F5;
-    --bg-secondary: #F5F4EF;
-    --bg-tertiary: #EEEDEA;
-    --text-primary: #1A1A1A;
-    --text-secondary: #666;
-    --text-tertiary: #999;
-    --accent: #DA7756;
-    --accent-hover: #C66A4A;
-    --accent-light: rgba(218, 119, 86, 0.1);
-    --border: #E5E4DF;
-    --sidebar-bg: #F5F4EF;
-    --code-bg: #2D2D2D;
-    --code-text: #E5E5E5;
+    /* === Colors: Light Theme (Claude warm palette) === */
+    --bg-primary: #faf9f6;
+    --bg-secondary: #f5f4ef;
+    --bg-tertiary: #eeedea;
+    --bg-elevated: #ffffff;
+    --bg-hover: rgba(60, 50, 40, 0.05);
+    --bg-active: rgba(204, 120, 92, 0.12);
+    --text-primary: #3d3929;
+    --text-secondary: #6b6655;
+    --text-tertiary: #9a9583;
+    --text-inverse: #faf9f6;
+    --accent: #cc785c;
+    --accent-hover: #b8684f;
+    --accent-light: rgba(204, 120, 92, 0.12);
+    --accent-soft: #e8c5b4;
+    --accent-glow: rgba(204, 120, 92, 0.15);
+    --border: rgba(60, 50, 40, 0.10);
+    --border-default: rgba(60, 50, 40, 0.14);
+    --border-strong: rgba(60, 50, 40, 0.22);
+    --sidebar-bg: #f0ede4;
+    --code-bg: #2b2520;
+    --code-text: #e8e0d8;
 
     /* === Semantic Colors === */
-    --success: #22C55E;
-    --success-bg: #D1FAE5;
-    --success-text: #059669;
-    --warning: #F59E0B;
-    --warning-bg: #FEF3C7;
-    --warning-text: #D97706;
-    --error: #EF4444;
-    --error-bg: #FEE2E2;
-    --error-text: #DC2626;
-    --info: #3B82F6;
-    --info-bg: rgba(59, 130, 246, 0.1);
-    --info-text: #2563EB;
+    --success: #7a8c5f;
+    --success-bg: rgba(122, 140, 95, 0.12);
+    --success-text: #5f7040;
+    --warning: #c89a4a;
+    --warning-bg: rgba(200, 154, 74, 0.12);
+    --warning-text: #a07830;
+    --error: #c75450;
+    --error-bg: rgba(199, 84, 80, 0.12);
+    --error-text: #b04440;
+    --info: #6b8599;
+    --info-bg: rgba(107, 133, 153, 0.12);
+    --info-text: #526b7d;
 
     /* === Typography === */
-    --font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-display: 'Playfair Display', Georgia, 'Times New Roman', serif;
-    --font-mono: 'SF Mono', Monaco, 'Menlo', 'Courier New', monospace;
+    --font-family: 'Inter Tight', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --font-mono: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
     --font-size-xs: 10px;
     --font-size-sm: 11px;
     --font-size-base: 13px;
@@ -61,75 +70,88 @@
     --space-16: 40px;
 
     /* === Border Radius === */
-    --radius-sm: 3px;
-    --radius-md: 4px;
-    --radius-lg: 6px;
-    --radius-xl: 8px;
-    --radius-2xl: 10px;
-    --radius-3xl: 12px;
-    --radius-4xl: 16px;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
     --radius-full: 50%;
 
     /* === Transitions === */
-    --transition-fast: 0.15s ease;
-    --transition-base: 0.2s ease;
+    --transition-fast: 0.12s ease;
+    --transition-base: 0.15s ease;
     --transition-slow: 0.3s ease;
 
-    /* === Shadows === */
-    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
-    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.15);
-    --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.2);
+    /* === Shadows (warm tones) === */
+    --shadow-sm: 0 1px 2px rgba(60, 50, 40, 0.04);
+    --shadow-md: 0 1px 3px rgba(60, 50, 40, 0.06), 0 4px 12px rgba(60, 50, 40, 0.04);
+    --shadow-lg: 0 2px 4px rgba(60, 50, 40, 0.06), 0 12px 32px rgba(60, 50, 40, 0.08);
+    --shadow-xl: 0 4px 8px rgba(60, 50, 40, 0.08), 0 20px 40px rgba(60, 50, 40, 0.12);
 
     /* === Layout === */
-    --sidebar-width: 260px;
+    --sidebar-width: 280px;
     --header-height: 52px;
     --right-panel-width: 420px;
-    --chat-max-width: 800px;
-    --input-max-width: 800px;
+    --chat-max-width: 760px;
+    --input-max-width: 760px;
     --file-browser-width: 440px;
 }
 
-/* === Dark Theme === */
+/* === Dark Theme (warm dark) === */
 [data-theme="dark"] {
-    --bg-primary: #1A1A1A;
-    --bg-secondary: #262626;
-    --bg-tertiary: #333333;
-    --text-primary: #FAFAFA;
-    --text-secondary: #A3A3A3;
-    --text-tertiary: #737373;
-    --accent-light: rgba(218, 119, 86, 0.15);
-    --border: #404040;
-    --sidebar-bg: #262626;
-    --code-bg: #0D0D0D;
-    --code-text: #E5E5E5;
-    --success-bg: rgba(34, 197, 94, 0.15);
-    --success-text: #4ADE80;
-    --warning-bg: rgba(245, 158, 11, 0.15);
-    --warning-text: #FBBF24;
-    --error-bg: rgba(239, 68, 68, 0.15);
-    --error-text: #F87171;
+    --bg-primary: #1e1c18;
+    --bg-secondary: #262420;
+    --bg-tertiary: #302e28;
+    --bg-elevated: #2a2824;
+    --bg-hover: rgba(200, 190, 170, 0.06);
+    --bg-active: rgba(204, 120, 92, 0.18);
+    --text-primary: #e8e0d8;
+    --text-secondary: #a09888;
+    --text-tertiary: #6b6355;
+    --text-inverse: #1e1c18;
+    --accent-light: rgba(204, 120, 92, 0.18);
+    --accent-soft: #5c3f32;
+    --accent-glow: rgba(204, 120, 92, 0.20);
+    --border: rgba(200, 190, 170, 0.10);
+    --border-default: rgba(200, 190, 170, 0.14);
+    --border-strong: rgba(200, 190, 170, 0.22);
+    --sidebar-bg: #242118;
+    --code-bg: #15130f;
+    --code-text: #e8e0d8;
+    --success-bg: rgba(122, 140, 95, 0.18);
+    --success-text: #a0b880;
+    --warning-bg: rgba(200, 154, 74, 0.18);
+    --warning-text: #d4b06a;
+    --error-bg: rgba(199, 84, 80, 0.18);
+    --error-text: #e08888;
 }
 
 /* === Prefers dark color scheme fallback === */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-        --bg-primary: #1A1A1A;
-        --bg-secondary: #262626;
-        --bg-tertiary: #333333;
-        --text-primary: #FAFAFA;
-        --text-secondary: #A3A3A3;
-        --text-tertiary: #737373;
-        --accent-light: rgba(218, 119, 86, 0.15);
-        --border: #404040;
-        --sidebar-bg: #262626;
-        --code-bg: #0D0D0D;
-        --code-text: #E5E5E5;
-        --success-bg: rgba(34, 197, 94, 0.15);
-        --success-text: #4ADE80;
-        --warning-bg: rgba(245, 158, 11, 0.15);
-        --warning-text: #FBBF24;
-        --error-bg: rgba(239, 68, 68, 0.15);
-        --error-text: #F87171;
+        --bg-primary: #1e1c18;
+        --bg-secondary: #262420;
+        --bg-tertiary: #302e28;
+        --bg-elevated: #2a2824;
+        --bg-hover: rgba(200, 190, 170, 0.06);
+        --bg-active: rgba(204, 120, 92, 0.18);
+        --text-primary: #e8e0d8;
+        --text-secondary: #a09888;
+        --text-tertiary: #6b6355;
+        --text-inverse: #1e1c18;
+        --accent-light: rgba(204, 120, 92, 0.18);
+        --accent-soft: #5c3f32;
+        --accent-glow: rgba(204, 120, 92, 0.20);
+        --border: rgba(200, 190, 170, 0.10);
+        --border-default: rgba(200, 190, 170, 0.14);
+        --border-strong: rgba(200, 190, 170, 0.22);
+        --sidebar-bg: #242118;
+        --code-bg: #15130f;
+        --code-text: #e8e0d8;
+        --success-bg: rgba(122, 140, 95, 0.18);
+        --success-text: #a0b880;
+        --warning-bg: rgba(200, 154, 74, 0.18);
+        --warning-text: #d4b06a;
+        --error-bg: rgba(199, 84, 80, 0.18);
+        --error-text: #e08888;
     }
 }

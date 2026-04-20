@@ -25,6 +25,7 @@ body {
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
 }
 
 #root {
@@ -49,6 +50,14 @@ a:hover {
     text-decoration: underline;
 }
 
+button {
+    font-family: inherit;
+}
+
+input, textarea, select {
+    font-family: inherit;
+}
+
 /* === Selection === */
 ::selection {
     background: var(--accent-light);
@@ -62,14 +71,14 @@ code ::selection,
 code::selection,
 .tool-input ::selection,
 .tool-output ::selection {
-    background: rgba(218, 119, 86, 0.35);
+    background: rgba(204, 120, 92, 0.35);
     color: #F0F0F0;
 }
 
 /* === Scrollbar Styling === */
 ::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+    width: 10px;
+    height: 10px;
 }
 
 ::-webkit-scrollbar-track {
@@ -77,12 +86,16 @@ code::selection,
 }
 
 ::-webkit-scrollbar-thumb {
-    background: var(--border);
-    border-radius: 3px;
+    background: rgba(60, 50, 40, 0.12);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: var(--text-tertiary);
+    background: rgba(60, 50, 40, 0.22);
+    background-clip: padding-box;
+    border: 2px solid transparent;
 }
 
 /* === Focus Ring === */

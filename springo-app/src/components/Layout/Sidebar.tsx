@@ -4,7 +4,6 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useUIStore } from '@/stores/uiStore';
 import ToolsPanel from './ToolsPanel';
-// ConversationStatus type used indirectly via session.status
 
 function getStatusTitle(visualStatus: string): string {
   const titles: Record<string, string> = {
@@ -18,6 +17,41 @@ function getStatusTitle(visualStatus: string): string {
     compacting: 'Compacting...',
   };
   return titles[visualStatus] || 'Inactive';
+}
+
+// ─── Section Header (collapsible) ───
+
+function SectionHeader({
+  title,
+  collapsed,
+  onToggle,
+  onAdd,
+}: {
+  title: string;
+  collapsed: boolean;
+  onToggle: () => void;
+  onAdd?: () => void;
+}) {
+  return (
+    <div className="nav-section-header" onClick={onToggle}>
+      <div className="nav-section-title">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          {collapsed ? <path d="m9 6 6 6-6 6" /> : <path d="m6 9 6 6 6-6" />}
+        </svg>
+        {title}
+      </div>
+      {onAdd && (
+        <div
+          className="nav-section-action"
+          onClick={(e) => { e.stopPropagation(); onAdd(); }}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Context Menu ───
@@ -64,7 +98,6 @@ function ConversationContextMenu({
 
   if (!menu.visible) return null;
 
-  // Adjust position to stay within viewport
   const style: React.CSSProperties = {
     position: 'fixed',
     top: menu.y,
@@ -134,6 +167,7 @@ export default function Sidebar() {
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
     x: 0,
@@ -142,9 +176,11 @@ export default function Sidebar() {
     sessionTitle: '',
   });
 
+  const toggleSection = useCallback((key: string) => {
+    setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
+  }, []);
+
   // ─── Session auto-title refresh ───
-  // Subscribe to chatStore runtimes to detect when streaming ends, then
-  // re-fetch the session title from the backend (which auto-generates titles).
   const prevStreamingRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -154,7 +190,6 @@ export default function Sidebar() {
         if (runtime.isStreaming) currentlyStreaming.add(id);
       }
 
-      // Find sessions that just stopped streaming
       const justFinished: string[] = [];
       for (const id of prevStreamingRef.current) {
         if (!currentlyStreaming.has(id)) {
@@ -164,14 +199,10 @@ export default function Sidebar() {
 
       prevStreamingRef.current = currentlyStreaming;
 
-      // For sessions that just finished streaming, update title from last user message
       for (const id of justFinished) {
         const session = useSessionStore.getState().sessions.find((s) => s.id === id);
         if (session && !session.isCustomTitle) {
-          // Small delay to let backend finish saving the session
           setTimeout(() => {
-            // Always generate title from the LAST user message (not backend title)
-            // so the sidebar always reflects the most recent conversation topic
             let newTitle = '';
             const runtime = useChatStore.getState().runtimes[id];
             if (runtime?.messages) {
@@ -185,9 +216,7 @@ export default function Sidebar() {
                     const tb = msg.content.find((b: any) => b.type === 'text') as { text?: string } | undefined;
                     text = tb?.text || '';
                   }
-                  // Strip time prefix: [Current time: ...]
                   text = text.replace(/^\[Current time:[^\]]*\]\s*/, '');
-                  // Strip skill wrapper
                   const skillMatch = text.match(/^<skill\s+name="([^"]+)">[\s\S]*?<\/skill>\s*/);
                   if (skillMatch) {
                     const after = text.slice(skillMatch[0].length);
@@ -209,7 +238,6 @@ export default function Sidebar() {
                   sess.id === id ? { ...sess, title: newTitle } : sess,
                 ),
               }));
-              // Persist to backend
               fetch(`http://127.0.0.1:8081/v1/sessions/${id}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
@@ -335,7 +363,6 @@ export default function Sidebar() {
     if (window.electronAPI?.selectFolder) {
       const result = await window.electronAPI.selectFolder();
       if (result) {
-        // selectFolder returns a string (single folder path) or possibly array
         const folders = Array.isArray(result) ? result : [result];
         const currentFolders = useSettingsStore.getState().workingFolders;
         let newFolder: string | null = null;
@@ -349,7 +376,6 @@ export default function Sidebar() {
         }
 
         if (newFolder) {
-          // Persist to store and cache
           const state = useSettingsStore.getState();
           useSettingsStore.setState({ workingFolders: updatedFolders });
           if (window.electronAPI?.cache) {
@@ -363,7 +389,6 @@ export default function Sidebar() {
         }
       }
     } else {
-      // Fallback: prompt for path
       const path = prompt('Enter folder path:');
       if (path && path.trim()) {
         const trimmedPath = path.trim();
@@ -407,9 +432,7 @@ export default function Sidebar() {
 
   const handleFolderClick = useCallback(
     (folder: string, e: React.MouseEvent) => {
-      // Prevent double-click from triggering single-click
       if (e.detail > 1) return;
-      // Open file browser panel (matches legacy behavior)
       useUIStore.getState().openFileBrowser(folder);
     },
     [],
@@ -425,7 +448,7 @@ export default function Sidebar() {
     setSettingsOpen(true);
   }, [setSettingsOpen]);
 
-  // ─── Date-grouped sessions (by last activity, not creation) ───
+  // ─── Date-grouped sessions ───
   const groupedSessions = useMemo(() => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -456,8 +479,6 @@ export default function Sidebar() {
   }, [filteredSessions]);
 
   // ─── Derived state ───
-
-  // Determine actual working dir (conversation's workdir takes priority)
   let actualWorkdir = workingDir;
   if (currentSessionId) {
     const conv = sessions.find((s) => s.id === currentSessionId);
@@ -469,217 +490,225 @@ export default function Sidebar() {
   const totalCount = sessions.length;
 
   return (
-    <div className={`sidebar${sidebarOpen ? '' : ' collapsed'}`}>
-      {/* Sidebar header: dog SVG logo + "Springo" h1 */}
+    <aside className={`sidebar${sidebarOpen ? '' : ' collapsed'}`}>
+      {/* Sidebar header: dog logo + "Springo" + new chat button */}
       <div className="sidebar-header">
-        <svg width="24" height="24" viewBox="0 0 100 100" fill="none" stroke="currentColor" style={{ color: 'var(--accent)' }} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          {/* Springer Spaniel sketch style */}
-          {/* Head */}
-          <ellipse cx="50" cy="38" rx="22" ry="20"/>
-          {/* Left ear (floppy) */}
-          <path d="M28 35 C15 38, 8 55, 12 72 C14 78, 18 80, 22 78 C28 75, 30 65, 30 55"/>
-          {/* Right ear (floppy) */}
-          <path d="M72 35 C85 38, 92 55, 88 72 C86 78, 82 80, 78 78 C72 75, 70 65, 70 55"/>
-          {/* Eyes */}
-          <circle cx="40" cy="35" r="3" fill="currentColor"/>
-          <circle cx="60" cy="35" r="3" fill="currentColor"/>
-          {/* Nose */}
-          <ellipse cx="50" cy="48" rx="5" ry="4" fill="currentColor"/>
-          {/* Mouth */}
-          <path d="M45 52 Q50 58, 55 52"/>
-          {/* Body hint */}
-          <path d="M35 56 Q50 65, 65 56"/>
-        </svg>
-        <h1>Springo</h1>
-      </div>
-
-      {/* Workspace Section */}
-      <div className="working-folders-section">
-        <div className="working-folders-header">
-          <span>Workspace</span>
-          <button className="add-folder-btn" onClick={handleAddFolder} title="Add folder">
-            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M7 2v10M2 7h10"/>
+        <div className="brand-mark">
+          <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+            <ellipse cx="50" cy="38" rx="22" ry="20"/>
+            <path d="M28 35 C15 38, 8 55, 12 72 C14 78, 18 80, 22 78 C28 75, 30 65, 30 55"/>
+            <path d="M72 35 C85 38, 92 55, 88 72 C86 78, 82 80, 78 78 C72 75, 70 65, 70 55"/>
+            <circle cx="40" cy="35" r="3" fill="white"/>
+            <circle cx="60" cy="35" r="3" fill="white"/>
+            <ellipse cx="50" cy="48" rx="5" ry="4" fill="white"/>
+            <path d="M45 52 Q50 58, 55 52"/>
+          </svg>
+        </div>
+        <div className="brand-name">Springo</div>
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+          <button className="icon-btn-sm" onClick={handleNewChat} title="New chat (⌘N)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14M5 12h14" />
             </svg>
           </button>
         </div>
-        <div className="working-folders-list" id="working-folders-list">
-          {workingFolders.length === 0 ? (
-            <div className="working-folders-empty" id="working-folders-empty">
-              Click + to add folders
-            </div>
-          ) : (
-            workingFolders.map((folder, index) => {
-              const name = folder.split('/').pop() || folder;
-              const isActive = folder === actualWorkdir;
-              const isDefault = folder === defaultWorkingFolder;
-
-              return (
-                <div
-                  key={folder}
-                  className={`folder-item${isActive ? ' active' : ''}${isDefault ? ' default' : ''}`}
-                  draggable
-                  onClick={(e) => handleFolderClick(folder, e)}
-                  onDoubleClick={() => handleFolderDoubleClick(folder)}
-                >
-                  <span className="status-dot"></span>
-                  <svg className="folder-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/>
-                  </svg>
-                  <span className="folder-name" title={folder}>{name}</span>
-                  {!isDefault && (
-                    <button
-                      className="remove-folder"
-                      onClick={(e) => handleRemoveFolder(index, e)}
-                      title="Remove folder"
-                    >
-                      <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
-                        <path d="M2 2l8 8M10 2l-8 8"/>
-                      </svg>
-                    </button>
-                  )}
-                </div>
-              );
-            })
-          )}
-        </div>
       </div>
 
-      {/* Skills & Tools panel */}
-      <ToolsPanel />
-
-      {/* New Chat button */}
-      <button className="new-chat-btn" onClick={handleNewChat}>
-        <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M8 2v12M2 8h12"/>
-        </svg>
-        New Chat
-      </button>
-
-      {/* Conversation search */}
-      <div className="conversation-search">
-        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="8"/>
-          <path d="M21 21l-4.35-4.35"/>
+      {/* Search bar */}
+      <div className="sidebar-search">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <path d="m20 20-3.5-3.5" />
         </svg>
         <input
           type="text"
-          className="conversation-search-input"
           placeholder="Search conversations..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          id="sidebar-search"
         />
-        {searchQuery && (
+        {searchQuery ? (
           <button
-            className="conversation-search-clear"
+            className="search-clear-btn"
             onClick={() => setSearchQuery('')}
           >
             <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M2 2l8 8M10 2l-8 8"/>
             </svg>
           </button>
+        ) : (
+          <span className="kbd">⌘K</span>
         )}
       </div>
 
-      {/* Conversations list */}
-      <div className="conversations-list" id="conversations-list">
-        {groupedSessions.map((group) => (
-          <div key={group.label}>
-            <div className="session-date-group">{group.label}</div>
-            {group.sessions.map((session) => {
-              const rawStatus = session.status || 'idle';
-              // Session number: position in full (unfiltered) list, newest = highest
-              const fullIndex = sessions.indexOf(session);
-              const sessionNumber = totalCount - fullIndex;
-              const isActive = session.id === currentSessionId;
-              const isRenaming = renamingId === session.id;
+      {/* Scrollable content */}
+      <div className="sidebar-scroll">
+        {/* Workspace section */}
+        <div className="nav-section">
+          <SectionHeader
+            title="Workspace"
+            collapsed={!!collapsed.workspace}
+            onToggle={() => toggleSection('workspace')}
+            onAdd={handleAddFolder}
+          />
+          {!collapsed.workspace && (
+            <>
+              {workingFolders.length === 0 ? (
+                <div className="nav-empty-hint">Click + to add folders</div>
+              ) : (
+                workingFolders.map((folder, index) => {
+                  const name = folder.split('/').pop() || folder;
+                  const isActive = folder === actualWorkdir;
+                  const isDefault = folder === defaultWorkingFolder;
 
-              // Derive visual status priority:
-              //   running > compacting > error > completed-unseen > current > recent > idle
-              let visualStatus: string = rawStatus;
-              if (rawStatus === 'idle') {
-                if (unseenCompletedSessions.has(session.id)) {
-                  visualStatus = 'completed-unseen';
-                } else if (isActive) {
-                  visualStatus = 'current';
-                } else if (group.isToday || group.label === 'Yesterday') {
-                  visualStatus = 'recent';
-                }
-                // else stays 'idle' (older sessions)
-              }
-
-              const itemClasses = [
-                'conversation-item',
-                isActive ? 'active' : '',
-                group.isToday ? 'today' : '',
-              ].filter(Boolean).join(' ');
-
-              return (
-                <div
-                  key={session.id}
-                  className={itemClasses}
-                  onClick={() => handleSwitch(session.id)}
-                  onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
-                  data-id={session.id}
-                >
-                  <div
-                    className={`conversation-status ${visualStatus}`}
-                    title={getStatusTitle(visualStatus)}
-                  />
-                  <span className="session-number">#{sessionNumber}</span>
-                  {isRenaming ? (
-                    <input
-                      ref={renameInputRef}
-                      type="text"
-                      className="rename-input"
-                      value={renameValue}
-                      onChange={(e) => setRenameValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          finishRename();
-                        } else if (e.key === 'Escape') {
-                          e.preventDefault();
-                          cancelRename();
-                        }
-                      }}
-                      onBlur={finishRename}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  ) : (
-                    <span
-                      className="title"
-                      onDoubleClick={(e) => {
-                        e.stopPropagation();
-                        e.preventDefault();
-                        startRename(session.id, session.title);
-                      }}
-                      title="Double-click to rename"
+                  return (
+                    <div
+                      key={folder}
+                      className={`nav-item${isActive ? ' active' : ''}`}
+                      draggable
+                      onClick={(e) => handleFolderClick(folder, e)}
+                      onDoubleClick={() => handleFolderDoubleClick(folder)}
                     >
-                      {session.title}
-                    </span>
-                  )}
-                  <DelegationBadges convId={session.id} />
-                  <button
-                    className="delete-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(session.id);
-                    }}
-                    title="Delete session"
-                  >
-                    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                      <path d="M3 3l8 8M11 3l-8 8"/>
-                    </svg>
-                  </button>
+                      <div className="nav-item-icon">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
+                        </svg>
+                      </div>
+                      <div className="nav-item-label" title={folder}>{name}</div>
+                      {isDefault && <div className="nav-item-badge">default</div>}
+                      {isActive && <div className="nav-item-status" />}
+                      {!isDefault && (
+                        <button
+                          className="nav-item-remove"
+                          onClick={(e) => handleRemoveFolder(index, e)}
+                          title="Remove folder"
+                        >
+                          <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M2 2l8 8M10 2l-8 8"/>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Skills & Tools section */}
+        <div className="nav-section">
+          <SectionHeader
+            title="Skills & Tools"
+            collapsed={!!collapsed.tools}
+            onToggle={() => toggleSection('tools')}
+          />
+          {!collapsed.tools && <ToolsPanel />}
+        </div>
+
+        {/* Recent conversations */}
+        <div className="nav-section">
+          <SectionHeader
+            title={`Conversations (${totalCount})`}
+            collapsed={!!collapsed.conversations}
+            onToggle={() => toggleSection('conversations')}
+          />
+          {!collapsed.conversations && (
+            <div className="session-list">
+              {groupedSessions.map((group) => (
+                <div key={group.label}>
+                  <div className="session-date-group">{group.label}</div>
+                  {group.sessions.map((session) => {
+                    const rawStatus = session.status || 'idle';
+                    const fullIndex = sessions.indexOf(session);
+                    const sessionNumber = totalCount - fullIndex;
+                    const isActive = session.id === currentSessionId;
+                    const isRenaming = renamingId === session.id;
+
+                    let visualStatus: string = rawStatus;
+                    if (rawStatus === 'idle') {
+                      if (unseenCompletedSessions.has(session.id)) {
+                        visualStatus = 'completed-unseen';
+                      } else if (isActive) {
+                        visualStatus = 'current';
+                      } else if (group.isToday || group.label === 'Yesterday') {
+                        visualStatus = 'recent';
+                      }
+                    }
+
+                    return (
+                      <div
+                        key={session.id}
+                        className={`session-item${isActive ? ' active' : ''}`}
+                        onClick={() => handleSwitch(session.id)}
+                        onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
+                        data-id={session.id}
+                      >
+                        <div
+                          className={`conversation-status ${visualStatus}`}
+                          title={getStatusTitle(visualStatus)}
+                        />
+                        <div className="session-content">
+                          {isRenaming ? (
+                            <input
+                              ref={renameInputRef}
+                              type="text"
+                              className="rename-input"
+                              value={renameValue}
+                              onChange={(e) => setRenameValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  finishRename();
+                                } else if (e.key === 'Escape') {
+                                  e.preventDefault();
+                                  cancelRename();
+                                }
+                              }}
+                              onBlur={finishRename}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                          ) : (
+                            <div
+                              className="session-title"
+                              onDoubleClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                startRename(session.id, session.title);
+                              }}
+                              title="Double-click to rename"
+                            >
+                              {session.title}
+                            </div>
+                          )}
+                          <div className="session-meta">
+                            <span className="session-number">#{sessionNumber}</span>
+                          </div>
+                        </div>
+                        <DelegationBadges convId={session.id} />
+                        <button
+                          className="session-delete"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(session.id);
+                          }}
+                          title="Delete session"
+                        >
+                          <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M3 3l8 8M11 3l-8 8"/>
+                          </svg>
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
-        ))}
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Conversation context menu (right-click) */}
+      {/* Conversation context menu */}
       <ConversationContextMenu
         menu={contextMenu}
         onClose={closeContextMenu}
@@ -690,15 +719,15 @@ export default function Sidebar() {
 
       {/* Sidebar footer */}
       <div className="sidebar-footer">
-        <button className="settings-btn" onClick={handleOpenSettings}>
-          <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="8" cy="8" r="3"/>
-            <path d="M8 1v2M8 13v2M1 8h2M13 8h2M2.9 2.9l1.4 1.4M11.7 11.7l1.4 1.4M2.9 13.1l1.4-1.4M11.7 4.3l1.4-1.4"/>
+        <button className="icon-btn-sm" onClick={handleOpenSettings} title="Settings">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
-          Settings
         </button>
+        <span className="sidebar-footer-label">Settings</span>
       </div>
-    </div>
+    </aside>
   );
 }
 
