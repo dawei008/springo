@@ -3,6 +3,9 @@ import { useArtifactStore, type ArtifactItem } from '@/stores/artifactStore'
 import Markdown from '@/components/common/Markdown'
 import ExcalidrawPreview from '@/components/Visual/ExcalidrawPreview'
 import { useUIStore } from '@/stores/uiStore'
+import TeamPanel from '@/components/RightPanel/TeamPanel'
+import SchedulesPanel from '@/components/RightPanel/SchedulesPanel'
+import MeetingPanel from '@/components/RightPanel/MeetingPanel'
 
 // ==================== HTML Renderer ====================
 
@@ -136,6 +139,62 @@ function DrawioRenderer({ artifact }: { artifact: ArtifactItem }) {
   )
 }
 
+// ==================== Component Renderer ====================
+
+function TasksCanvasPanel() {
+  const todos = useUIStore((s) => s.todos)
+  const completedCount = todos.filter((t) => t.status === 'completed').length
+
+  if (todos.length === 0) {
+    return (
+      <div className="artifact-panel-empty">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.5">
+          <path d="M9 11l3 3L22 4" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+        <span>No background tasks</span>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '16px' }}>
+      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+        {completedCount}/{todos.length} completed
+      </div>
+      {todos.map((todo) => {
+        let statusIcon = '\u25CB'
+        let color = 'var(--text-tertiary)'
+        if (todo.status === 'in_progress') { statusIcon = '\u25D4'; color = 'var(--accent)' }
+        else if (todo.status === 'completed') { statusIcon = '\u2713'; color = 'var(--success, #22c55e)' }
+        return (
+          <div key={todo.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px 0', fontSize: '13px' }}>
+            <span style={{ color, flexShrink: 0 }}>{statusIcon}</span>
+            <span style={{ color: todo.status === 'completed' ? 'var(--text-tertiary)' : 'var(--text-primary)', textDecoration: todo.status === 'completed' ? 'line-through' : 'none' }}>
+              {todo.subject}
+            </span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function ComponentRenderer({ artifact }: { artifact: ArtifactItem }) {
+  switch (artifact.componentId) {
+    case 'tasks':
+      return <TasksCanvasPanel />
+    case 'team':
+      return <TeamPanel />
+    case 'schedules':
+      return <SchedulesPanel />
+    case 'meeting':
+      return <MeetingPanel />
+    default:
+      return <div className="artifact-panel-empty">Unknown component</div>
+  }
+}
+
 // ==================== Content Router ====================
 
 function ArtifactContent({ artifact }: { artifact: ArtifactItem }) {
@@ -156,6 +215,8 @@ function ArtifactContent({ artifact }: { artifact: ArtifactItem }) {
       )
     case 'drawio':
       return <DrawioRenderer artifact={artifact} />
+    case 'component':
+      return <ComponentRenderer artifact={artifact} />
     default:
       return <div className="artifact-panel-empty">Unsupported artifact type</div>
   }
@@ -195,6 +256,15 @@ function TypeIcon({ type }: { type: ArtifactItem['type'] }) {
       return (
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
+        </svg>
+      )
+    case 'component':
+      return (
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="7" height="7" />
+          <rect x="14" y="3" width="7" height="7" />
+          <rect x="14" y="14" width="7" height="7" />
+          <rect x="3" y="14" width="7" height="7" />
         </svg>
       )
   }

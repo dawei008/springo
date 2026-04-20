@@ -1,9 +1,12 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
-import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useUIStore } from '@/stores/uiStore';
-import ToolsPanel from './ToolsPanel';
+import { useRecordingStore } from '@/stores/recordingStore';
+import { useVoiceStore } from '@/stores/voiceStore';
+import { useDesignStore } from '@/stores/designStore';
+import { useReplayStore } from '@/stores/replayStore';
+import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 
 function getStatusTitle(visualStatus: string): string {
   const titles: Record<string, string> = {
@@ -142,6 +145,231 @@ function ConversationContextMenu({
   );
 }
 
+// ─── Nav Item ───
+
+function NavItem({
+  icon,
+  label,
+  badge,
+  status,
+  active,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  badge?: string | number;
+  status?: string;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <div className={`nav-item${active ? ' active' : ''}`} onClick={onClick}>
+      <div className="nav-item-icon">{icon}</div>
+      <div className="nav-item-label">{label}</div>
+      {status && <div className={`nav-item-status${status === 'rec' ? ' recording' : ''}`} />}
+      {badge != null && <div className="nav-item-badge">{badge}</div>}
+    </div>
+  );
+}
+
+// ─── Apps Section (mockup: General / Design / Office with sub-items) ───
+
+function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const [officeOpen, setOfficeOpen] = useState(false);
+  const isRecording = useRecordingStore((s) => s.isRecording);
+  const isTranscribing = useVoiceStore((s) => s.isTranscribing);
+  const language = useVoiceStore((s) => s.language);
+  const designActive = useDesignStore((s) => s.active);
+  const toggleDesignMode = useDesignStore((s) => s.toggleDesignMode);
+  const meetingArtifactRef = useRef<string | null>(null);
+
+  const handleMeetingToggle = useCallback(() => {
+    if (isTranscribing) {
+      useVoiceStore.getState().stopTranscription();
+      return;
+    }
+    let sid = useSessionStore.getState().currentSessionId;
+    if (!sid) {
+      sid = useSessionStore.getState().createSession();
+    }
+    const artId = createArtifactId();
+    meetingArtifactRef.current = artId;
+    // Delay to let session switch settle (switchSession resets artifact state)
+    setTimeout(() => {
+      useArtifactStore.getState().openArtifact({
+        id: artId,
+        type: 'markdown',
+        title: 'Meeting Notes (Live)',
+        content: '*Transcription starting...*',
+        timestamp: Date.now(),
+      });
+    }, 100);
+    useVoiceStore.getState().startTranscription(sid);
+  }, [isTranscribing]);
+
+  useEffect(() => {
+    if (!meetingArtifactRef.current) return;
+    const artId = meetingArtifactRef.current;
+    const unsub = useVoiceStore.subscribe((state) => {
+      const sessionId = useSessionStore.getState().currentSessionId;
+      if (!sessionId) return;
+      const transcript = state.transcripts[sessionId] || '';
+      const partial = state.partialText || '';
+      const content = (transcript + (partial ? `\n\n*${partial}*` : '')) || '*Listening...*';
+      useArtifactStore.getState().updateArtifact(artId, content);
+    });
+    return unsub;
+  }, [isTranscribing]);
+
+  const handleRecordToggle = useCallback(async () => {
+    if (isRecording) {
+      if (useReplayStore.getState().isReplaying) {
+        useReplayStore.getState().stopReplay();
+      }
+      await useRecordingStore.getState().stopRecording();
+    } else {
+      await useRecordingStore.getState().startRecording();
+    }
+  }, [isRecording]);
+
+  return (
+    <div className="nav-section">
+      <SectionHeader title="Apps" collapsed={collapsed} onToggle={onToggle} />
+      {!collapsed && (
+        <>
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>}
+            label="Chat"
+            onClick={() => { useSessionStore.getState().createSession(); }}
+          />
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="2.5"/><path d="M17 2h2a2 2 0 0 1 2 2v2"/><path d="M2 17v2a2 2 0 0 0 2 2h2"/><circle cx="10.5" cy="17.5" r="2.5"/><path d="M2 7V4a2 2 0 0 1 2-2h3"/><path d="M22 17v3a2 2 0 0 1-2 2h-3"/></svg>}
+            label="Design"
+            active={designActive}
+            onClick={toggleDesignMode}
+          />
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>}
+            label="Office"
+            onClick={() => setOfficeOpen((p) => !p)}
+          />
+          {officeOpen && (
+            <div className="nav-sub">
+              <div className="nav-item-with-action">
+                <NavItem
+                  icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>}
+                  label="Meeting Notes"
+                  status={isTranscribing ? 'rec' : undefined}
+                  active={isTranscribing}
+                  onClick={handleMeetingToggle}
+                />
+                {isTranscribing && (
+                  <button
+                    className="meeting-lang-toggle"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const cur = useVoiceStore.getState().language;
+                      const cycle: Record<string, string> = { zh: 'en', en: 'auto', auto: 'zh' };
+                      useVoiceStore.getState().setLanguage(cycle[cur] || 'auto');
+                    }}
+                    title="Switch language"
+                  >
+                    {language === 'zh' ? 'ZH' : language === 'en' ? 'EN' : 'AUTO'}
+                  </button>
+                )}
+              </div>
+              <NavItem
+                icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>}
+                label="Screen Recording"
+                status={isRecording ? 'rec' : undefined}
+                onClick={handleRecordToggle}
+              />
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Background Tasks Section ───
+
+function openCanvasPanel(componentId: string, title: string) {
+  const artId = createArtifactId();
+  useArtifactStore.getState().openArtifact({
+    id: artId,
+    type: 'component',
+    title,
+    content: '',
+    componentId,
+    timestamp: Date.now(),
+  });
+}
+
+function BackgroundTasksSection({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const todos = useUIStore((s) => s.todos);
+  const activeArtifact = useArtifactStore((s) => s.activeArtifact);
+
+  const activeTasks = todos.filter((t) => t.status === 'in_progress');
+  const pendingTasks = todos.filter((t) => t.status === 'pending');
+
+  return (
+    <div className="nav-section">
+      <SectionHeader title="Background" collapsed={collapsed} onToggle={onToggle} />
+      {!collapsed && (
+        <>
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>}
+            label="Tasks"
+            badge={todos.length > 0 ? todos.length : undefined}
+            active={activeArtifact?.componentId === 'tasks'}
+            onClick={() => openCanvasPanel('tasks', 'Tasks')}
+          />
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>}
+            label="Team"
+            active={activeArtifact?.componentId === 'team'}
+            onClick={() => openCanvasPanel('team', 'Team')}
+          />
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>}
+            label="Schedules"
+            active={activeArtifact?.componentId === 'schedules'}
+            onClick={() => openCanvasPanel('schedules', 'Schedules')}
+          />
+          {activeTasks.length > 0 && (
+            <div className="nav-sub">
+              {activeTasks.map((task) => (
+                <NavItem
+                  key={task.id}
+                  icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>}
+                  label={task.subject}
+                  status="rec"
+                  onClick={() => openCanvasPanel('tasks', 'Tasks')}
+                />
+              ))}
+              {pendingTasks.map((task) => (
+                <NavItem
+                  key={task.id}
+                  icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
+                  label={task.subject}
+                  onClick={() => openCanvasPanel('tasks', 'Tasks')}
+                />
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Sidebar() {
   // ─── Session store ───
   const sessions = useSessionStore((s) => s.sessions);
@@ -152,12 +380,6 @@ export default function Sidebar() {
   const renameSession = useSessionStore((s) => s.renameSession);
   const unseenCompletedSessions = useSessionStore((s) => s.unseenCompletedSessions);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
-
-  // ─── Settings store (workspace) ───
-  const workingDir = useSettingsStore((s) => s.workingDir);
-  const workingFolders = useSettingsStore((s) => s.workingFolders);
-  const defaultWorkingFolder = useSettingsStore((s) => s.defaultWorkingFolder);
-  const setWorkingDir = useSettingsStore((s) => s.setWorkingDir);
 
   // ─── UI store ───
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
@@ -359,91 +581,6 @@ export default function Sidebar() {
     navigator.clipboard.writeText(id).catch(() => {});
   }, [contextMenu, closeContextMenu]);
 
-  const handleAddFolder = useCallback(async () => {
-    if (window.electronAPI?.selectFolder) {
-      const result = await window.electronAPI.selectFolder();
-      if (result) {
-        const folders = Array.isArray(result) ? result : [result];
-        const currentFolders = useSettingsStore.getState().workingFolders;
-        let newFolder: string | null = null;
-        const updatedFolders = [...currentFolders];
-
-        for (const folder of folders) {
-          if (!updatedFolders.includes(folder)) {
-            updatedFolders.push(folder);
-            newFolder = folder;
-          }
-        }
-
-        if (newFolder) {
-          const state = useSettingsStore.getState();
-          useSettingsStore.setState({ workingFolders: updatedFolders });
-          if (window.electronAPI?.cache) {
-            window.electronAPI.cache.set('workspace', {
-              workingFolders: updatedFolders,
-              currentWorkingDir: newFolder,
-              defaultWorkingFolder: state.defaultWorkingFolder,
-            });
-          }
-          setWorkingDir(newFolder);
-        }
-      }
-    } else {
-      const path = prompt('Enter folder path:');
-      if (path && path.trim()) {
-        const trimmedPath = path.trim();
-        const currentFolders = useSettingsStore.getState().workingFolders;
-        if (!currentFolders.includes(trimmedPath)) {
-          const updatedFolders = [...currentFolders, trimmedPath];
-          const state = useSettingsStore.getState();
-          useSettingsStore.setState({ workingFolders: updatedFolders });
-          if (window.electronAPI?.cache) {
-            window.electronAPI.cache.set('workspace', {
-              workingFolders: updatedFolders,
-              currentWorkingDir: trimmedPath,
-              defaultWorkingFolder: state.defaultWorkingFolder,
-            });
-          }
-          setWorkingDir(trimmedPath);
-        }
-      }
-    }
-  }, [setWorkingDir]);
-
-  const handleRemoveFolder = useCallback(
-    (index: number, e: React.MouseEvent) => {
-      e.stopPropagation();
-      const currentFolders = useSettingsStore.getState().workingFolders;
-      const updatedFolders = [...currentFolders];
-      updatedFolders.splice(index, 1);
-
-      const state = useSettingsStore.getState();
-      useSettingsStore.setState({ workingFolders: updatedFolders });
-      if (window.electronAPI?.cache) {
-        window.electronAPI.cache.set('workspace', {
-          workingFolders: updatedFolders,
-          currentWorkingDir: state.workingDir,
-          defaultWorkingFolder: state.defaultWorkingFolder,
-        });
-      }
-    },
-    [],
-  );
-
-  const handleFolderClick = useCallback(
-    (folder: string, e: React.MouseEvent) => {
-      if (e.detail > 1) return;
-      useUIStore.getState().openFileBrowser(folder);
-    },
-    [],
-  );
-
-  const handleFolderDoubleClick = useCallback((folder: string) => {
-    if (window.electronAPI?.openFolder) {
-      window.electronAPI.openFolder(folder);
-    }
-  }, []);
-
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
   }, [setSettingsOpen]);
@@ -478,19 +615,55 @@ export default function Sidebar() {
     return groups.filter((g) => g.sessions.length > 0);
   }, [filteredSessions]);
 
-  // ─── Derived state ───
-  let actualWorkdir = workingDir;
-  if (currentSessionId) {
-    const conv = sessions.find((s) => s.id === currentSessionId);
-    if (conv?.workingDir) {
-      actualWorkdir = conv.workingDir;
-    }
-  }
-
   const totalCount = sessions.length;
 
+  const sidebarRef = useRef<HTMLElement>(null);
+  const sidebarResizeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handle = sidebarResizeRef.current;
+    const sidebar = sidebarRef.current;
+    if (!handle || !sidebar) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startW = 0;
+
+    const onDown = (e: MouseEvent) => {
+      dragging = true;
+      startX = e.clientX;
+      startW = sidebar.offsetWidth;
+      handle.classList.add('dragging');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      const w = Math.min(480, Math.max(200, startW + (e.clientX - startX)));
+      sidebar.style.width = w + 'px';
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    handle.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      handle.removeEventListener('mousedown', onDown);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, []);
+
   return (
-    <aside className={`sidebar${sidebarOpen ? '' : ' collapsed'}`}>
+    <aside className={`sidebar${sidebarOpen ? '' : ' collapsed'}`} ref={sidebarRef}>
+      <div className="sidebar-resize" ref={sidebarResizeRef} />
       {/* Sidebar header: dog logo + "Springo" + new chat button */}
       <div className="sidebar-header">
         <div className="brand-mark">
@@ -543,68 +716,14 @@ export default function Sidebar() {
 
       {/* Scrollable content */}
       <div className="sidebar-scroll">
-        {/* Workspace section */}
-        <div className="nav-section">
-          <SectionHeader
-            title="Workspace"
-            collapsed={!!collapsed.workspace}
-            onToggle={() => toggleSection('workspace')}
-            onAdd={handleAddFolder}
-          />
-          {!collapsed.workspace && (
-            <>
-              {workingFolders.length === 0 ? (
-                <div className="nav-empty-hint">Click + to add folders</div>
-              ) : (
-                workingFolders.map((folder, index) => {
-                  const name = folder.split('/').pop() || folder;
-                  const isActive = folder === actualWorkdir;
-                  const isDefault = folder === defaultWorkingFolder;
+        {/* Apps section */}
+        <AppsSection collapsed={!!collapsed.apps} onToggle={() => toggleSection('apps')} />
 
-                  return (
-                    <div
-                      key={folder}
-                      className={`nav-item${isActive ? ' active' : ''}`}
-                      draggable
-                      onClick={(e) => handleFolderClick(folder, e)}
-                      onDoubleClick={() => handleFolderDoubleClick(folder)}
-                    >
-                      <div className="nav-item-icon">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-                        </svg>
-                      </div>
-                      <div className="nav-item-label" title={folder}>{name}</div>
-                      {isDefault && <div className="nav-item-badge">default</div>}
-                      {isActive && <div className="nav-item-status" />}
-                      {!isDefault && (
-                        <button
-                          className="nav-item-remove"
-                          onClick={(e) => handleRemoveFolder(index, e)}
-                          title="Remove folder"
-                        >
-                          <svg width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M2 2l8 8M10 2l-8 8"/>
-                          </svg>
-                        </button>
-                      )}
-                    </div>
-                  );
-                })
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Skills & Tools section */}
-        <div className="nav-section">
-          <SectionHeader
-            title="Skills & Tools"
-            collapsed={!!collapsed.tools}
-            onToggle={() => toggleSection('tools')}
-          />
-          {!collapsed.tools && <ToolsPanel />}
-        </div>
+        {/* Background Tasks section */}
+        <BackgroundTasksSection
+          collapsed={!!collapsed.tasks}
+          onToggle={() => toggleSection('tasks')}
+        />
 
         {/* Recent conversations */}
         <div className="nav-section">
@@ -620,8 +739,6 @@ export default function Sidebar() {
                   <div className="session-date-group">{group.label}</div>
                   {group.sessions.map((session) => {
                     const rawStatus = session.status || 'idle';
-                    const fullIndex = sessions.indexOf(session);
-                    const sessionNumber = totalCount - fullIndex;
                     const isActive = session.id === currentSessionId;
                     const isRenaming = renamingId === session.id;
 
@@ -681,9 +798,6 @@ export default function Sidebar() {
                               {session.title}
                             </div>
                           )}
-                          <div className="session-meta">
-                            <span className="session-number">#{sessionNumber}</span>
-                          </div>
                         </div>
                         <DelegationBadges convId={session.id} />
                         <button
@@ -719,13 +833,22 @@ export default function Sidebar() {
 
       {/* Sidebar footer */}
       <div className="sidebar-footer">
+        <div className="footer-avatar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        </div>
+        <div className="footer-user-info">
+          <div className="footer-user-name">Springo User</div>
+          <div className="footer-user-plan">Local · Bedrock</div>
+        </div>
         <button className="icon-btn-sm" onClick={handleOpenSettings} title="Settings">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3"/>
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
           </svg>
         </button>
-        <span className="sidebar-footer-label">Settings</span>
       </div>
     </aside>
   );

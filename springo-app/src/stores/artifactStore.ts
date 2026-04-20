@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type ArtifactType = 'html' | 'markdown' | 'image' | 'svg' | 'excalidraw' | 'drawio'
+export type ArtifactType = 'html' | 'markdown' | 'image' | 'svg' | 'excalidraw' | 'drawio' | 'component'
 
 export interface ArtifactItem {
   id: string
@@ -10,6 +10,8 @@ export interface ArtifactItem {
   content: string
   /** Optional: excalidraw elements JSON for excalidraw type */
   elements?: unknown[]
+  /** Optional: component ID for component type (e.g. 'tasks', 'team', 'schedules') */
+  componentId?: string
   /** Optional: file path on disk (for "Reveal in Folder") */
   filePath?: string
   /** Optional: URL (for "Open in Browser") */
@@ -37,6 +39,7 @@ interface ArtifactState {
   currentSessionId: string | null
 
   openArtifact: (artifact: ArtifactItem) => void
+  updateArtifact: (id: string, content: string) => void
   closePanel: () => void
   togglePanel: () => void
   /** Switch session: save current, restore target */
@@ -64,6 +67,18 @@ export const useArtifactStore = create<ArtifactState>((set, get) => ({
         artifacts: exists ? state.artifacts : [...state.artifacts, artifact],
         panelOpen: true,
       }
+    }),
+
+  updateArtifact: (id, content) =>
+    set((state) => {
+      const artifacts = state.artifacts.map((a) =>
+        a.id === id ? { ...a, content } : a,
+      )
+      const activeArtifact =
+        state.activeArtifact?.id === id
+          ? { ...state.activeArtifact, content }
+          : state.activeArtifact
+      return { artifacts, activeArtifact }
     }),
 
   closePanel: () => set({ panelOpen: false }),

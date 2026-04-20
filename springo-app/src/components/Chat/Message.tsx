@@ -705,24 +705,27 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
   if (isThinking) {
     return (
       <div className="message message-assistant">
-        <div className="message-header">
-          <div className="message-avatar"><DogIcon /></div>
-          <span className="message-label">Springo</span>
-          <span className="thinking">
-            <span className="thinking-dot" />
-            <span className="thinking-dot" />
-            <span className="thinking-dot" />
-          </span>
+        <div className="message-avatar"><DogIcon /></div>
+        <div className="message-body">
+          <div className="message-header">
+            <span className="message-label">Springo</span>
+            <span className="thinking">
+              <span className="thinking-dot" />
+              <span className="thinking-dot" />
+              <span className="thinking-dot" />
+            </span>
+          </div>
+          <div className="message-content" />
         </div>
-        <div className="message-content" />
       </div>
     );
   }
 
   return (
     <div className={`message message-${message.role}${extraClass}`}>
+      <div className="message-avatar">{avatar}</div>
+      <div className="message-body">
       <div className="message-header">
-        <div className="message-avatar">{avatar}</div>
         <span className="message-label">{label}</span>
         {timeStr && <span className="message-time">{timeStr}</span>}
       </div>
@@ -992,6 +995,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
             <FileArtifactCard key={`file-${toolId}`} filePath={filePath} timestamp={message.timestamp || Date.now()} />
           ));
         })()}
+      </div>
       </div>
     </div>
   );

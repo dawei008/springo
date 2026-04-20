@@ -8,6 +8,7 @@ import { usePlanStore } from '@/stores/planStore';
 import { useDesignStore } from '@/stores/designStore';
 import { api } from '@/services/api';
 import type { Attachment, Skill, UsageData, DesignVersion } from '@/types';
+import ToolsPicker from './ToolsPicker';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
@@ -1071,6 +1072,7 @@ export default function MessageInput() {
 
         {/* Bottom status row */}
         <div className="bottom-status-row">
+          <ToolsPicker />
           {/* Compact model selector */}
           <div className="model-selector-compact" ref={modelPickerRef}>
             <button

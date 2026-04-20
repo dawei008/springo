@@ -873,6 +873,10 @@ export interface PlanSection {
   title: string;
   description: string;
   steps: string[];
+  dependencies?: string[];
+  risks?: string[];
+  effort?: 'low' | 'medium' | 'high';
+  validation?: string;
   status: 'pending' | 'approved' | 'rejected' | 'in_progress' | 'completed' | 'failed';
   feedback?: string | null;
   result?: string | null;
@@ -882,6 +886,7 @@ export interface PlanStructure {
   id: string;
   title: string;
   summary: string;
+  analysis?: string;
   sections: PlanSection[];
   status: 'draft' | 'reviewing' | 'approved' | 'executing' | 'completed' | 'failed';
   created_at: string;

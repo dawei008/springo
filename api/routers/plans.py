@@ -1,6 +1,6 @@
 """
-Springo Plan Mode Router
-计划模式路由 - 生成、审阅、执行结构化计划
+Springo UltraPlan Router
+深度计划路由 - 多阶段分析、审阅、执行结构化计划
 """
 import logging
 from typing import Dict, Any
@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request, HTTPException
 
 from ..models.requests import PlanGenerateRequest, PlanFeedbackRequest, PlanExecuteRequest
 from ..utils.streaming import create_sse_response, format_sse_event, SSEEventBuilder
-from ..services.plan_tool import generate_plan, regenerate_section
+from ..services.plan_tool import generate_ultraplan, regenerate_section
 from ..services.plan_executor import execute_plan
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,10 @@ _plans: Dict[str, Dict[str, Any]] = {}
 
 @router.post("/plans/generate")
 async def generate_plan_endpoint(request: Request, body: PlanGenerateRequest):
-    """Generate a structured plan via LLM. Returns SSE stream."""
+    """Generate an ultraplan via multi-phase LLM analysis. Returns SSE stream."""
 
     async def _stream():
         try:
-            # Get session context if available
             context_messages = None
             if body.session_id:
                 try:
@@ -41,23 +40,55 @@ async def generate_plan_endpoint(request: Request, body: PlanGenerateRequest):
                 "task": body.task_description,
             })
 
-            plan = await generate_plan(
+            plan = None
+            async for event in generate_ultraplan(
                 task_description=body.task_description,
                 model=body.model,
                 max_tokens=body.max_tokens,
                 context_messages=context_messages,
-            )
+            ):
+                phase = event.get("phase")
+                status = event.get("status")
 
-            # Store plan
-            if body.session_id:
-                plan["session_id"] = body.session_id
-            _plans[plan["id"]] = plan
+                if phase == "analysis" and status == "start":
+                    yield format_sse_event("plan_phase", {
+                        "type": "plan_phase",
+                        "phase": "analysis",
+                        "status": "start",
+                    })
+                elif phase == "analysis" and status == "complete":
+                    yield format_sse_event("plan_phase", {
+                        "type": "plan_phase",
+                        "phase": "analysis",
+                        "status": "complete",
+                        "content": event.get("content", ""),
+                    })
+                elif phase == "planning" and status == "start":
+                    yield format_sse_event("plan_phase", {
+                        "type": "plan_phase",
+                        "phase": "planning",
+                        "status": "start",
+                    })
+                elif phase == "planning" and status == "complete":
+                    plan = event["plan"]
+                elif phase in ("analysis", "planning") and status == "error":
+                    yield format_sse_event("plan_phase", {
+                        "type": "plan_phase",
+                        "phase": phase,
+                        "status": "error",
+                        "error": event.get("error", ""),
+                    })
 
-            yield SSEEventBuilder.plan_generated(plan)
+            if plan:
+                if body.session_id:
+                    plan["session_id"] = body.session_id
+                _plans[plan["id"]] = plan
+                yield SSEEventBuilder.plan_generated(plan)
+
             yield SSEEventBuilder.done()
 
         except Exception as e:
-            logger.error(f"Plan generation failed: {e}")
+            logger.error(f"UltraPlan generation failed: {e}")
             yield SSEEventBuilder.error(str(e))
             yield SSEEventBuilder.done()
 

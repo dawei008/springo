@@ -1,51 +1,51 @@
 /* ============================================
    Springo CSS Custom Properties
-   Claude-style warm palette redesign
+   Clean modern palette (co-work inspired)
    ============================================ */
 
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-    /* === Colors: Light Theme (Claude warm palette) === */
-    --bg-primary: #faf9f6;
-    --bg-secondary: #f5f4ef;
-    --bg-tertiary: #eeedea;
+    /* === Colors: Light Theme (clean cool palette) === */
+    --bg-primary: #ffffff;
+    --bg-secondary: #f7f7f8;
+    --bg-tertiary: #ededef;
     --bg-elevated: #ffffff;
-    --bg-hover: rgba(60, 50, 40, 0.05);
-    --bg-active: rgba(204, 120, 92, 0.12);
-    --text-primary: #3d3929;
-    --text-secondary: #6b6655;
-    --text-tertiary: #9a9583;
-    --text-inverse: #faf9f6;
-    --accent: #cc785c;
-    --accent-hover: #b8684f;
-    --accent-light: rgba(204, 120, 92, 0.12);
-    --accent-soft: #e8c5b4;
-    --accent-glow: rgba(204, 120, 92, 0.15);
-    --border: rgba(60, 50, 40, 0.10);
-    --border-default: rgba(60, 50, 40, 0.14);
-    --border-strong: rgba(60, 50, 40, 0.22);
-    --sidebar-bg: #f0ede4;
-    --code-bg: #2b2520;
-    --code-text: #e8e0d8;
+    --bg-hover: rgba(0, 0, 0, 0.04);
+    --bg-active: rgba(99, 91, 255, 0.08);
+    --text-primary: #1a1a1a;
+    --text-secondary: #6b6b6b;
+    --text-tertiary: #999999;
+    --text-inverse: #ffffff;
+    --accent: #6b5bff;
+    --accent-hover: #5a4ae6;
+    --accent-light: rgba(99, 91, 255, 0.08);
+    --accent-soft: #d4d0ff;
+    --accent-glow: rgba(99, 91, 255, 0.12);
+    --border: rgba(0, 0, 0, 0.06);
+    --border-default: rgba(0, 0, 0, 0.10);
+    --border-strong: rgba(0, 0, 0, 0.18);
+    --sidebar-bg: #f7f7f8;
+    --code-bg: #1e1e2e;
+    --code-text: #e0def4;
 
     /* === Semantic Colors === */
-    --success: #7a8c5f;
-    --success-bg: rgba(122, 140, 95, 0.12);
-    --success-text: #5f7040;
-    --warning: #c89a4a;
-    --warning-bg: rgba(200, 154, 74, 0.12);
-    --warning-text: #a07830;
-    --error: #c75450;
-    --error-bg: rgba(199, 84, 80, 0.12);
-    --error-text: #b04440;
-    --info: #6b8599;
-    --info-bg: rgba(107, 133, 153, 0.12);
-    --info-text: #526b7d;
+    --success: #34a853;
+    --success-bg: rgba(52, 168, 83, 0.10);
+    --success-text: #1e7e34;
+    --warning: #f59e0b;
+    --warning-bg: rgba(245, 158, 11, 0.10);
+    --warning-text: #b45309;
+    --error: #ef4444;
+    --error-bg: rgba(239, 68, 68, 0.10);
+    --error-text: #dc2626;
+    --info: #3b82f6;
+    --info-bg: rgba(59, 130, 246, 0.10);
+    --info-text: #2563eb;
 
     /* === Typography === */
-    --font-family: 'Inter Tight', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-mono: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
     --font-size-xs: 10px;
     --font-size-sm: 11px;
@@ -81,11 +81,11 @@
     --transition-base: 0.15s ease;
     --transition-slow: 0.3s ease;
 
-    /* === Shadows (warm tones) === */
-    --shadow-sm: 0 1px 2px rgba(60, 50, 40, 0.04);
-    --shadow-md: 0 1px 3px rgba(60, 50, 40, 0.06), 0 4px 12px rgba(60, 50, 40, 0.04);
-    --shadow-lg: 0 2px 4px rgba(60, 50, 40, 0.06), 0 12px 32px rgba(60, 50, 40, 0.08);
-    --shadow-xl: 0 4px 8px rgba(60, 50, 40, 0.08), 0 20px 40px rgba(60, 50, 40, 0.12);
+    /* === Shadows (neutral) === */
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+    --shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.08);
+    --shadow-xl: 0 4px 8px rgba(0, 0, 0, 0.08), 0 20px 40px rgba(0, 0, 0, 0.12);
 
     /* === Layout === */
     --sidebar-width: 280px;
@@ -96,62 +96,62 @@
     --file-browser-width: 440px;
 }
 
-/* === Dark Theme (warm dark) === */
+/* === Dark Theme === */
 [data-theme="dark"] {
-    --bg-primary: #1e1c18;
-    --bg-secondary: #262420;
-    --bg-tertiary: #302e28;
-    --bg-elevated: #2a2824;
-    --bg-hover: rgba(200, 190, 170, 0.06);
-    --bg-active: rgba(204, 120, 92, 0.18);
-    --text-primary: #e8e0d8;
-    --text-secondary: #a09888;
-    --text-tertiary: #6b6355;
-    --text-inverse: #1e1c18;
-    --accent-light: rgba(204, 120, 92, 0.18);
-    --accent-soft: #5c3f32;
-    --accent-glow: rgba(204, 120, 92, 0.20);
-    --border: rgba(200, 190, 170, 0.10);
-    --border-default: rgba(200, 190, 170, 0.14);
-    --border-strong: rgba(200, 190, 170, 0.22);
-    --sidebar-bg: #242118;
-    --code-bg: #15130f;
-    --code-text: #e8e0d8;
-    --success-bg: rgba(122, 140, 95, 0.18);
-    --success-text: #a0b880;
-    --warning-bg: rgba(200, 154, 74, 0.18);
-    --warning-text: #d4b06a;
-    --error-bg: rgba(199, 84, 80, 0.18);
-    --error-text: #e08888;
+    --bg-primary: #111111;
+    --bg-secondary: #1a1a1a;
+    --bg-tertiary: #252525;
+    --bg-elevated: #1e1e1e;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --bg-active: rgba(99, 91, 255, 0.15);
+    --text-primary: #e5e5e5;
+    --text-secondary: #a0a0a0;
+    --text-tertiary: #666666;
+    --text-inverse: #111111;
+    --accent-light: rgba(99, 91, 255, 0.15);
+    --accent-soft: #3d3580;
+    --accent-glow: rgba(99, 91, 255, 0.20);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-default: rgba(255, 255, 255, 0.12);
+    --border-strong: rgba(255, 255, 255, 0.20);
+    --sidebar-bg: #161616;
+    --code-bg: #0d0d14;
+    --code-text: #e0def4;
+    --success-bg: rgba(52, 168, 83, 0.15);
+    --success-text: #6dd58c;
+    --warning-bg: rgba(245, 158, 11, 0.15);
+    --warning-text: #fbbf24;
+    --error-bg: rgba(239, 68, 68, 0.15);
+    --error-text: #f87171;
 }
 
 /* === Prefers dark color scheme fallback === */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-        --bg-primary: #1e1c18;
-        --bg-secondary: #262420;
-        --bg-tertiary: #302e28;
-        --bg-elevated: #2a2824;
-        --bg-hover: rgba(200, 190, 170, 0.06);
-        --bg-active: rgba(204, 120, 92, 0.18);
-        --text-primary: #e8e0d8;
-        --text-secondary: #a09888;
-        --text-tertiary: #6b6355;
-        --text-inverse: #1e1c18;
-        --accent-light: rgba(204, 120, 92, 0.18);
-        --accent-soft: #5c3f32;
-        --accent-glow: rgba(204, 120, 92, 0.20);
-        --border: rgba(200, 190, 170, 0.10);
-        --border-default: rgba(200, 190, 170, 0.14);
-        --border-strong: rgba(200, 190, 170, 0.22);
-        --sidebar-bg: #242118;
-        --code-bg: #15130f;
-        --code-text: #e8e0d8;
-        --success-bg: rgba(122, 140, 95, 0.18);
-        --success-text: #a0b880;
-        --warning-bg: rgba(200, 154, 74, 0.18);
-        --warning-text: #d4b06a;
-        --error-bg: rgba(199, 84, 80, 0.18);
-        --error-text: #e08888;
+        --bg-primary: #111111;
+        --bg-secondary: #1a1a1a;
+        --bg-tertiary: #252525;
+        --bg-elevated: #1e1e1e;
+        --bg-hover: rgba(255, 255, 255, 0.06);
+        --bg-active: rgba(99, 91, 255, 0.15);
+        --text-primary: #e5e5e5;
+        --text-secondary: #a0a0a0;
+        --text-tertiary: #666666;
+        --text-inverse: #111111;
+        --accent-light: rgba(99, 91, 255, 0.15);
+        --accent-soft: #3d3580;
+        --accent-glow: rgba(99, 91, 255, 0.20);
+        --border: rgba(255, 255, 255, 0.08);
+        --border-default: rgba(255, 255, 255, 0.12);
+        --border-strong: rgba(255, 255, 255, 0.20);
+        --sidebar-bg: #161616;
+        --code-bg: #0d0d14;
+        --code-text: #e0def4;
+        --success-bg: rgba(52, 168, 83, 0.15);
+        --success-text: #6dd58c;
+        --warning-bg: rgba(245, 158, 11, 0.15);
+        --warning-text: #fbbf24;
+        --error-bg: rgba(239, 68, 68, 0.15);
+        --error-text: #f87171;
     }
 }

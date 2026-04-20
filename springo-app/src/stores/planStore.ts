@@ -1,11 +1,13 @@
 /**
- * Springo Plan Mode Store
+ * Springo UltraPlan Store
  *
- * Manages plan generation, review, and execution state.
+ * Manages multi-phase plan generation, review, and execution state.
  */
 import { create } from 'zustand';
 import type { PlanStructure, PlanSection } from '../types';
 import { api } from '../services/api';
+
+export type PlanPhase = 'analysis' | 'planning' | null;
 
 interface PlanStoreState {
   // State
@@ -15,6 +17,8 @@ interface PlanStoreState {
   activeSection: string | null;
   error: string | null;
   regeneratingSections: string[];
+  currentPhase: PlanPhase;
+  showAnalysis: boolean;
 
   // Actions
   generatePlan: (taskDescription: string, sessionId?: string, model?: string) => Promise<void>;
@@ -26,6 +30,7 @@ interface PlanStoreState {
   approveAll: () => Promise<void>;
   executePlan: (sessionId: string) => Promise<void>;
   setActiveSection: (sectionId: string | null) => void;
+  setShowAnalysis: (show: boolean) => void;
   clearPlan: () => void;
   clearError: () => void;
 }
@@ -37,9 +42,11 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   activeSection: null,
   error: null,
   regeneratingSections: [],
+  currentPhase: null,
+  showAnalysis: false,
 
   generatePlan: async (taskDescription, sessionId, model) => {
-    set({ isGenerating: true, error: null, currentPlan: null });
+    set({ isGenerating: true, error: null, currentPlan: null, currentPhase: null, showAnalysis: false });
 
     try {
       const response = await api.plans.generate({
@@ -72,11 +79,14 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
             try {
               const event = JSON.parse(data);
 
-              if (event.type === 'plan_generated' && event.plan) {
+              if (event.type === 'plan_phase') {
+                set({ currentPhase: event.phase as PlanPhase });
+              } else if (event.type === 'plan_generated' && event.plan) {
                 const plan = event.plan as PlanStructure;
                 set({
                   currentPlan: plan,
                   activeSection: plan.sections[0]?.id || null,
+                  currentPhase: null,
                 });
               } else if (event.type === 'error') {
                 set({ error: event.error?.message || 'Plan generation failed' });
@@ -91,7 +101,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       const msg = e instanceof Error ? e.message : String(e);
       set({ error: msg });
     } finally {
-      set({ isGenerating: false });
+      set({ isGenerating: false, currentPhase: null });
     }
   },
 
@@ -295,6 +305,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   },
 
   setActiveSection: (sectionId) => set({ activeSection: sectionId }),
-  clearPlan: () => set({ currentPlan: null, isGenerating: false, isExecuting: false, activeSection: null, error: null }),
+  setShowAnalysis: (show) => set({ showAnalysis: show }),
+  clearPlan: () => set({ currentPlan: null, isGenerating: false, isExecuting: false, activeSection: null, error: null, currentPhase: null, showAnalysis: false }),
   clearError: () => set({ error: null }),
 }));
