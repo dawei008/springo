@@ -1,8 +1,7 @@
 /**
  * DesignToolbar - viewport switch, preview/code toggle, version select, export, zoom, interaction modes
  */
-import type { ReactNode } from 'react';
-import { useDesignStore, selectCurrentDesign, type ViewportMode, type DesignInteractionMode } from '@/stores/designStore';
+import { useDesignStore, selectCurrentDesign, type ViewportMode } from '@/stores/designStore';
 import DesignVerificationBadge from './DesignVerificationBadge';
 
 const VIEWPORTS: { mode: ViewportMode; label: string; icon: string }[] = [
@@ -11,20 +10,6 @@ const VIEWPORTS: { mode: ViewportMode; label: string; icon: string }[] = [
   { mode: 'mobile', label: 'Mobile', icon: 'M8 2h8a2 2 0 012 2v16a2 2 0 01-2 2H8a2 2 0 01-2-2V4a2 2 0 012-2zM12 18h.01' },
 ];
 
-const INTERACTION_MODES: { mode: DesignInteractionMode; label: string; icon: ReactNode }[] = [
-  {
-    mode: 'comment', label: 'Comment',
-    icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
-  },
-  {
-    mode: 'edit', label: 'Edit',
-    icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>,
-  },
-  {
-    mode: 'draw', label: 'Draw',
-    icon: <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>,
-  },
-];
 
 export default function DesignToolbar() {
   const viewport = useDesignStore((s) => s.viewport);
@@ -43,10 +28,10 @@ export default function DesignToolbar() {
   const zoomIn = useDesignStore((s) => s.zoomIn);
   const zoomOut = useDesignStore((s) => s.zoomOut);
   const resetZoom = useDesignStore((s) => s.resetZoom);
-  const interactionMode = useDesignStore((s) => s.interactionMode);
-  const setInteractionMode = useDesignStore((s) => s.setInteractionMode);
   const setPresentMode = useDesignStore((s) => s.setPresentMode);
   const reloadCanvas = useDesignStore((s) => s.reloadCanvas);
+  const fileBrowserOpen = useDesignStore((s) => s.fileBrowserOpen);
+  const setFileBrowserOpen = useDesignStore((s) => s.setFileBrowserOpen);
   const currentDesign = useDesignStore(selectCurrentDesign);
   const hasMultiFile = currentDesign?.files && currentDesign.files.length > 0;
 
@@ -81,6 +66,19 @@ export default function DesignToolbar() {
   return (
     <div className="design-toolbar">
       <div className="design-toolbar-left">
+        {/* File browser toggle */}
+        {hasMultiFile && (
+          <button
+            className={`design-toolbar-icon-btn${fileBrowserOpen ? ' active' : ''}`}
+            onClick={() => setFileBrowserOpen(!fileBrowserOpen)}
+            title={fileBrowserOpen ? 'Hide files' : 'Show files'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+            </svg>
+          </button>
+        )}
         {/* Preview / Code toggle */}
         <div className="design-view-tabs">
           <button
@@ -149,22 +147,6 @@ export default function DesignToolbar() {
           </div>
         )}
         <DesignVerificationBadge />
-
-        {/* Interaction mode buttons */}
-        {viewMode === 'preview' && (
-          <div className="design-interaction-group">
-            {INTERACTION_MODES.map((m) => (
-              <button
-                key={m.mode}
-                className={`design-interaction-btn${interactionMode === m.mode ? ' active' : ''}`}
-                onClick={() => setInteractionMode(interactionMode === m.mode ? 'view' : m.mode)}
-                title={m.label}
-              >
-                {m.icon}
-              </button>
-            ))}
-          </div>
-        )}
 
         {/* Zoom controls */}
         {viewMode === 'preview' && (

@@ -15,8 +15,6 @@ import DesignVersionTimeline from './DesignVersionTimeline';
 import DesignElementPopover from './DesignElementPopover';
 import DesignTweaksPanel from './DesignTweaksPanel';
 import DesignComparisonView from './DesignComparisonView';
-import DesignCommentOverlay from './DesignCommentOverlay';
-import DesignDrawOverlay from './DesignDrawOverlay';
 import DesignPresentMode from './DesignPresentMode';
 
 export default function DesignPanel() {
@@ -27,6 +25,7 @@ export default function DesignPanel() {
   const viewMode = useDesignStore((s) => s.viewMode);
   const deactivate = useDesignStore((s) => s.deactivateDesignMode);
   const comparisonMode = useDesignStore((s) => s.comparisonMode);
+  const fileBrowserOpen = useDesignStore((s) => s.fileBrowserOpen);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
@@ -134,15 +133,13 @@ export default function DesignPanel() {
           <DesignComparisonView />
         ) : (
           <>
-            {hasMultiFile && <DesignFileBrowser />}
+            {hasMultiFile && fileBrowserOpen && <DesignFileBrowser />}
             <div className="design-panel-main">
               {viewMode === 'preview' ? (
                 <DesignCanvas design={currentDesign} viewport={viewport} onTemplateSelect={handleTemplateSelect} />
               ) : (
                 <DesignCodeEditor />
               )}
-              {viewMode === 'preview' && <DesignCommentOverlay />}
-              {viewMode === 'preview' && <DesignDrawOverlay />}
               {viewMode === 'preview' && <DesignElementPopover />}
             </div>
             {viewMode === 'preview' && <DesignTweaksPanel />}

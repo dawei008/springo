@@ -7,7 +7,7 @@ import { useToolsStore } from '@/stores/toolsStore';
 import { usePlanStore } from '@/stores/planStore';
 import { useDesignStore } from '@/stores/designStore';
 import { api } from '@/services/api';
-import type { Attachment, Skill, UsageData, DesignVersion } from '@/types';
+import type { Attachment, Skill, DesignVersion } from '@/types';
 import ToolsPicker from './ToolsPicker';
 
 const BASE_URL = 'http://127.0.0.1:8081';
@@ -20,22 +20,6 @@ function buildDesignContext(design: DesignVersion): string {
     ).join('\n\n');
   }
   return design.html;
-}
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
-
-function computeCacheHitRate(usage: UsageData): number | null {
-  const { cache_read_input_tokens, cache_creation_input_tokens, input_tokens } = usage;
-  // No cache data at all — model doesn't support caching
-  if (cache_read_input_tokens === 0 && cache_creation_input_tokens === 0) return null;
-  // Anthropic API: input_tokens = non-cached tokens, so total = all three fields
-  const total = input_tokens + cache_creation_input_tokens + cache_read_input_tokens;
-  if (total === 0) return null;
-  return Math.round((cache_read_input_tokens / total) * 100);
 }
 
 const FILE_ACCEPT =
@@ -98,18 +82,6 @@ export default function MessageInput() {
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [skillPickerIndex, setSkillPickerIndex] = useState(0);
 
-  // Context indicator state
-  const [contextPercent, setContextPercent] = useState(0);
-  const [contextStatus, setContextStatus] = useState<'normal' | 'warning' | 'critical'>('normal');
-  const [contextTitle, setContextTitle] = useState('Click for context breakdown');
-  const [showContextBreakdown, setShowContextBreakdown] = useState(false);
-  const [contextBreakdownHtml, setContextBreakdownHtml] = useState('');
-
-  // Memory sync status state
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'disabled' | 'error' | 'checking'>('checking');
-  const [syncText, setSyncText] = useState('Memory: checking...');
-  const [syncTitle, setSyncTitle] = useState('AgentCore Memory Sync Status');
-
   const [showModelPicker, setShowModelPicker] = useState(false);
   const modelPickerRef = useRef<HTMLDivElement>(null);
 
@@ -121,24 +93,19 @@ export default function MessageInput() {
     currentSessionId ? s.isStreaming(currentSessionId) : false,
   );
   const settings = useSettingsStore((s) => s.settings);
+  const workingDir = useSettingsStore((s) => s.workingDir);
+  const workingFolders = useSettingsStore((s) => s.workingFolders);
+  const setWorkingDir = useSettingsStore((s) => s.setWorkingDir);
+  const session = useSessionStore((s) =>
+    s.sessions.find((sess) => sess.id === s.currentSessionId),
+  );
+  const displayDir = session?.workingDir || workingDir || '';
   const activeSkill = useUIStore((s) => s.activeSkill);
   const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
   const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
   const activeTeamId = useUIStore((s) => s.activeTeamId);
   const planModeActive = useUIStore((s) => s.planModeActive);
   const queueItems = useUIStore((s) => s.queueItems);
-
-  // Token usage tracking
-  const sessionUsage = useChatStore((s) =>
-    currentSessionId ? s.sessionUsage[currentSessionId] : undefined,
-  );
-
-  // Load persisted usage from backend when session changes
-  useEffect(() => {
-    if (currentSessionId) {
-      useChatStore.getState().loadUsage(currentSessionId);
-    }
-  }, [currentSessionId]);
 
   // Consume pending prompt (pre-filled from Design Dashboard, etc.)
   const pendingPrompt = useUIStore((s) => s.pendingPrompt);
@@ -180,113 +147,6 @@ export default function MessageInput() {
     useSettingsStore.getState().saveSettings({ model: modelId });
     setShowModelPicker(false);
   }, []);
-
-  // Memory sync status polling
-  useEffect(() => {
-    const updateMemorySyncStatus = async () => {
-      try {
-        const res = await fetch(`${BASE_URL}/v1/memory/status`);
-        const data = await res.json();
-
-        // Format last sync time as relative (e.g. "3h ago") or absolute
-        const formatSyncTime = (iso: string) => {
-          if (!iso) return '';
-          const d = new Date(iso + 'Z'); // UTC
-          const now = Date.now();
-          const diff = now - d.getTime();
-          if (diff < 60000) return 'just now';
-          if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-          if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-          return `${Math.floor(diff / 86400000)}d ago`;
-        };
-
-        const syncTime = data.last_file_sync ? formatSyncTime(data.last_file_sync) : '';
-        const filesCount = data.files_synced || 0;
-
-        switch (data.status) {
-          case 'synced':
-            setSyncStatus('synced');
-            setSyncText(syncTime ? `Synced ${syncTime}` : `Synced: ${filesCount} files`);
-            break;
-          case 'syncing':
-            setSyncStatus('syncing');
-            setSyncText(`Syncing... (${data.pending} pending)`);
-            break;
-          case 'disabled':
-          case 'not_running':
-            setSyncStatus('disabled');
-            setSyncText(syncTime ? `Synced ${syncTime}` : 'Memory: off');
-            break;
-          case 'error':
-            setSyncStatus('error');
-            setSyncText(syncTime ? `Synced ${syncTime}` : 'Sync paused');
-            break;
-          default:
-            setSyncStatus('disabled');
-            setSyncText(syncTime ? `Synced ${syncTime}` : 'Memory: --');
-        }
-
-        setSyncTitle(
-          `Memory Sync (${data.memory_backend || 'agentcore'})\n` +
-          `Status: ${data.status || 'unknown'}\n` +
-          `Memory ID: ${data.memory_id || 'N/A'}\n` +
-          `Region: ${data.region || 'N/A'}\n` +
-          `Files synced: ${filesCount}\n` +
-          (syncTime ? `Last sync: ${syncTime}` : ''),
-        );
-      } catch {
-        setSyncStatus('disabled');
-        setSyncText('Memory: --');
-      }
-    };
-
-    updateMemorySyncStatus();
-    const interval = setInterval(updateMemorySyncStatus, 10000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Context indicator: refresh when session changes or streaming ends
-  useEffect(() => {
-    // Skip refresh while actively streaming — only refresh when it ends
-    if (isStreaming) return;
-
-    if (!currentSessionId) {
-      setContextPercent(0);
-      setContextStatus('normal');
-      setContextTitle('Click for context breakdown');
-      return;
-    }
-
-    const refreshContextStats = async () => {
-      try {
-        const response = await fetch(`${BASE_URL}/v1/context/stats`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            session_id: currentSessionId,
-            model: currentModel,
-            extended_context: settings.enable1mContext === true,
-          }),
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          const percent = data.usage_percent || 0;
-          const status: 'normal' | 'warning' | 'critical' =
-            percent >= 80 ? 'critical' : percent >= 60 ? 'warning' : 'normal';
-          setContextPercent(Math.round(percent));
-          setContextStatus(status);
-          setContextTitle(
-            `Tokens: ${(data.total_tokens || 0).toLocaleString()} / ${(data.max_tokens || 0).toLocaleString()}`,
-          );
-        }
-      } catch {
-        // Ignore errors
-      }
-    };
-
-    refreshContextStats();
-  }, [currentSessionId, isStreaming, settings.enable1mContext]);
 
   // Auto-resize textarea
   const handleInput = useCallback(() => {
@@ -765,116 +625,41 @@ export default function MessageInput() {
     }
   }, [isStreaming, currentSessionId]);
 
-  // Render context breakdown data into HTML (matching legacy renderContextBreakdown)
-  const renderContextBreakdown = useCallback((data: Record<string, unknown>) => {
-    const breakdown = data.breakdown as Record<string, { count: number; tokens: number; percent: number }>;
-    if (!breakdown) return '<div class="breakdown-empty">No breakdown data</div>';
-
-    const categories = [
-      { key: 'system_prompt', label: 'System Prompt', cssClass: 'system' },
-      { key: 'system_tools', label: 'System Tools', cssClass: 'tools' },
-      { key: 'skills', label: 'Skills', cssClass: 'skills' },
-      { key: 'memory_files', label: 'Memory Files', cssClass: 'memory' },
-      { key: 'user_text', label: 'User', cssClass: 'user' },
-      { key: 'assistant_text', label: 'Assistant', cssClass: 'assistant' },
-      { key: 'tool_use', label: 'Tool Use', cssClass: 'tool-use' },
-      { key: 'tool_result', label: 'Tool Result', cssClass: 'tool-result' },
-      { key: 'images', label: 'Images', cssClass: 'images' },
-    ];
-
-    let html = '';
-    for (const cat of categories) {
-      const catData = breakdown[cat.key];
-      if (!catData) continue;
-      if (catData.count > 0 || catData.tokens > 0) {
-        const tokensStr = catData.tokens >= 1000
-          ? `${(catData.tokens / 1000).toFixed(1)}k`
-          : String(catData.tokens);
-        html += `<div class="breakdown-row">
-          <span class="breakdown-label">${cat.label}</span>
-          <div class="breakdown-bar-container">
-            <div class="breakdown-bar ${cat.cssClass}" style="width: ${Math.min(catData.percent, 100)}%"></div>
-          </div>
-          <span class="breakdown-percent">${catData.percent.toFixed(1)}% (${tokensStr})</span>
-        </div>`;
-      }
-    }
-
-    const usedPercent = data.usage_percent as number;
-    const freePercent = Math.max(0, 100 - usedPercent);
-    const totalTokens = data.total_tokens as number;
-    const maxTokens = data.max_tokens as number;
-    const freeTokens = maxTokens - totalTokens;
-    const freeStr = freeTokens >= 1000 ? `${(freeTokens / 1000).toFixed(1)}k` : String(freeTokens);
-
-    html += `<div class="breakdown-row breakdown-free">
-      <span class="breakdown-label">Free Space</span>
-      <div class="breakdown-bar-container">
-        <div class="breakdown-bar free" style="width: ${freePercent}%"></div>
-      </div>
-      <span class="breakdown-percent">${freePercent.toFixed(1)}% (${freeStr})</span>
-    </div>`;
-
-    html += `<div class="breakdown-total">
-      <span class="breakdown-total-label">Total</span>
-      <span class="breakdown-total-value">${totalTokens.toLocaleString()} / ${maxTokens.toLocaleString()} (${usedPercent}%)</span>
-    </div>`;
-
-    return html;
-  }, []);
-
-  // Toggle context breakdown popup
-  const toggleContextBreakdown = useCallback(
-    (e: React.MouseEvent) => {
-      e.stopPropagation();
-      setShowContextBreakdown((prev) => !prev);
-
-      if (!showContextBreakdown && currentSessionId) {
-        setContextBreakdownHtml('<div class="breakdown-loading">Loading...</div>');
-
-        // Get messages from chatStore for the request body (matching legacy)
-        const runtime = useChatStore.getState().runtimes[currentSessionId];
-        const messages = runtime?.messages?.map((msg) => {
-          try {
-            JSON.stringify(msg);
-            return msg;
-          } catch {
-            return { role: msg.role || 'user', content: '[Non-serializable content]' };
+  // handleWorkdirChange for the working directory selector
+  const handleWorkdirChange = useCallback(
+    async (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const value = e.target.value;
+      if (value === '__add__') {
+        if (window.electronAPI?.selectFolder) {
+          const result = await window.electronAPI.selectFolder();
+          const folders = Array.isArray(result) ? result : result ? [result] : [];
+          if (folders.length > 0) {
+            const currentFolders = useSettingsStore.getState().workingFolders;
+            const updatedFolders = [...currentFolders];
+            for (const folder of folders) {
+              if (!updatedFolders.includes(folder)) {
+                updatedFolders.push(folder);
+              }
+            }
+            useSettingsStore.setState({ workingFolders: updatedFolders });
+            setWorkingDir(folders[0]);
           }
-        }) || [];
-
-        fetch(`${BASE_URL}/v1/context/breakdown`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            messages,
-            system: '',
-            tools: [],
-            skills: [],
-            memory_files: [],
-            model: settings.model || '',
-            extended_context: settings.enable1mContext === true,
-          }),
-        })
-          .then((r) => r.json())
-          .then((data) => {
-            setContextBreakdownHtml(renderContextBreakdown(data));
-          })
-          .catch(() => {
-            setContextBreakdownHtml('<div class="breakdown-error">Failed to load breakdown</div>');
-          });
+        }
+        e.target.value = displayDir;
+      } else if (value) {
+        setWorkingDir(value);
+        if (currentSessionId) {
+          useSessionStore.setState((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === currentSessionId ? { ...s, workingDir: value } : s,
+            ),
+          }));
+          useSessionStore.getState().updateSessionMetadata(currentSessionId, { workingDir: value });
+        }
       }
     },
-    [showContextBreakdown, currentSessionId, settings.model, settings.enable1mContext, renderContextBreakdown],
+    [displayDir, setWorkingDir, currentSessionId],
   );
-
-  // Close context breakdown when clicking outside
-  useEffect(() => {
-    if (!showContextBreakdown) return;
-    const handleClick = () => setShowContextBreakdown(false);
-    document.addEventListener('click', handleClick);
-    return () => document.removeEventListener('click', handleClick);
-  }, [showContextBreakdown]);
 
   // Build the filtered skill picker items
   const filteredSkillItems = showSkillPicker
@@ -883,18 +668,6 @@ export default function MessageInput() {
 
   const canSend = (text.trim() || attachments.length > 0) && !isStreaming;
 
-  // Determine context indicator class
-  const contextIndicatorClass =
-    'context-indicator' + (contextStatus !== 'normal' ? ` ${contextStatus}` : '');
-
-  // Determine sync icon class
-  const syncIconClass =
-    'sync-icon' +
-    (syncStatus === 'synced'
-      ? ' synced'
-      : syncStatus === 'syncing' || syncStatus === 'error'
-        ? ' syncing'
-        : ' disabled');
 
   return (
     <div className="input-area">
@@ -1091,8 +864,6 @@ export default function MessageInput() {
 
         {/* Bottom status row */}
         <div className="bottom-status-row">
-          <ToolsPicker />
-          {/* Compact model selector */}
           <div className="model-selector-compact" ref={modelPickerRef}>
             <button
               className="model-selector-btn"
@@ -1135,65 +906,38 @@ export default function MessageInput() {
               </div>
             )}
           </div>
-
-          <div
-            className={contextIndicatorClass}
-            id="context-indicator"
-            onClick={toggleContextBreakdown}
-            title={contextTitle}
-          >
-            <span className="context-icon">&bull;</span>
-            <span id="context-text">
-              {contextStatus === 'critical'
-                ? `Context: ${contextPercent}% - Compacting`
-                : `Context: ${contextPercent}%`}
-            </span>
-            {/* Context Breakdown Popup */}
-            <div
-              className={`context-breakdown-popup${showContextBreakdown ? ' visible' : ''}`}
-              id="context-breakdown-popup"
+          <ToolsPicker />
+          <div style={{ flex: 1 }} />
+          <div className="status-workdir-area">
+            <span
+              className="workdir-path"
+              id="workdir-path-display"
+              title={displayDir ? `Click to open in Finder: ${displayDir}` : 'Click to select working directory'}
+              style={{
+                cursor: 'pointer',
+                ...(!displayDir ? { color: 'var(--text-tertiary)' } : {}),
+              }}
+              onClick={() => {
+                if (displayDir && window.electronAPI?.openFolder) {
+                  window.electronAPI.openFolder(displayDir);
+                }
+              }}
             >
-              <div className="breakdown-header">Context Breakdown</div>
-              <div
-                className="breakdown-content"
-                id="breakdown-content"
-                dangerouslySetInnerHTML={{ __html: contextBreakdownHtml }}
-              />
-            </div>
-          </div>
-
-          {sessionUsage && (sessionUsage.input_tokens > 0 || sessionUsage.output_tokens > 0) && (() => {
-            const cacheRate = computeCacheHitRate(sessionUsage);
-            const title =
-              `Input: ${sessionUsage.input_tokens.toLocaleString()} tokens\n` +
-              `Output: ${sessionUsage.output_tokens.toLocaleString()} tokens\n` +
-              (cacheRate !== null
-                ? `Cache Read: ${sessionUsage.cache_read_input_tokens.toLocaleString()}\n` +
-                  `Cache Create: ${sessionUsage.cache_creation_input_tokens.toLocaleString()}\n` +
-                  `Cache Hit: ${cacheRate}%`
-                : 'No cache data');
-            return (
-              <div className="token-usage-indicator" title={title}>
-                <span className="token-icon">&bull;</span>
-                <span>
-                  {'\u2191'}{formatTokenCount(sessionUsage.input_tokens)}
-                  {' '}
-                  {'\u2193'}{formatTokenCount(sessionUsage.output_tokens)}
-                  {cacheRate !== null && ` | Cache ${cacheRate}%`}
-                </span>
-              </div>
-            );
-          })()}
-
-          <div
-            className="memory-sync-status"
-            id="memory-sync-status"
-            title={syncTitle}
-          >
-            <span className={syncIconClass} id="sync-icon">
-              &bull;
+              {displayDir || '(No working directory)'}
             </span>
-            <span id="sync-text">{syncText}</span>
+            <div className="status-workdir-selector">
+              <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+              <select id="status-workdir-select" value={displayDir} onChange={handleWorkdirChange}>
+                {workingFolders.map((folder) => {
+                  const name = folder.split('/').pop() || folder;
+                  return <option key={folder} value={folder} title={folder}>{name}</option>;
+                })}
+                {workingFolders.length > 0 && <option disabled>{'──────────'}</option>}
+                <option value="__add__">+ Add folder...</option>
+              </select>
+            </div>
           </div>
         </div>
       </div>

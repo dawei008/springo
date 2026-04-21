@@ -40,6 +40,7 @@ export interface DesignState {
   viewMode: DesignViewMode;
   activeFilePath: string | null;
   designSystem: DesignSystemConfig | null;
+  designSystems: DesignSystemConfig[];
   isExtractingDesignSystem: boolean;
   sessionMap: Record<string, SessionDesignSnapshot>;
   currentSessionId: string | null;
@@ -47,6 +48,7 @@ export interface DesignState {
   errors: DesignError[];
   verificationStatus: VerificationStatus;
   tweaksOpen: boolean;
+  fileBrowserOpen: boolean;
   comparisonMode: boolean;
   zoom: number;
   interactionMode: DesignInteractionMode;
@@ -63,6 +65,10 @@ export interface DesignState {
   setViewMode: (mode: DesignViewMode) => void;
   selectFile: (path: string) => void;
   setDesignSystem: (config: DesignSystemConfig | null) => void;
+  addDesignSystem: (config: DesignSystemConfig) => void;
+  removeDesignSystem: (id: string) => void;
+  updateDesignSystem: (id: string, updates: Partial<DesignSystemConfig>) => void;
+  setDefaultDesignSystem: (id: string) => void;
   setExtractingDesignSystem: (v: boolean) => void;
   switchSession: (sessionId: string | null) => void;
   currentDesign: () => DesignVersion | null;
@@ -71,6 +77,7 @@ export interface DesignState {
   clearErrors: () => void;
   setVerificationStatus: (s: VerificationStatus) => void;
   setTweaksOpen: (open: boolean) => void;
+  setFileBrowserOpen: (open: boolean) => void;
   setComparisonMode: (on: boolean) => void;
   setZoom: (zoom: number) => void;
   zoomIn: () => void;
@@ -103,6 +110,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       return raw ? JSON.parse(raw) : null;
     } catch { return null; }
   })(),
+  designSystems: (() => {
+    try {
+      const raw = localStorage.getItem('springo-design-systems');
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  })(),
   isExtractingDesignSystem: false,
   sessionMap: {},
   currentSessionId: null,
@@ -110,6 +123,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   errors: [],
   verificationStatus: 'ok',
   tweaksOpen: false,
+  fileBrowserOpen: true,
   comparisonMode: false,
   zoom: 100,
   interactionMode: 'view',
@@ -170,6 +184,59 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     } catch { /* noop */ }
   },
 
+  addDesignSystem: (config) => {
+    const ds = { ...config, id: config.id || `ds-${Date.now()}`, createdAt: config.createdAt || Date.now() };
+    set((s) => {
+      const list = [...s.designSystems, ds];
+      const isFirst = list.length === 1;
+      if (isFirst) ds.isDefault = true;
+      try { localStorage.setItem('springo-design-systems', JSON.stringify(list)); } catch { /* noop */ }
+      return {
+        designSystems: list,
+        ...(isFirst ? { designSystem: ds } : {}),
+      };
+    });
+  },
+
+  removeDesignSystem: (id) => {
+    set((s) => {
+      const list = s.designSystems.filter((d) => d.id !== id);
+      try { localStorage.setItem('springo-design-systems', JSON.stringify(list)); } catch { /* noop */ }
+      const wasDefault = s.designSystem?.id === id;
+      const newDefault = wasDefault ? (list.find((d) => d.isDefault) || list[0] || null) : s.designSystem;
+      if (wasDefault && newDefault) {
+        try { localStorage.setItem('springo-design-system', JSON.stringify(newDefault)); } catch { /* noop */ }
+      } else if (wasDefault) {
+        try { localStorage.removeItem('springo-design-system'); } catch { /* noop */ }
+      }
+      return { designSystems: list, designSystem: newDefault };
+    });
+  },
+
+  updateDesignSystem: (id, updates) => {
+    set((s) => {
+      const list = s.designSystems.map((d) => d.id === id ? { ...d, ...updates } : d);
+      try { localStorage.setItem('springo-design-systems', JSON.stringify(list)); } catch { /* noop */ }
+      const active = s.designSystem?.id === id ? { ...s.designSystem, ...updates } : s.designSystem;
+      if (active && s.designSystem?.id === id) {
+        try { localStorage.setItem('springo-design-system', JSON.stringify(active)); } catch { /* noop */ }
+      }
+      return { designSystems: list, designSystem: active };
+    });
+  },
+
+  setDefaultDesignSystem: (id) => {
+    set((s) => {
+      const list = s.designSystems.map((d) => ({ ...d, isDefault: d.id === id }));
+      const newDefault = list.find((d) => d.id === id) || null;
+      try { localStorage.setItem('springo-design-systems', JSON.stringify(list)); } catch { /* noop */ }
+      if (newDefault) {
+        try { localStorage.setItem('springo-design-system', JSON.stringify(newDefault)); } catch { /* noop */ }
+      }
+      return { designSystems: list, designSystem: newDefault };
+    });
+  },
+
   setExtractingDesignSystem: (v) => set({ isExtractingDesignSystem: v }),
 
   switchSession: (sessionId) => {
@@ -219,6 +286,8 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   setVerificationStatus: (status) => set({ verificationStatus: status }),
 
   setTweaksOpen: (open) => set({ tweaksOpen: open }),
+
+  setFileBrowserOpen: (open) => set({ fileBrowserOpen: open }),
 
   setComparisonMode: (on) => set({ comparisonMode: on }),
 

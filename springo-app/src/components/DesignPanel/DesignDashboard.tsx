@@ -1,65 +1,14 @@
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useRef } from 'react';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useDesignStore } from '@/stores/designStore';
 import { useUIStore } from '@/stores/uiStore';
 import { DESIGN_TEMPLATES, TEMPLATE_CATEGORIES, type DesignTemplate } from '@/data/designTemplates';
-import type { DesignSystemConfig } from '@/types';
+import type { DesignSystemConfig, DesignSystemSource } from '@/types';
 
 type DashboardTab = 'recent' | 'examples' | 'design-systems';
 type CreatorType = 'prototype' | 'slides' | 'template';
-
-const PRESET_DESIGN_SYSTEMS: (DesignSystemConfig & { id: string; description: string })[] = [
-  {
-    id: 'material',
-    brandName: 'Material Design',
-    description: 'Google\'s design system — clean, bold, colorful',
-    colors: { primary: '#1976D2', secondary: '#9C27B0', error: '#D32F2F', surface: '#FFFFFF', background: '#FAFAFA', text: '#212121' },
-    fonts: { heading: 'Roboto', body: 'Roboto' },
-    components: ['Button', 'Card', 'TextField', 'AppBar', 'Chip', 'Dialog', 'Snackbar', 'FAB'],
-  },
-  {
-    id: 'apple-hig',
-    brandName: 'Apple HIG',
-    description: 'iOS/macOS style — SF Pro, subtle shadows, vibrancy',
-    colors: { primary: '#007AFF', secondary: '#5856D6', success: '#34C759', warning: '#FF9500', danger: '#FF3B30', background: '#F2F2F7', text: '#000000' },
-    fonts: { heading: 'SF Pro Display', body: 'SF Pro Text' },
-    components: ['NavigationBar', 'TabBar', 'ActionSheet', 'Alert', 'Toggle', 'Segmented Control'],
-  },
-  {
-    id: 'shadcn',
-    brandName: 'shadcn/ui',
-    description: 'Minimal, composable — Tailwind + Radix based',
-    colors: { primary: '#18181B', secondary: '#71717A', accent: '#F4F4F5', border: '#E4E4E7', background: '#FFFFFF', foreground: '#09090B' },
-    fonts: { heading: 'Inter', body: 'Inter' },
-    components: ['Button', 'Card', 'Input', 'Dialog', 'Dropdown', 'Toast', 'Table', 'Badge'],
-  },
-  {
-    id: 'glassmorphism',
-    brandName: 'Glassmorphism',
-    description: 'Frosted glass, blur effects, gradients',
-    colors: { primary: '#667EEA', secondary: '#764BA2', accent: '#F093FB', surface: 'rgba(255,255,255,0.15)', background: '#0F0C29', text: '#FFFFFF' },
-    fonts: { heading: 'Poppins', body: 'Inter' },
-    components: ['GlassCard', 'BlurPanel', 'GradientButton', 'FloatingNav'],
-  },
-  {
-    id: 'retro',
-    brandName: 'Retro / Neubrutalism',
-    description: 'Bold borders, chunky shadows, bright palette',
-    colors: { primary: '#FF6B6B', secondary: '#4ECDC4', accent: '#FFE66D', background: '#F7FFF7', text: '#2C3E50', border: '#2C3E50' },
-    fonts: { heading: 'Space Grotesk', body: 'DM Sans' },
-    components: ['BrutalCard', 'ChunkyButton', 'RetroInput', 'StickerBadge'],
-  },
-  {
-    id: 'corporate',
-    brandName: 'Corporate / Enterprise',
-    description: 'Professional, accessible, data-dense layouts',
-    colors: { primary: '#1B365D', secondary: '#4A90D9', success: '#2E7D32', warning: '#F57C00', neutral: '#78909C', background: '#FAFBFC', text: '#1A1A2E' },
-    fonts: { heading: 'Inter', body: 'Source Sans Pro' },
-    components: ['DataTable', 'Dashboard', 'Sidebar', 'KPICard', 'Chart', 'Breadcrumb'],
-  },
-];
 
 const EXAMPLE_PROMPTS = [
   {
@@ -384,75 +333,563 @@ export default function DesignDashboard() {
           )}
 
           {tab === 'design-systems' && (
-            <div className="design-dash-ds-section">
-              {designSystem && (
-                <div className="design-dash-ds-active">
-                  <div className="design-dash-ds-active-label">Active</div>
-                  <div className="design-dash-ds-card">
-                    <div className="design-dash-ds-card-header">
-                      <div className="design-dash-ds-icon" style={{ background: designSystem.colors?.primary || 'var(--accent)' }} />
-                      <div>
-                        <div className="design-dash-ds-name">{designSystem.brandName || 'Design System'}</div>
-                      </div>
-                      <button className="design-dash-ds-clear" onClick={() => useDesignStore.getState().setDesignSystem(null)} title="Remove">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                      </button>
-                    </div>
-                    <div className="design-dash-ds-colors">
-                      {Object.entries(designSystem.colors).slice(0, 8).map(([name, val]) => (
-                        <div key={name} className="design-dash-ds-swatch" title={`${name}: ${val}`} style={{ background: val }} />
-                      ))}
-                    </div>
-                    <div className="design-dash-ds-fonts">
-                      <span>{designSystem.fonts.heading}</span>
-                      {designSystem.fonts.body !== designSystem.fonts.heading && <span>{designSystem.fonts.body}</span>}
-                    </div>
-                  </div>
-                </div>
-              )}
-              <h3>Presets</h3>
-              <p className="design-dash-ds-desc">Select a design system to apply to all new designs.</p>
-              <div className="design-dash-ds-grid">
-                {PRESET_DESIGN_SYSTEMS.map((ds) => {
-                  const isActive = designSystem?.brandName === ds.brandName;
-                  return (
-                    <div
-                      key={ds.id}
-                      className={`design-dash-ds-card${isActive ? ' active' : ''}`}
-                      onClick={() => {
-                        if (isActive) {
-                          useDesignStore.getState().setDesignSystem(null);
-                        } else {
-                          const { id: _, description: __, ...config } = ds;
-                          useDesignStore.getState().setDesignSystem(config);
-                        }
-                      }}
-                    >
-                      <div className="design-dash-ds-card-header">
-                        <div className="design-dash-ds-icon" style={{ background: ds.colors.primary }} />
-                        <div>
-                          <div className="design-dash-ds-name">{ds.brandName}</div>
-                          <div className="design-dash-ds-card-desc">{ds.description}</div>
-                        </div>
-                      </div>
-                      <div className="design-dash-ds-colors">
-                        {Object.entries(ds.colors).slice(0, 6).map(([name, val]) => (
-                          <div key={name} className="design-dash-ds-swatch" title={`${name}: ${val}`} style={{ background: val }} />
-                        ))}
-                      </div>
-                      <div className="design-dash-ds-fonts">
-                        <span>{ds.fonts.heading}</span>
-                        {ds.fonts.body !== ds.fonts.heading && <span>{ds.fonts.body}</span>}
-                      </div>
-                      {isActive && <div className="design-dash-ds-active-badge">Active</div>}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <DesignSystemTab designSystem={designSystem} />
           )}
         </div>
       </main>
+    </div>
+  );
+}
+
+// ─── Design System Tab (Claude.ai Organization Settings style) ───
+
+type DSFilter = 'all' | 'published' | 'drafts';
+type DSView = 'list' | 'create' | 'detail';
+
+interface UploadedFile {
+  name: string;
+  type: string;
+  data: string;
+}
+
+function DesignSystemTab({ designSystem }: { designSystem: DesignSystemConfig | null }) {
+  const designSystems = useDesignStore((s) => s.designSystems);
+  const addDesignSystem = useDesignStore((s) => s.addDesignSystem);
+  const removeDesignSystem = useDesignStore((s) => s.removeDesignSystem);
+  const updateDesignSystem = useDesignStore((s) => s.updateDesignSystem);
+  const setDefaultDesignSystem = useDesignStore((s) => s.setDefaultDesignSystem);
+
+  const [view, setView] = useState<DSView>('list');
+  const [filter, setFilter] = useState<DSFilter>('all');
+  const [search, setSearch] = useState('');
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [editingDS, setEditingDS] = useState<DesignSystemConfig | undefined>(undefined);
+
+  const filtered = useMemo(() => {
+    let list = designSystems;
+    if (filter === 'published') list = list.filter((d) => d.published);
+    if (filter === 'drafts') list = list.filter((d) => !d.published);
+    if (search) {
+      const q = search.toLowerCase();
+      list = list.filter((d) => (d.brandName || '').toLowerCase().includes(q));
+    }
+    return list;
+  }, [designSystems, filter, search]);
+
+  if (view === 'create') {
+    return <DSCreateForm onBack={() => { setView('list'); setEditingDS(undefined); }} onCreated={() => { setView('list'); setEditingDS(undefined); setOpenId(null); }} editDS={editingDS} />;
+  }
+
+  const openDS = openId ? designSystems.find((d) => d.id === openId) : null;
+  if (openDS) {
+    return <DesignSystemDetail ds={openDS} onBack={() => setOpenId(null)} onEdit={() => { setEditingDS(openDS); setView('create'); }} />;
+  }
+
+  return (
+    <div className="ds-settings">
+      <div className="ds-settings-section-label">DESIGN SYSTEMS</div>
+
+      <div className="ds-settings-toolbar">
+        <input
+          className="ds-settings-search"
+          placeholder="Search design systems"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+        />
+        <div className="ds-settings-filter-tabs">
+          {(['all', 'published', 'drafts'] as DSFilter[]).map((f) => (
+            <button key={f} className={`ds-settings-filter-tab${filter === f ? ' active' : ''}`} onClick={() => setFilter(f)}>
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="ds-settings-list">
+        <div className="ds-settings-row ds-settings-create-row">
+          <div className="ds-settings-row-info">
+            <div className="ds-settings-row-title">Create new design system</div>
+            <div className="ds-settings-row-sub">Teach Springo your brand and product</div>
+          </div>
+          <button className="ds-settings-create-btn" onClick={() => setView('create')}>Create</button>
+        </div>
+
+        {filtered.map((ds) => (
+          <div key={ds.id} className="ds-settings-row">
+            <div className="ds-settings-row-info">
+              <div className="ds-settings-row-title-line">
+                <span className="ds-settings-row-title">{ds.brandName || 'Design System'}</span>
+                {ds.isDefault && <span className="ds-settings-default-badge">DEFAULT</span>}
+              </div>
+              <div className="ds-settings-row-sub">
+                {ds.author || 'you'} · {ds.createdAt ? formatRelativeTime(ds.createdAt) : ''}
+              </div>
+            </div>
+            <div className="ds-settings-row-actions">
+              <label className="ds-settings-row-publish">
+                Published
+                <input
+                  type="checkbox"
+                  className="ds-settings-toggle"
+                  checked={!!ds.published}
+                  onChange={() => updateDesignSystem(ds.id!, { published: !ds.published })}
+                />
+                <span className="ds-settings-toggle-track" />
+              </label>
+              <button className="ds-settings-open-btn" onClick={() => setOpenId(ds.id!)}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                  <polyline points="15 3 21 3 21 9"/>
+                  <line x1="10" y1="14" x2="21" y2="3"/>
+                </svg>
+                Open
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {filtered.length === 0 && designSystems.length > 0 && (
+          <div className="ds-settings-empty-filter">No design systems match your filter.</div>
+        )}
+      </div>
+
+      <div className="ds-settings-section-label" style={{ marginTop: 32 }}>TEMPLATES</div>
+      <div className="ds-settings-templates-empty">
+        No templates yet. Create one from any project via the Share menu → File type.
+      </div>
+
+      <div className="ds-settings-footer">Only you can view these settings.</div>
+    </div>
+  );
+}
+
+// ─── Create / Edit Design System Form (Claude.ai style) ───
+
+function DSCreateForm({ onBack, onCreated, editDS }: { onBack: () => void; onCreated: () => void; editDS?: DesignSystemConfig }) {
+  const addDesignSystem = useDesignStore((s) => s.addDesignSystem);
+  const updateDesignSystem = useDesignStore((s) => s.updateDesignSystem);
+  const [companyBlurb, setCompanyBlurb] = useState(editDS?.source?.companyBlurb || '');
+  const [githubUrl, setGithubUrl] = useState('');
+  const [githubLinks, setGithubLinks] = useState<string[]>(editDS?.source?.githubLinks || []);
+  const [codeFiles, setCodeFiles] = useState<UploadedFile[]>([]);
+  const [assetFiles, setAssetFiles] = useState<UploadedFile[]>([]);
+  const [notes, setNotes] = useState(editDS?.source?.notes || '');
+  const [generating, setGenerating] = useState(false);
+
+  const codeInputRef = useRef<HTMLInputElement>(null);
+  const assetInputRef = useRef<HTMLInputElement>(null);
+
+  const githubInputRef = useRef<HTMLInputElement>(null);
+
+  const addGithubLink = () => {
+    const url = (githubInputRef.current?.value || githubUrl).trim();
+    if (url && !githubLinks.includes(url)) {
+      setGithubLinks((prev) => [...prev, url]);
+      setGithubUrl('');
+      if (githubInputRef.current) githubInputRef.current.value = '';
+    }
+  };
+
+  const readFiles = useCallback(async (files: FileList | File[]): Promise<UploadedFile[]> => {
+    const results: UploadedFile[] = [];
+    for (const file of Array.from(files)) {
+      if (file.type.startsWith('image/')) {
+        const data = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.readAsDataURL(file);
+        });
+        results.push({ name: file.name, type: file.type, data });
+      } else {
+        const text = await file.text();
+        results.push({ name: file.name, type: file.type, data: text.slice(0, 3000) });
+      }
+    }
+    return results;
+  }, []);
+
+  const handleCodeDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.files.length > 0) {
+      const files = await readFiles(e.dataTransfer.files);
+      setCodeFiles((prev) => [...prev, ...files]);
+    }
+  }, [readFiles]);
+
+  const handleAssetDrop = useCallback(async (e: React.DragEvent) => {
+    e.preventDefault();
+    if (e.dataTransfer.files.length > 0) {
+      const files = await readFiles(e.dataTransfer.files);
+      setAssetFiles((prev) => [...prev, ...files]);
+    }
+  }, [readFiles]);
+
+  const handleGenerate = useCallback(async () => {
+    if (!companyBlurb.trim()) return;
+    setGenerating(true);
+    try {
+      const parts: string[] = [];
+      parts.push(`Company: ${companyBlurb}`);
+      if (githubLinks.length > 0) parts.push(`GitHub repos:\n${githubLinks.join('\n')}`);
+      if (codeFiles.length > 0) {
+        for (const f of codeFiles) {
+          parts.push(`[Code file: ${f.name}]\n${f.data}`);
+        }
+      }
+      if (assetFiles.length > 0) {
+        for (const f of assetFiles) {
+          if (f.type.startsWith('image/')) {
+            parts.push(`[Asset image: ${f.name}] (${f.data.slice(0, 80)}...)`);
+          } else {
+            parts.push(`[Asset: ${f.name}]\n${f.data}`);
+          }
+        }
+      }
+      if (notes.trim()) parts.push(`Additional notes: ${notes}`);
+
+      const prompt = `You are a design system expert. Based on the following company info and brand assets, create a comprehensive design system. Return ONLY a JSON object with this exact structure (no markdown, no explanation):
+{"brandName":"Brand Name","colors":{"primary":"#hex","secondary":"#hex","accent":"#hex","background":"#hex","surface":"#hex","text":"#hex"},"fonts":{"heading":"Font Name","body":"Font Name"},"components":["Component1","Component2"]}
+
+${parts.join('\n\n')}`;
+
+      const settings = useSettingsStore.getState().settings;
+      const res = await fetch('http://127.0.0.1:8081/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: settings.model || 'anthropic.claude-sonnet-4-20250514-v1:0',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: 1024,
+          temperature: 0,
+        }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const text = data.content?.[0]?.text || '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const config: DesignSystemConfig = JSON.parse(jsonMatch[0]);
+          const sourceData: DesignSystemSource = {
+            companyBlurb,
+            githubLinks,
+            notes,
+            codeFileNames: [
+              ...(editDS?.source?.codeFileNames || []),
+              ...codeFiles.map(f => f.name),
+            ],
+            assetFileNames: [
+              ...(editDS?.source?.assetFileNames || []),
+              ...assetFiles.map(f => f.name),
+            ],
+          };
+          if (editDS?.id) {
+            updateDesignSystem(editDS.id, { ...config, source: sourceData, updatedAt: Date.now() });
+          } else {
+            addDesignSystem({ ...config, published: true, author: 'you', source: sourceData });
+          }
+          onCreated();
+        }
+      }
+    } catch (e) {
+      console.error('DS generation failed:', e);
+    } finally {
+      setGenerating(false);
+    }
+  }, [companyBlurb, githubLinks, codeFiles, assetFiles, notes, addDesignSystem, onCreated]);
+
+  return (
+    <div className="ds-create">
+      <div className="ds-create-header">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" opacity="0.6">
+          <circle cx="12" cy="12" r="4" fill="#c2410c" />
+          {[0,30,60,90,120,150,180,210,240,270,300,330].map((deg) => (
+            <line key={deg} x1="12" y1="3" x2="12" y2="5" stroke="#c2410c" strokeWidth="1.5" strokeLinecap="round"
+              transform={`rotate(${deg} 12 12)`} />
+          ))}
+        </svg>
+        <h2 className="ds-create-title">{editDS ? 'Edit your design system' : 'Set up your design system'}</h2>
+        <p className="ds-create-subtitle">{editDS ? 'Update your company info and regenerate the design system.' : 'Tell us about your company and attach any design resources you have.'}</p>
+      </div>
+
+      {/* Company name and blurb */}
+      <div className="ds-create-field">
+        <label className="ds-create-label">
+          <strong>Company name and blurb</strong> (or name of design system)
+        </label>
+        <textarea
+          className="ds-create-textarea"
+          placeholder="e.g. Springo: AI-powered design assistant with warm, friendly interface for creative professionals"
+          value={companyBlurb}
+          onChange={(e) => setCompanyBlurb(e.target.value)}
+          rows={4}
+        />
+      </div>
+
+      {/* Examples section */}
+      <div className="ds-create-field">
+        <label className="ds-create-label">
+          <strong>Provide examples of your design system and products</strong> (all optional)
+        </label>
+        <p className="ds-create-hint">What works best: code and designs for your design system and your code products.</p>
+
+        <div className="ds-create-examples">
+          {/* GitHub link */}
+          <div className="ds-create-example-row">
+            <div className="ds-create-example-label"><strong>Link code on GitHub</strong></div>
+            <div className="ds-create-example-input-group">
+              <input
+                ref={githubInputRef}
+                className="ds-create-example-input"
+                placeholder="https://github.com/owner/repo"
+                value={githubUrl}
+                onChange={(e) => setGithubUrl(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addGithubLink(); }}
+              />
+              <button className="ds-create-example-add-btn" onClick={addGithubLink}>Add</button>
+            </div>
+            {githubLinks.length > 0 && (
+              <div className="ds-create-linked-items">
+                {githubLinks.map((url, i) => (
+                  <div key={i} className="ds-create-linked-item">
+                    <span>{url}</span>
+                    <button onClick={() => setGithubLinks((prev) => prev.filter((_, j) => j !== i))}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Local code */}
+          <div className="ds-create-example-row">
+            <div className="ds-create-example-label"><strong>Link code from your computer</strong></div>
+            <div
+              className="ds-create-dropzone"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleCodeDrop}
+              onClick={() => codeInputRef.current?.click()}
+            >
+              Drag a folder here or <strong>browse</strong>
+            </div>
+            <input
+              ref={codeInputRef}
+              type="file"
+              multiple
+              accept=".css,.json,.html,.tsx,.jsx,.ts,.js,.svg,.scss,.less"
+              style={{ display: 'none' }}
+              onChange={async (e) => {
+                if (e.target.files) {
+                  const files = await readFiles(e.target.files);
+                  setCodeFiles((prev) => [...prev, ...files]);
+                }
+                e.target.value = '';
+              }}
+            />
+            <p className="ds-create-example-note">
+              This doesn't upload the whole codebase; Springo will copy selected files. For large codebases, we recommend attaching a frontend-focused subfolder.
+            </p>
+            {codeFiles.length > 0 && (
+              <div className="ds-create-linked-items">
+                {codeFiles.map((f, i) => (
+                  <div key={i} className="ds-create-linked-item">
+                    <span>{f.name}</span>
+                    <button onClick={() => setCodeFiles((prev) => prev.filter((_, j) => j !== i))}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Assets */}
+          <div className="ds-create-example-row">
+            <div className="ds-create-example-label"><strong>Add fonts, logos and assets</strong></div>
+            <div
+              className="ds-create-dropzone"
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={handleAssetDrop}
+              onClick={() => assetInputRef.current?.click()}
+            >
+              Drag files here or <strong>browse</strong>
+            </div>
+            <input
+              ref={assetInputRef}
+              type="file"
+              multiple
+              accept="image/*,.svg,.woff,.woff2,.ttf,.otf,.pdf"
+              style={{ display: 'none' }}
+              onChange={async (e) => {
+                if (e.target.files) {
+                  const files = await readFiles(e.target.files);
+                  setAssetFiles((prev) => [...prev, ...files]);
+                }
+                e.target.value = '';
+              }}
+            />
+            {assetFiles.length > 0 && (
+              <div className="ds-create-linked-items">
+                {assetFiles.map((f, i) => (
+                  <div key={i} className="ds-create-linked-item">
+                    <span>{f.name}</span>
+                    <button onClick={() => setAssetFiles((prev) => prev.filter((_, j) => j !== i))}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Notes */}
+      <div className="ds-create-field">
+        <label className="ds-create-label"><strong>Any other notes?</strong></label>
+        <textarea
+          className="ds-create-textarea"
+          placeholder="e.g. We use a warm, earthy color palette with rounded corners. Our brand voice is playful but professional."
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          rows={3}
+        />
+      </div>
+
+      {/* Actions */}
+      <div className="ds-create-actions">
+        <button className="ds-create-cancel" onClick={onBack}>Cancel</button>
+        <button
+          className="ds-create-submit"
+          onClick={handleGenerate}
+          disabled={generating || !companyBlurb.trim()}
+        >
+          {generating ? 'Generating...' : editDS ? 'Regenerate design system' : 'Create design system'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Design System Detail View ───
+
+function DesignSystemDetail({ ds, onBack, onEdit }: { ds: DesignSystemConfig; onBack: () => void; onEdit: () => void }) {
+  const updateDesignSystem = useDesignStore((s) => s.updateDesignSystem);
+  const removeDesignSystem = useDesignStore((s) => s.removeDesignSystem);
+  const setDefaultDesignSystem = useDesignStore((s) => s.setDefaultDesignSystem);
+  const [editName, setEditName] = useState(false);
+  const [name, setName] = useState(ds.brandName || '');
+  const src = ds.source;
+
+  return (
+    <div className="ds-detail">
+      <button className="ds-detail-back" onClick={onBack}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="15 18 9 12 15 6"/></svg>
+        Back to settings
+      </button>
+
+      <div className="ds-detail-header">
+        <div className="ds-detail-icon" style={{ background: ds.colors?.primary || 'var(--accent)' }} />
+        <div>
+          {editName ? (
+            <input
+              className="ds-detail-name-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onBlur={() => { updateDesignSystem(ds.id!, { brandName: name.trim() || ds.brandName }); setEditName(false); }}
+              onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') setEditName(false); }}
+              autoFocus
+            />
+          ) : (
+            <h2 className="ds-detail-name" onClick={() => setEditName(true)}>{ds.brandName || 'Design System'}</h2>
+          )}
+          <div className="ds-detail-badges">
+            {ds.isDefault && <span className="ds-settings-default-badge">DEFAULT</span>}
+            {ds.updatedAt && <span className="ds-detail-updated">Updated {formatRelativeTime(ds.updatedAt)}</span>}
+          </div>
+        </div>
+      </div>
+
+      {/* Source info */}
+      {src && (
+        <div className="ds-detail-source">
+          <div className="ds-detail-section-label">Source</div>
+          <div className="ds-detail-source-card">
+            {src.companyBlurb && (
+              <div className="ds-detail-source-row">
+                <span className="ds-detail-source-key">Company</span>
+                <span className="ds-detail-source-val">{src.companyBlurb}</span>
+              </div>
+            )}
+            {src.githubLinks.length > 0 && (
+              <div className="ds-detail-source-row">
+                <span className="ds-detail-source-key">GitHub</span>
+                <span className="ds-detail-source-val">{src.githubLinks.join(', ')}</span>
+              </div>
+            )}
+            {src.codeFileNames.length > 0 && (
+              <div className="ds-detail-source-row">
+                <span className="ds-detail-source-key">Code files</span>
+                <span className="ds-detail-source-val">{src.codeFileNames.join(', ')}</span>
+              </div>
+            )}
+            {src.assetFileNames.length > 0 && (
+              <div className="ds-detail-source-row">
+                <span className="ds-detail-source-key">Assets</span>
+                <span className="ds-detail-source-val">{src.assetFileNames.join(', ')}</span>
+              </div>
+            )}
+            {src.notes && (
+              <div className="ds-detail-source-row">
+                <span className="ds-detail-source-key">Notes</span>
+                <span className="ds-detail-source-val">{src.notes}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      <div className="ds-detail-section">
+        <div className="ds-detail-section-label">Colors</div>
+        <div className="ds-detail-colors">
+          {ds.colors && Object.entries(ds.colors).map(([k, v]) => (
+            <div key={k} className="ds-detail-swatch">
+              <div className="ds-detail-swatch-color" style={{ background: v }} />
+              <span className="ds-detail-swatch-name">{k}</span>
+              <span className="ds-detail-swatch-value">{v}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="ds-detail-section">
+        <div className="ds-detail-section-label">Typography</div>
+        <div className="ds-detail-typo">
+          <div><strong>Heading:</strong> {ds.fonts?.heading}</div>
+          <div><strong>Body:</strong> {ds.fonts?.body}</div>
+        </div>
+      </div>
+
+      {ds.components && ds.components.length > 0 && (
+        <div className="ds-detail-section">
+          <div className="ds-detail-section-label">Components</div>
+          <div className="ds-detail-components">
+            {ds.components.map((c) => <span key={c} className="ds-detail-component">{c}</span>)}
+          </div>
+        </div>
+      )}
+
+      <div className="ds-detail-actions">
+        <button className="ds-detail-action-btn ds-detail-edit-btn" onClick={onEdit}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>
+          Edit &amp; Regenerate
+        </button>
+        {!ds.isDefault && (
+          <button className="ds-detail-action-btn" onClick={() => { setDefaultDesignSystem(ds.id!); }}>
+            Set as default
+          </button>
+        )}
+        <button className="ds-detail-action-btn ds-detail-delete" onClick={() => { removeDesignSystem(ds.id!); onBack(); }}>
+          Delete
+        </button>
+      </div>
     </div>
   );
 }

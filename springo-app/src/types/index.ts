@@ -880,13 +880,28 @@ export interface DesignVersion {
   entryFile?: string;     // Entry point file path (default: "index.html")
 }
 
+export interface DesignSystemSource {
+  companyBlurb: string;
+  githubLinks: string[];
+  notes: string;
+  codeFileNames: string[];
+  assetFileNames: string[];
+}
+
 export interface DesignSystemConfig {
+  id?: string;
   colors: Record<string, string>;
   fonts: { heading: string; body: string };
   components: string[];
   brandName?: string;
   sourceDir?: string;
   raw?: string;
+  published?: boolean;
+  isDefault?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+  author?: string;
+  source?: DesignSystemSource;
 }
 
 // ======================== Plan Mode ========================
