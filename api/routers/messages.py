@@ -305,6 +305,7 @@ async def messages_auto_api(
                 messages = [m.model_dump() if hasattr(m, 'model_dump') else m for m in msg_request.messages]
                 iteration = 0
                 system_extra = ""
+                _empty_retries = 0
 
                 _saved_msg_count = 0  # tracks how many messages have been persisted
 
@@ -697,6 +698,28 @@ async def messages_auto_api(
                         get_hook_pipeline().execute("post_message", _pm_ctx)
                     except Exception:
                         pass  # post_message hooks are observational
+
+                    # Reset empty-response retry counter on any successful response
+                    if stop_reason and stop_reason != "empty_response":
+                        _empty_retries = 0
+
+                    # Handle empty/failed Bedrock response — retry up to 2 times
+                    if not stop_reason or stop_reason == "empty_response":
+                        _empty_retries += 1
+                        if _empty_retries <= 2:
+                            logger.warning(
+                                f"[Auto] Empty response (stop_reason={stop_reason}) at iteration {iteration}, "
+                                f"session={session_id}, retry {_empty_retries}/2"
+                            )
+                            yield SSEEventBuilder.heartbeat(0, "empty_response_retry")
+                            await asyncio.sleep(1)
+                            content_blocks = []
+                            tool_uses = []
+                            continue  # Re-enter while loop to retry model call
+                        else:
+                            logger.error(
+                                f"[Auto] Empty response persists after 2 retries, session={session_id}"
+                            )
 
                     # Handle max_tokens truncation during tool call generation:
                     # Model started a tool_use block but ran out of output tokens.

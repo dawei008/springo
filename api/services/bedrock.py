@@ -1195,17 +1195,24 @@ class BedrockService:
 
             # Ensure message was started
             if not started_message:
+                logger.warning(f"Bedrock stream returned empty response (no chunks) for {model_id}")
                 empty_msg = {
                     'id': message_id,
                     'type': 'message',
                     'role': 'assistant',
                     'content': [],
                     'model': original_model,
-                    'stop_reason': None,
+                    'stop_reason': 'empty_response',
                     'stop_sequence': None,
                     'usage': {'input_tokens': 0, 'output_tokens': 0}
                 }
                 yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': empty_msg})}\n\n"
+                delta_data = {
+                    'type': 'message_delta',
+                    'delta': {'stop_reason': 'empty_response'},
+                    'usage': {'output_tokens': 0},
+                }
+                yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
                 yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
 
         except Exception as e:
