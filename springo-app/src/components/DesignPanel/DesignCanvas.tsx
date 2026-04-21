@@ -1,9 +1,10 @@
 /**
  * DesignCanvas - iframe renderer with viewport simulation and React/Babel runtime
  */
-import { useRef, useEffect } from 'react';
+import { useRef, useEffect, useCallback } from 'react';
 import type { DesignVersion, DesignFile } from '@/types';
 import type { ViewportMode } from '@/stores/designStore';
+import { useDesignStore } from '@/stores/designStore';
 
 const VIEWPORT_WIDTHS: Record<ViewportMode, number | null> = {
   desktop: null,
@@ -173,7 +174,32 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
   ${htmlBody}
   <script>
     // Seed global component registry with React hooks & utilities
-    window.__c = {};
+    // Use a Proxy so any unresolved import returns a placeholder component
+    // instead of undefined (prevents blank screen when LLM omits a file)
+    window.__c = new Proxy({}, {
+      get: function(target, prop) {
+        if (prop in target) return target[prop];
+        if (typeof prop === 'string' && /^[A-Z]/.test(prop)) {
+          // Return a placeholder component that renders its children
+          // and also acts as a namespace (e.g. Icon.Chat)
+          var _ph = new Proxy(
+            function _Placeholder(props) {
+              return React.createElement('span', {
+                style: { opacity: 0.4, fontSize: '12px' },
+                title: 'Missing: ' + prop
+              }, props && props.children ? props.children : '[' + prop + ']');
+            },
+            { get: function(_fn, sub) {
+                if (sub === '$$typeof' || sub === 'prototype' || sub === 'name' || sub === 'length' || sub === 'caller' || sub === 'arguments' || sub === 'apply' || sub === 'call' || sub === 'bind') return _fn[sub];
+                return function(p) { return React.createElement('span', { style:{opacity:0.4,fontSize:'11px'}, title:'Missing: '+prop+'.'+sub }, p&&p.children?p.children:''); };
+              }
+            }
+          );
+          return _ph;
+        }
+        return undefined;
+      }
+    });
     // Expose React hooks so "const { useState } = window.__c" works
     var _rh = ['useState','useEffect','useRef','useCallback','useMemo','useContext','useReducer','createContext','Fragment','createElement','Children','cloneElement','forwardRef','memo','lazy','Suspense','startTransition','useTransition','useDeferredValue','useId'];
     for (var _hi = 0; _hi < _rh.length; _hi++) {
@@ -239,6 +265,98 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
       console.error(e);
     }
   </script>
+  <script>
+    // === Springo: element click handler + error capture ===
+    (function() {
+      var _highlight = null;
+      function getCssPath(el) {
+        var parts = [];
+        while (el && el !== document.body && el !== document.documentElement) {
+          var tag = el.tagName.toLowerCase();
+          if (el.id) { parts.unshift(tag + '#' + el.id); break; }
+          var cls = el.className && typeof el.className === 'string' ? '.' + el.className.trim().split(/\\s+/).join('.') : '';
+          var idx = 1, sib = el.previousElementSibling;
+          while (sib) { if (sib.tagName === el.tagName) idx++; sib = sib.previousElementSibling; }
+          parts.unshift(tag + cls + (idx > 1 ? ':nth-of-type(' + idx + ')' : ''));
+          el = el.parentElement;
+        }
+        return parts.join(' > ');
+      }
+      function removeHighlight() {
+        if (_highlight && _highlight.parentNode) _highlight.parentNode.removeChild(_highlight);
+        _highlight = null;
+      }
+      document.addEventListener('click', function(e) {
+        if (!e.altKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        var el = e.target;
+        if (!el || el === document.body || el === document.documentElement) return;
+        var rect = el.getBoundingClientRect();
+        var cs = window.getComputedStyle(el);
+        var text = (el.textContent || '').trim().substring(0, 80);
+        removeHighlight();
+        _highlight = document.createElement('div');
+        _highlight.style.cssText = 'position:fixed;pointer-events:none;border:2px solid #6366f1;background:rgba(99,102,241,0.08);border-radius:3px;z-index:999999;transition:all 0.15s;';
+        _highlight.style.left = rect.left + 'px';
+        _highlight.style.top = rect.top + 'px';
+        _highlight.style.width = rect.width + 'px';
+        _highlight.style.height = rect.height + 'px';
+        document.body.appendChild(_highlight);
+        window.parent.postMessage({
+          type: 'springo:element-selected',
+          payload: {
+            tagName: el.tagName.toLowerCase(),
+            id: el.id || undefined,
+            className: (typeof el.className === 'string' ? el.className : '') || undefined,
+            textPreview: text || undefined,
+            rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+            cssPath: getCssPath(el),
+            computedStyles: {
+              color: cs.color, backgroundColor: cs.backgroundColor,
+              fontSize: cs.fontSize, fontWeight: cs.fontWeight, fontFamily: cs.fontFamily,
+              padding: cs.padding, margin: cs.margin, borderRadius: cs.borderRadius,
+              display: cs.display, position: cs.position
+            }
+          }
+        }, '*');
+      }, true);
+      document.addEventListener('click', function(e) {
+        if (!e.altKey && _highlight) removeHighlight();
+      });
+
+      // Error capture
+      var _origError = window.onerror;
+      window.onerror = function(msg, src, line) {
+        window.parent.postMessage({ type: 'springo:error', payload: { type: 'runtime', message: String(msg), source: src, line: line, timestamp: Date.now() } }, '*');
+        if (_origError) return _origError.apply(this, arguments);
+      };
+      var _origConsoleError = console.error;
+      console.error = function() {
+        var msg = Array.prototype.slice.call(arguments).map(function(a) { return typeof a === 'object' ? JSON.stringify(a) : String(a); }).join(' ');
+        window.parent.postMessage({ type: 'springo:error', payload: { type: 'console', message: msg, timestamp: Date.now() } }, '*');
+        _origConsoleError.apply(console, arguments);
+      };
+      window.addEventListener('unhandledrejection', function(e) {
+        window.parent.postMessage({ type: 'springo:error', payload: { type: 'runtime', message: 'Unhandled rejection: ' + (e.reason && e.reason.message || e.reason || 'unknown'), timestamp: Date.now() } }, '*');
+      });
+
+      // Listen for tweak CSS variable updates from parent
+      window.addEventListener('message', function(e) {
+        if (e.data && e.data.type === 'springo:set-css-var') {
+          document.documentElement.style.setProperty(e.data.name, e.data.value);
+        }
+      });
+
+      // Blank screen detection: if #root is empty after 3s
+      setTimeout(function() {
+        var root = document.getElementById('root');
+        if (root && root.innerHTML.trim() === '') {
+          window.parent.postMessage({ type: 'springo:error', payload: { type: 'render', message: 'Blank screen — no content rendered after 3 seconds', timestamp: Date.now() } }, '*');
+        }
+      }, 3000);
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -252,6 +370,25 @@ export default function DesignCanvas({
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastSrcdocRef = useRef<string>('');
+
+  const handleMessage = useCallback((e: MessageEvent) => {
+    if (!e.data || typeof e.data.type !== 'string') return;
+    if (e.data.type === 'springo:element-selected') {
+      useDesignStore.getState().selectElement(e.data.payload);
+    } else if (e.data.type === 'springo:error') {
+      useDesignStore.getState().addError(e.data.payload);
+    }
+  }, []);
+
+  useEffect(() => {
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [handleMessage]);
+
+  useEffect(() => {
+    useDesignStore.getState().clearErrors();
+    useDesignStore.getState().selectElement(null);
+  }, [design?.id]);
 
   useEffect(() => {
     const iframe = iframeRef.current;
