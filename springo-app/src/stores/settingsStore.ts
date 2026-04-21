@@ -19,13 +19,15 @@ const REMOVED_MODEL_MIGRATION: Record<string, string> = {
   'claude-opus-4-1-20250805': 'claude-opus-4-6',
   'deepseek-r1': 'deepseek-v3.2',
   'deepseek-v3.1': 'deepseek-v3.2',
-  'minimax-m2': 'minimax-m2.1',
+  'minimax-m2': 'minimax-m2.5',
+  'minimax-m2.1': 'minimax-m2.5',
   'kimi-k2-thinking': 'kimi-k2.5',
   'qwen3-235b': 'qwen3-coder-480b',
   'qwen3-32b': 'qwen3-coder-480b',
   'qwen3-vl-235b': 'qwen3-coder-480b',
   'qwen3-coder-30b': 'qwen3-coder-480b',
-  'glm-4.7-flash': 'glm-4.7',
+  'glm-4.7': 'glm-5',
+  'glm-4.7-flash': 'glm-5',
 };
 
 interface SettingsState {

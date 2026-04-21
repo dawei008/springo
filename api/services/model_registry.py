@@ -145,15 +145,15 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # -----------------------------------------------------------------------
     # MiniMax  (api_format = "converse")
     # -----------------------------------------------------------------------
-    "minimax-m2.1": {
+    "minimax-m2.5": {
         "vendor": "bedrock",
-        "bedrock_id": "minimax.minimax-m2.1",
+        "bedrock_id": "minimax.minimax-m2.5",
         "provider": "minimax",
-        "display_name": "MiniMax M2.1",
-        "context_window": 196608,   # 192K (Bedrock-probed)
+        "display_name": "MiniMax M2.5",
+        "context_window": 204800,   # 200K
         "max_output": 131072,
         "supports_vision": False,
-        "supports_thinking": False,
+        "supports_thinking": True,
         "supports_tools": True,
         "api_format": "converse",
         "max_tools": 40,
@@ -195,11 +195,11 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # -----------------------------------------------------------------------
     # Z.AI (GLM)  (api_format = "converse")
     # -----------------------------------------------------------------------
-    "glm-4.7": {
+    "glm-5": {
         "vendor": "bedrock",
-        "bedrock_id": "zai.glm-4.7",
+        "bedrock_id": "zai.glm-5",
         "provider": "zai",
-        "display_name": "GLM 4.7",
+        "display_name": "GLM 5",
         "context_window": 202752,   # 198K (Bedrock-probed)
         "max_output": 131072,
         "supports_vision": False,
@@ -250,7 +250,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
 # toolUse / toolResult content blocks in *message history*.  They support
 # tool calls in the current turn, but past tool interactions must be
 # flattened to plain text before re-sending.
-_FLATTEN_TOOL_HISTORY_MODELS = {"glm-4.7"}
+_FLATTEN_TOOL_HISTORY_MODELS = {"glm-5"}
 
 # Backward-compatible flat mapping: short_name -> bedrock_id
 BEDROCK_MODEL_MAPPING: Dict[str, str] = {
