@@ -469,7 +469,15 @@ export default function MessageInput() {
     const designSystem = isDesignMode ? useDesignStore.getState().designSystem : null;
     const prevDesign = isDesignMode ? useDesignStore.getState().currentDesign() : null;
     const designContext = prevDesign ? buildDesignContext(prevDesign) : undefined;
-    await useChatStore.getState().sendMessage(convId, content, atts, {
+    const selectedEl = isDesignMode ? useDesignStore.getState().selectedElement : null;
+
+    let finalContent = content;
+    if (isDesignMode && selectedEl) {
+      finalContent = `[User clicked element: <${selectedEl.tagName}> at "${selectedEl.cssPath}"${selectedEl.textPreview ? ` text="${selectedEl.textPreview}"` : ''}${selectedEl.computedStyles ? ` styles=${JSON.stringify(selectedEl.computedStyles)}` : ''}]\n\n${content}`;
+      useDesignStore.getState().selectElement(null);
+    }
+
+    await useChatStore.getState().sendMessage(convId, finalContent, atts, {
       model: currentSettings.model,
       maxTokens: currentSettings.maxTokens,
       temperature: currentSettings.temperature,

@@ -20,7 +20,6 @@ export default function RecordingCanvasPanel() {
       timerRef.current = setInterval(() => {
         useRecordingStore.getState().tick();
       }, 1000);
-      return () => clearInterval(timerRef.current);
     }
     return () => clearInterval(timerRef.current);
   }, [isRecording, isPaused]);

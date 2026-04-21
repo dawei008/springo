@@ -103,8 +103,13 @@ export const useModeStore = create<ModeState>((set, get) => ({
       }));
     }
 
-    // Restore mode for new session — default to 'general', never inherit
-    const restored = sessionId ? (sessionModeMap[sessionId] ?? 'general') : 'general';
+    // Restore mode for new session — check map, then session store, default to 'general'
+    let restored: SessionMode = 'general';
+    if (sessionId) {
+      restored = sessionModeMap[sessionId]
+        ?? useSessionStore.getState().sessions.find((s) => s.id === sessionId)?.mode
+        ?? 'general';
+    }
     set({ activeMode: restored, currentSessionId: sessionId });
     activateMode(restored);
   },

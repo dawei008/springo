@@ -843,6 +843,28 @@ class BedrockService:
                 "- Use CSS efficiently: shared classes, custom properties, minimal duplication\n"
                 "- Visual fidelity over code volume.\n\n"
 
+                "### Element-Targeted Editing\n"
+                "When the user's message starts with `[User clicked element: ...]`, they Alt+clicked a specific element "
+                "in the preview. Focus your edit ONLY on that element and its immediate context. "
+                "Keep the rest of the design unchanged. Use the CSS path and computed styles provided to locate "
+                "and modify the exact element. Return the FULL updated project, not just the changed file.\n\n"
+
+                "### Tweakable CSS Variables\n"
+                "When defining colors, font sizes, spacing, or border-radius in CSS, use CSS custom properties "
+                "and mark them as tweakable with `/* @tweak <type> */` comments. This lets the user adjust values "
+                "live via a slider/picker panel.\n"
+                "Supported types: `color`, `range|min,max`, `select|opt1,opt2,opt3`\n"
+                "Example:\n"
+                "```css\n"
+                "/* @tweak color */\n"
+                "--color-primary: #6366f1;\n"
+                "/* @tweak range|12,72 */\n"
+                "--font-size-hero: 48px;\n"
+                "/* @tweak select|sans-serif,serif,monospace */\n"
+                "--font-family: sans-serif;\n"
+                "```\n"
+                "Add @tweak comments to the 5-10 most impactful design tokens so the user can experiment.\n\n"
+
                 "### CRITICAL: Direct Output Only\n"
                 "- **NEVER** use tools (use_skill, glob, grep, bash, etc.) to generate designs\n"
                 "- Output the `<springo-artifact>` tag DIRECTLY in your response text\n"
@@ -940,9 +962,8 @@ class BedrockService:
         if include_tools and model_supports_tools(model):
             raw_tools = request.get("tools") or tools or []
             if raw_tools:
-                # In design mode, remove ALL tools — model should only output text + artifacts
-                if design_mode:
-                    raw_tools = []
+                # Design mode: all tools remain available — system prompt guides
+                # the model to produce artifacts rather than write files directly
                 # Auto-unload: evict unused tools after grace period
                 raw_tools = _auto_unload_tools(raw_tools, model=model)
                 # Apply tool limit for Converse models with max_tools set

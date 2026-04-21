@@ -5,7 +5,7 @@
  * and per-session state persistence.
  */
 import { create } from 'zustand';
-import type { DesignVersion, DesignSystemConfig, DesignFile } from '../types';
+import type { DesignVersion, DesignSystemConfig, DesignFile, SelectedElement, DesignError } from '../types';
 
 export type ViewportMode = 'desktop' | 'tablet' | 'mobile';
 export type DesignViewMode = 'preview' | 'code';
@@ -16,6 +16,8 @@ interface SessionDesignSnapshot {
   activeVersionIndex: number;
   designSystem: DesignSystemConfig | null;
 }
+
+export type VerificationStatus = 'ok' | 'warning' | 'error' | 'checking';
 
 interface DesignState {
   active: boolean;
@@ -28,6 +30,10 @@ interface DesignState {
   isExtractingDesignSystem: boolean;
   sessionMap: Record<string, SessionDesignSnapshot>;
   currentSessionId: string | null;
+  selectedElement: SelectedElement | null;
+  errors: DesignError[];
+  verificationStatus: VerificationStatus;
+  tweaksOpen: boolean;
 
   activateDesignMode: () => void;
   deactivateDesignMode: () => void;
@@ -42,6 +48,11 @@ interface DesignState {
   setExtractingDesignSystem: (v: boolean) => void;
   switchSession: (sessionId: string | null) => void;
   currentDesign: () => DesignVersion | null;
+  selectElement: (el: SelectedElement | null) => void;
+  addError: (err: DesignError) => void;
+  clearErrors: () => void;
+  setVerificationStatus: (s: VerificationStatus) => void;
+  setTweaksOpen: (open: boolean) => void;
 }
 
 let designIdCounter = 0;
@@ -61,6 +72,10 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   isExtractingDesignSystem: false,
   sessionMap: {},
   currentSessionId: null,
+  selectedElement: null,
+  errors: [],
+  verificationStatus: 'ok',
+  tweaksOpen: false,
 
   activateDesignMode: () => set({ active: true }),
 
@@ -142,6 +157,19 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     }
     return null;
   },
+
+  selectElement: (el) => set({ selectedElement: el }),
+
+  addError: (err) => set((s) => ({
+    errors: [...s.errors.slice(-49), err],
+    verificationStatus: 'error',
+  })),
+
+  clearErrors: () => set({ errors: [], verificationStatus: 'ok' }),
+
+  setVerificationStatus: (status) => set({ verificationStatus: status }),
+
+  setTweaksOpen: (open) => set({ tweaksOpen: open }),
 }));
 
 // Expose for testing/debugging

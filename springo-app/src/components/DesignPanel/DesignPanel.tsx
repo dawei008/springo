@@ -8,6 +8,8 @@ import DesignCanvas from './DesignCanvas';
 import DesignCodeEditor from './DesignCodeEditor';
 import DesignFileBrowser from './DesignFileBrowser';
 import DesignVersionTimeline from './DesignVersionTimeline';
+import DesignElementPopover from './DesignElementPopover';
+import DesignTweaksPanel from './DesignTweaksPanel';
 
 export default function DesignPanel() {
   const active = useDesignStore((s) => s.active);
@@ -101,7 +103,7 @@ export default function DesignPanel() {
       {/* Toolbar */}
       <DesignToolbar />
 
-      {/* Body: file browser + canvas/code */}
+      {/* Body: file browser + canvas/code + tweaks */}
       <div className="design-panel-body">
         {hasMultiFile && <DesignFileBrowser />}
         <div className="design-panel-main">
@@ -110,7 +112,9 @@ export default function DesignPanel() {
           ) : (
             <DesignCodeEditor />
           )}
+          {viewMode === 'preview' && <DesignElementPopover />}
         </div>
+        {viewMode === 'preview' && <DesignTweaksPanel />}
       </div>
 
       {/* Version Timeline */}

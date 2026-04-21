@@ -840,6 +840,26 @@ export const EXT_TO_MEDIA_TYPE: Record<string, string> = {
   webp: 'image/webp',
 };
 
+// ======================== Design Element Interaction ========================
+
+export interface SelectedElement {
+  tagName: string;
+  id?: string;
+  className?: string;
+  textPreview?: string;
+  rect: { x: number; y: number; width: number; height: number };
+  cssPath: string;
+  computedStyles?: Record<string, string>;
+}
+
+export interface DesignError {
+  type: 'runtime' | 'console' | 'render';
+  message: string;
+  source?: string;
+  line?: number;
+  timestamp: number;
+}
+
 // ======================== Design Mode ========================
 
 export type DesignFileType = 'html' | 'jsx' | 'css' | 'json' | 'text';
