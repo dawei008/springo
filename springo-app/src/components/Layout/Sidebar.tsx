@@ -428,6 +428,7 @@ export default function Sidebar() {
   const renameSession = useSessionStore((s) => s.renameSession);
   const unseenCompletedSessions = useSessionStore((s) => s.unseenCompletedSessions);
   const sidebarOpen = useUIStore((s) => s.sidebarOpen);
+  const toggleSidebar = useUIStore((s) => s.toggleSidebar);
 
   // ─── UI store ───
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
@@ -710,7 +711,7 @@ export default function Sidebar() {
     };
   }, []);
 
-  return (
+  return (<>
     <aside className={`sidebar${sidebarOpen ? '' : ' collapsed'}`} ref={sidebarRef}>
       <div className="sidebar-resize" ref={sidebarResizeRef} />
       {/* Sidebar header: dog logo + "Springo" + new chat button */}
@@ -887,6 +888,13 @@ export default function Sidebar() {
           <div className="footer-user-name">Springo User</div>
           <div className="footer-user-plan">Local · Bedrock</div>
         </div>
+        <button className="sidebar-collapse-btn" onClick={toggleSidebar} title="Hide sidebar (⌘⇧S)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+            <polyline points="15 8 12 12 15 16" />
+          </svg>
+        </button>
         <button className="icon-btn-sm" onClick={handleOpenSettings} title="Settings">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3"/>
@@ -895,6 +903,16 @@ export default function Sidebar() {
         </button>
       </div>
     </aside>
+    {!sidebarOpen && (
+      <button className="sidebar-expand-btn" onClick={toggleSidebar} title="Show sidebar (⌘⇧S)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="9" y1="3" x2="9" y2="21" />
+          <polyline points="13 8 16 12 13 16" />
+        </svg>
+      </button>
+    )}
+  </>
   );
 }
 
