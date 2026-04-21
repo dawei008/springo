@@ -8,6 +8,7 @@ import type {
   ConvRuntime,
   ToolUse,
   UsageData,
+  DesignSystemConfig,
 } from '@/types';
 import { processStreamingResponse } from '@/services/sse';
 import { api } from '@/services/api';
@@ -361,7 +362,7 @@ interface ChatState {
       enable1mContext?: boolean;
       sessionId?: string;
       designMode?: boolean;
-      designSystem?: Record<string, unknown>;
+      designSystem?: DesignSystemConfig | Record<string, unknown>;
       designContext?: string;
       onTextUpdate?: (text: string, tools: ToolUse[]) => void;
       onComplete?: () => void;

@@ -85,7 +85,7 @@ export default function DesignPanel() {
       compactModel: settings.compactModel,
       sessionId,
       designMode: true,
-      designSystem: designSystem as unknown as Record<string, unknown> || undefined,
+      designSystem: designSystem || undefined,
     });
   }, []);
 
