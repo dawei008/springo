@@ -700,6 +700,7 @@ async def messages_auto_api(
 
                     # Check if we need to execute tools (or if cancelled)
                     if stop_reason != "tool_use" or not tool_uses:
+                        logger.info(f"[Auto] Loop exit: stop_reason={stop_reason}, tool_uses={len(tool_uses)}, iteration={iteration}, session={session_id}")
                         # === Stop plugin hook (model finished, end_turn) ===
                         if stop_reason and stop_reason != "cancelled":
                             try:
@@ -953,6 +954,8 @@ async def messages_auto_api(
                     if any(t["name"] == "ask_user" for t in tool_uses):
                         logger.info(f"[Auto] ask_user called at iteration {iteration}, yielding for user reply")
                         break
+
+                    logger.info(f"[Auto] Tool iteration {iteration} done, continuing to next model call, session={session_id}, msgs={len(messages)}")
 
                 # Save final assistant response (only for normal end_turn, not after
                 # tool-execution saves or cancellation where content_blocks is stale)

@@ -39,12 +39,12 @@ async def sse_generator(
             yield event
 
     except asyncio.CancelledError:
-        logger.warning("SSE generator cancelled")
+        logger.warning("SSE generator cancelled (CancelledError)")
         raise
     except GeneratorExit:
-        logger.warning("SSE generator exit")
+        logger.warning("SSE generator exit (GeneratorExit — client likely disconnected)")
     except Exception as e:
-        logger.error(f"SSE generator error: {e}")
+        logger.error(f"SSE generator error: {e}", exc_info=True)
         # Try to send error event
         try:
             error_data = {
