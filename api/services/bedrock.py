@@ -17,17 +17,19 @@ from ..config import settings
 from .error_handler import format_error_response as _eh_format_error, get_http_status, parse_error
 
 
+_RETRYABLE_TOKENS = (
+    'ThrottlingException', '429', 'Too Many Requests',
+    'ServiceUnavailableException', '503', 'Service Unavailable',
+    'InternalServerException', '500', 'Internal Server Error',
+    'ModelTimeoutException', 'RequestTimeout', '408',
+    'ModelStreamErrorException',
+    'Connection reset', 'Connection aborted', 'Read timed out',
+)
+
+
 def _is_retryable_error(error_str: str) -> bool:
-    """Check if a Bedrock error is transient and worth retrying."""
-    _retryable = (
-        'ThrottlingException', '429', 'Too Many Requests',
-        'ServiceUnavailableException', '503', 'Service Unavailable',
-        'InternalServerException', '500', 'Internal Server Error',
-        'ModelTimeoutException', 'RequestTimeout', '408',
-        'ModelStreamErrorException',
-        'Connection reset', 'Connection aborted', 'Read timed out',
-    )
-    return any(token in error_str for token in _retryable)
+    return any(token in error_str for token in _RETRYABLE_TOKENS)
+
 from .model_registry import (
     MODEL_REGISTRY,
     BEDROCK_MODEL_MAPPING,

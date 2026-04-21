@@ -395,10 +395,8 @@ async def messages_auto_api(
                     if cancel_event and cancel_event.is_set():
                         logger.info(f"[Auto] Cancelled at iteration {iteration}")
                         break
-                    # Note: request.is_disconnected() removed here — Starlette's
-                    # is_disconnected() gives false positives inside async generators
-                    # (especially after yielding SSE events), causing premature stream
-                    # termination. The cancel_event check above is sufficient.
+                    # Starlette is_disconnected() gives false positives in async generators
+                    # after yielding SSE events — cancel_event alone is sufficient.
 
                     # Send heartbeat between iterations (prevents frontend SSE timeout during context prep)
                     if iteration > 1:
