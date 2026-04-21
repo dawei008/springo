@@ -61,11 +61,3 @@ export function parseTweaks(css: string): TweakParam[] {
 
   return tweaks;
 }
-
-export function buildTweaksCss(tweaks: TweakParam[]): string {
-  const vars = tweaks.map(t => {
-    const val = t.type === 'range' ? `${t.value}${t.unit || 'px'}` : t.value;
-    return `${t.cssVar}: ${val};`;
-  });
-  return `:root { ${vars.join(' ')} }`;
-}

@@ -1,7 +1,7 @@
 /**
  * DesignFileBrowser - file tree grouped by category (Pages, Components, Stylesheets)
  */
-import { useDesignStore } from '@/stores/designStore';
+import { useDesignStore, selectCurrentDesign } from '@/stores/designStore';
 import type { DesignFile, DesignFileType } from '@/types';
 
 interface FileGroup {
@@ -48,12 +48,7 @@ function fileSubtype(path: string): string {
 }
 
 export default function DesignFileBrowser() {
-  const design = useDesignStore((s) => {
-    const { versions, activeVersionIndex } = s;
-    return activeVersionIndex >= 0 && activeVersionIndex < versions.length
-      ? versions[activeVersionIndex]
-      : null;
-  });
+  const design = useDesignStore(selectCurrentDesign);
   const activeFilePath = useDesignStore((s) => s.activeFilePath);
   const selectFile = useDesignStore((s) => s.selectFile);
 

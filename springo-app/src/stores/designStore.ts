@@ -19,7 +19,7 @@ interface SessionDesignSnapshot {
 
 export type VerificationStatus = 'ok' | 'warning' | 'error' | 'checking';
 
-interface DesignState {
+export interface DesignState {
   active: boolean;
   versions: DesignVersion[];
   activeVersionIndex: number;
@@ -34,6 +34,7 @@ interface DesignState {
   errors: DesignError[];
   verificationStatus: VerificationStatus;
   tweaksOpen: boolean;
+  comparisonMode: boolean;
 
   activateDesignMode: () => void;
   deactivateDesignMode: () => void;
@@ -53,6 +54,7 @@ interface DesignState {
   clearErrors: () => void;
   setVerificationStatus: (s: VerificationStatus) => void;
   setTweaksOpen: (open: boolean) => void;
+  setComparisonMode: (on: boolean) => void;
 }
 
 let designIdCounter = 0;
@@ -76,6 +78,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   errors: [],
   verificationStatus: 'ok',
   tweaksOpen: false,
+  comparisonMode: false,
 
   activateDesignMode: () => set({ active: true }),
 
@@ -170,7 +173,18 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   setVerificationStatus: (status) => set({ verificationStatus: status }),
 
   setTweaksOpen: (open) => set({ tweaksOpen: open }),
+
+  setComparisonMode: (on) => set({ comparisonMode: on }),
 }));
+
+/** Selector: returns the active design version or null. Use in components to avoid duplicating bounds checks. */
+export function selectCurrentDesign(s: DesignState): DesignVersion | null {
+  const { versions, activeVersionIndex } = s;
+  if (activeVersionIndex >= 0 && activeVersionIndex < versions.length) {
+    return versions[activeVersionIndex];
+  }
+  return null;
+}
 
 // Expose for testing/debugging
 if (typeof window !== 'undefined') (window as any).__designStore = useDesignStore;

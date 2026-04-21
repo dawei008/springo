@@ -865,6 +865,14 @@ class BedrockService:
                 "```\n"
                 "Add @tweak comments to the 5-10 most impactful design tokens so the user can experiment.\n\n"
 
+                "### Context-First Design\n"
+                "When a design system is provided, ALWAYS start by reading and applying its constraints. "
+                "Match existing color tokens, spacing scales, component patterns, and brand guidelines. "
+                "Do not invent new visual language when the user's system already defines one. "
+                "If the user provides screenshots, code snippets, or references to existing pages, "
+                "analyze them first and derive the visual language (colors, spacing, typography, component shapes) "
+                "before generating. Consistency with the existing product is more important than novelty.\n\n"
+
                 "### CRITICAL: Direct Output Only\n"
                 "- **NEVER** use tools (use_skill, glob, grep, bash, etc.) to generate designs\n"
                 "- Output the `<springo-artifact>` tag DIRECTLY in your response text\n"

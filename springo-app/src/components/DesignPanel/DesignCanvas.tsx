@@ -5,6 +5,8 @@ import { useRef, useEffect, useCallback } from 'react';
 import type { DesignVersion, DesignFile } from '@/types';
 import type { ViewportMode } from '@/stores/designStore';
 import { useDesignStore } from '@/stores/designStore';
+import DesignTemplateLibrary from './DesignTemplateLibrary';
+import type { DesignTemplate } from '@/data/designTemplates';
 
 const VIEWPORT_WIDTHS: Record<ViewportMode, number | null> = {
   desktop: null,
@@ -364,9 +366,11 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
 export default function DesignCanvas({
   design,
   viewport,
+  onTemplateSelect,
 }: {
   design: DesignVersion | null;
   viewport: ViewportMode;
+  onTemplateSelect?: (template: DesignTemplate) => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastSrcdocRef = useRef<string>('');
@@ -414,6 +418,8 @@ export default function DesignCanvas({
           <path d="M21 15l-5-5L5 21" />
         </svg>
         <p>Send a message to generate a design</p>
+        <p className="design-canvas-empty-hint">or pick a template below</p>
+        <DesignTemplateLibrary onSelect={(t) => onTemplateSelect?.(t)} />
       </div>
     );
   }

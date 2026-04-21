@@ -1,15 +1,10 @@
 /**
  * DesignCodeEditor - read-only code view for the selected file
  */
-import { useDesignStore } from '@/stores/designStore';
+import { useDesignStore, selectCurrentDesign } from '@/stores/designStore';
 
 export default function DesignCodeEditor() {
-  const design = useDesignStore((s) => {
-    const { versions, activeVersionIndex } = s;
-    return activeVersionIndex >= 0 && activeVersionIndex < versions.length
-      ? versions[activeVersionIndex]
-      : null;
-  });
+  const design = useDesignStore(selectCurrentDesign);
   const activeFilePath = useDesignStore((s) => s.activeFilePath);
 
   if (!design) return null;

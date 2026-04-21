@@ -1,7 +1,7 @@
 /**
  * DesignToolbar - viewport switch, preview/code toggle, version select, export
  */
-import { useDesignStore, type ViewportMode, type DesignViewMode } from '@/stores/designStore';
+import { useDesignStore, selectCurrentDesign, type ViewportMode } from '@/stores/designStore';
 import DesignVerificationBadge from './DesignVerificationBadge';
 
 const VIEWPORTS: { mode: ViewportMode; label: string; icon: string }[] = [
@@ -21,10 +21,9 @@ export default function DesignToolbar() {
   const selectedElement = useDesignStore((s) => s.selectedElement);
   const tweaksOpen = useDesignStore((s) => s.tweaksOpen);
   const setTweaksOpen = useDesignStore((s) => s.setTweaksOpen);
-
-  const currentDesign = activeVersionIndex >= 0 && activeVersionIndex < versions.length
-    ? versions[activeVersionIndex]
-    : null;
+  const comparisonMode = useDesignStore((s) => s.comparisonMode);
+  const setComparisonMode = useDesignStore((s) => s.setComparisonMode);
+  const currentDesign = useDesignStore(selectCurrentDesign);
   const hasMultiFile = currentDesign?.files && currentDesign.files.length > 0;
 
   const handleExport = async () => {
@@ -126,6 +125,18 @@ export default function DesignToolbar() {
           </div>
         )}
         <DesignVerificationBadge />
+        {versions.length >= 2 && (
+          <button
+            className={`design-compare-toggle${comparisonMode ? ' active' : ''}`}
+            onClick={() => setComparisonMode(!comparisonMode)}
+            title="Compare versions side-by-side"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="2" y="3" width="20" height="18" rx="2" />
+              <line x1="12" y1="3" x2="12" y2="21" />
+            </svg>
+          </button>
+        )}
         <button
           className={`design-tweaks-toggle${tweaksOpen ? ' active' : ''}`}
           onClick={() => setTweaksOpen(!tweaksOpen)}

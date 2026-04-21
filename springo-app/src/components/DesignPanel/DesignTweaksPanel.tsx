@@ -1,16 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { useDesignStore } from '@/stores/designStore';
+import { useDesignStore, selectCurrentDesign } from '@/stores/designStore';
 import { parseTweaks, type TweakParam } from './tweakParser';
 
 export default function DesignTweaksPanel() {
   const tweaksOpen = useDesignStore((s) => s.tweaksOpen);
-  const versions = useDesignStore((s) => s.versions);
-  const activeVersionIndex = useDesignStore((s) => s.activeVersionIndex);
+  const currentDesign = useDesignStore(selectCurrentDesign);
   const [tweaks, setTweaks] = useState<TweakParam[]>([]);
   const initialRef = useRef<Map<string, string>>(new Map());
-
-  const currentDesign = activeVersionIndex >= 0 && activeVersionIndex < versions.length
-    ? versions[activeVersionIndex] : null;
 
   useEffect(() => {
     if (!currentDesign) { setTweaks([]); return; }
