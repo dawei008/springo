@@ -661,8 +661,10 @@ class BedrockService:
         model_info = get_model_info(model)
         api_format = model_info["api_format"] if model_info else "anthropic"
 
-        # Design mode generates multi-file projects — needs larger output budget
-        default_max = 64000 if request.get("design_mode") else 16384
+        # Use model's max output as default — 16384 is too small for models like
+        # Opus that write long analyses before tool calls, causing max_tokens truncation.
+        model_max_output = model_info.get("max_output", 16384) if model_info else 16384
+        default_max = 64000 if request.get("design_mode") else model_max_output
         bedrock_body = {
             "max_tokens": max(request.get("max_tokens", default_max), default_max),
             "messages": copy.deepcopy(request.get("messages", [])),

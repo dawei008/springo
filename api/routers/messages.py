@@ -698,6 +698,30 @@ async def messages_auto_api(
                     except Exception:
                         pass  # post_message hooks are observational
 
+                    # Handle max_tokens truncation during tool call generation:
+                    # Model started a tool_use block but ran out of output tokens.
+                    # Discard the incomplete tool call and continue — the model will
+                    # see its own text output and can retry the tool call next turn.
+                    if stop_reason == "max_tokens" and tool_uses:
+                        logger.warning(
+                            f"[Auto] max_tokens truncated tool call at iteration {iteration}, "
+                            f"session={session_id}, dropping {len(tool_uses)} incomplete tool_use(s)"
+                        )
+                        # Keep only text blocks, drop incomplete tool_use blocks
+                        content_blocks = [b for b in content_blocks if b.get("type") != "tool_use"]
+                        tool_uses = []
+                        # Save text-only assistant response and let loop re-enter for model to retry
+                        text_content = [{"type": "text", "text": b["text"]} for b in content_blocks if b.get("type") == "text" and b.get("text")]
+                        if text_content:
+                            messages.append({"role": "assistant", "content": text_content})
+                            # Add a user nudge so model knows it was truncated
+                            messages.append({"role": "user", "content": "[System: Your previous response was truncated due to output length. Please continue — you may call tools as needed.]"})
+                            _auto_save_session(messages, {"iteration": iteration})
+                            _content_saved_this_iter = True
+                            content_blocks = []
+                            yield SSEEventBuilder.error("Output truncated (max_tokens), retrying...", error_type="max_tokens_retry")
+                            continue  # Re-enter while loop for next model call
+
                     # Check if we need to execute tools (or if cancelled)
                     if stop_reason != "tool_use" or not tool_uses:
                         logger.info(f"[Auto] Loop exit: stop_reason={stop_reason}, tool_uses={len(tool_uses)}, iteration={iteration}, session={session_id}")
