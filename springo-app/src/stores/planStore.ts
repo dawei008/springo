@@ -25,6 +25,7 @@ interface PlanStoreState {
   currentPhase: PlanPhase;
   showAnalysis: boolean;
   analysisTool: AnalysisToolState | null;
+  sessionPlanMap: Record<string, PlanStructure>;
 
   // Actions
   generatePlan: (taskDescription: string, sessionId?: string, model?: string) => Promise<void>;
@@ -39,6 +40,7 @@ interface PlanStoreState {
   setShowAnalysis: (show: boolean) => void;
   clearPlan: () => void;
   clearError: () => void;
+  switchSession: (sessionId: string | null) => void;
 }
 
 export const usePlanStore = create<PlanStoreState>((set, get) => ({
@@ -51,6 +53,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   currentPhase: null,
   showAnalysis: false,
   analysisTool: null,
+  sessionPlanMap: {},
 
   generatePlan: async (taskDescription, sessionId, model) => {
     set({ isGenerating: true, error: null, currentPlan: null, currentPhase: null, showAnalysis: false });
@@ -101,11 +104,14 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
                 }
               } else if (event.type === 'plan_generated' && event.plan) {
                 const plan = event.plan as PlanStructure;
-                set({
+                set((s) => ({
                   currentPlan: plan,
                   activeSection: plan.sections[0]?.id || null,
                   currentPhase: null,
-                });
+                  sessionPlanMap: sessionId
+                    ? { ...s.sessionPlanMap, [sessionId]: plan }
+                    : s.sessionPlanMap,
+                }));
               } else if (event.type === 'error') {
                 set({ error: event.error?.message || 'Plan generation failed' });
               }
@@ -326,4 +332,28 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   setShowAnalysis: (show) => set({ showAnalysis: show }),
   clearPlan: () => set({ currentPlan: null, isGenerating: false, isExecuting: false, activeSection: null, error: null, currentPhase: null, showAnalysis: false, analysisTool: null }),
   clearError: () => set({ error: null }),
+
+  switchSession: (sessionId) => {
+    const { currentPlan, sessionPlanMap } = get();
+    const currentSessionId = currentPlan?.session_id;
+
+    const updatedMap = { ...sessionPlanMap };
+    if (currentSessionId && currentPlan) {
+      updatedMap[currentSessionId] = currentPlan;
+    }
+
+    const restored = sessionId ? updatedMap[sessionId] : null;
+
+    set({
+      sessionPlanMap: updatedMap,
+      currentPlan: restored || null,
+      activeSection: restored?.sections[0]?.id || null,
+      isGenerating: false,
+      isExecuting: false,
+      error: null,
+      currentPhase: null,
+      showAnalysis: false,
+      analysisTool: null,
+    });
+  },
 }));

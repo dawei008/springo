@@ -12,6 +12,7 @@ import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
 import { useArtifactStore } from '@/stores/artifactStore';
 import { useDesignStore } from '@/stores/designStore';
+import { usePlanStore } from '@/stores/planStore';
 import { useModeStore } from '@/stores/modeStore';
 
 // ==================== StatusBar ====================
@@ -211,11 +212,29 @@ export default function MainContent() {
     }
   }, [currentSessionId]);
 
-  // Save/restore artifact panel, design, and mode state per session
+  // Save/restore artifact panel, design, plan, and mode state per session
   useEffect(() => {
     useArtifactStore.getState().switchSession(currentSessionId ?? null);
     useDesignStore.getState().switchSession(currentSessionId ?? null);
+    usePlanStore.getState().switchSession(currentSessionId ?? null);
     useModeStore.getState().switchSession(currentSessionId ?? null);
+
+    // Restore design versions from message history if switching to a design-mode
+    // session with no in-memory snapshot (e.g. after app restart)
+    if (currentSessionId) {
+      const session = useSessionStore.getState().sessions.find(s => s.id === currentSessionId);
+      if (session?.mode === 'design') {
+        setTimeout(() => {
+          const ds = useDesignStore.getState();
+          if (ds.versions.length === 0) {
+            const runtime = useChatStore.getState().runtimes[currentSessionId];
+            if (runtime?.messages?.length) {
+              ds.restoreFromMessages(runtime.messages);
+            }
+          }
+        }, 300);
+      }
+    }
   }, [currentSessionId]);
 
   return (

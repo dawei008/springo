@@ -5,7 +5,7 @@
  * and per-session state persistence.
  */
 import { create } from 'zustand';
-import type { DesignVersion, DesignSystemConfig, DesignFile, SelectedElement, DesignError } from '../types';
+import type { DesignVersion, DesignSystemConfig, DesignFile, SelectedElement, DesignError, Message, ContentBlock } from '../types';
 
 export type ViewportMode = 'desktop' | 'tablet' | 'mobile';
 export type DesignViewMode = 'preview' | 'code';
@@ -55,6 +55,7 @@ export interface DesignState {
   setVerificationStatus: (s: VerificationStatus) => void;
   setTweaksOpen: (open: boolean) => void;
   setComparisonMode: (on: boolean) => void;
+  restoreFromMessages: (messages: Message[]) => void;
 }
 
 let designIdCounter = 0;
@@ -175,6 +176,65 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   setTweaksOpen: (open) => set({ tweaksOpen: open }),
 
   setComparisonMode: (on) => set({ comparisonMode: on }),
+
+  restoreFromMessages: (messages) => {
+    if (get().versions.length > 0) return;
+
+    const { extractModelArtifacts, parseSpringoFiles } = require('@/components/Visual/ArtifactRenderer');
+
+    function extractText(content: string | ContentBlock[] | undefined): string {
+      if (!content) return '';
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content
+          .map((c) => {
+            if (typeof c === 'string') return c;
+            if (c.type === 'text') return (c as any).text || '';
+            return '';
+          })
+          .filter(Boolean)
+          .join('\n');
+      }
+      return '';
+    }
+
+    const versions: DesignVersion[] = [];
+    for (const msg of messages) {
+      if (msg.role !== 'assistant') continue;
+      const text = msg.mergedContent || (msg.displayContent as string | undefined) || extractText(msg.content);
+      if (!text) continue;
+      const { artifacts } = extractModelArtifacts(text);
+      for (let ai = 0; ai < artifacts.length; ai++) {
+        const a = artifacts[ai];
+        const isProject = (a as any)._isProject === true;
+        const isHtml = a.type === 'html' && !isProject;
+        if (!isProject && !isHtml) continue;
+        const id = `design-restored-${versions.length}`;
+        const title = a.title || `Design v${versions.length + 1}`;
+        const ts = msg.timestamp || Date.now();
+        if (isProject) {
+          const files = parseSpringoFiles(a.content);
+          versions.push({
+            id, html: '', files, title, prompt: '', timestamp: ts,
+            entryFile: files.find((f: DesignFile) => f.path === 'index.html')?.path || files[0]?.path,
+          });
+        } else {
+          versions.push({ id, html: a.content, files: [], title, prompt: '', timestamp: ts });
+        }
+      }
+    }
+
+    if (versions.length > 0) {
+      const last = versions[versions.length - 1];
+      set({
+        versions,
+        activeVersionIndex: versions.length - 1,
+        activeFilePath: last.files.length > 0
+          ? (last.entryFile || last.files.find(f => f.path === 'index.html')?.path || last.files[0]?.path || null)
+          : null,
+      });
+    }
+  },
 }));
 
 /** Selector: returns the active design version or null. Use in components to avoid duplicating bounds checks. */
