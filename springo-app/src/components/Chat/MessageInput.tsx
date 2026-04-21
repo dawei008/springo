@@ -140,6 +140,16 @@ export default function MessageInput() {
     }
   }, [currentSessionId]);
 
+  // Consume pending prompt (pre-filled from Design Dashboard, etc.)
+  const pendingPrompt = useUIStore((s) => s.pendingPrompt);
+  useEffect(() => {
+    if (pendingPrompt) {
+      setText(pendingPrompt);
+      useUIStore.getState().setPendingPrompt(null);
+      setTimeout(() => textareaRef.current?.focus(), 50);
+    }
+  }, [pendingPrompt]);
+
   // Model selector data
   const models = useSettingsStore((s) => s.models);
   const modelsByProvider = useSettingsStore((s) => s.modelsByProvider);

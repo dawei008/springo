@@ -22,7 +22,10 @@ interface CdnLib {
 
 const CDN_LIBS: Record<string, CdnLib> = {
   'recharts': {
-    scripts: ['https://unpkg.com/recharts@2/umd/Recharts.min.js'],
+    scripts: [
+      'https://unpkg.com/react-is@18/umd/react-is.production.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/recharts/3.2.1/Recharts.min.js',
+    ],
     global: 'Recharts',
   },
   'lucide-react': {
@@ -32,15 +35,6 @@ const CDN_LIBS: Record<string, CdnLib> = {
   'framer-motion': {
     scripts: ['https://unpkg.com/framer-motion@11/dist/framer-motion.js'],
     global: 'Motion',
-    subExports: { 'motion': 'Motion.motion', 'AnimatePresence': 'Motion.AnimatePresence' },
-  },
-  '@heroicons/react/24/outline': {
-    scripts: ['https://unpkg.com/heroicons-react@2.1.5/dist/outline.min.js'],
-    global: 'HeroiconsOutline',
-  },
-  '@heroicons/react/24/solid': {
-    scripts: ['https://unpkg.com/heroicons-react@2.1.5/dist/solid.min.js'],
-    global: 'HeroiconsSolid',
   },
   'date-fns': {
     scripts: ['https://unpkg.com/date-fns@4/cdn.min.js'],

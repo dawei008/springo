@@ -97,7 +97,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   viewport: 'desktop',
   viewMode: 'preview',
   activeFilePath: null,
-  designSystem: null,
+  designSystem: (() => {
+    try {
+      const raw = localStorage.getItem('springo-design-system');
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  })(),
   isExtractingDesignSystem: false,
   sessionMap: {},
   currentSessionId: null,
@@ -157,7 +162,13 @@ export const useDesignStore = create<DesignState>((set, get) => ({
 
   selectFile: (path) => set({ activeFilePath: path }),
 
-  setDesignSystem: (config) => set({ designSystem: config }),
+  setDesignSystem: (config) => {
+    set({ designSystem: config });
+    try {
+      if (config) localStorage.setItem('springo-design-system', JSON.stringify(config));
+      else localStorage.removeItem('springo-design-system');
+    } catch { /* noop */ }
+  },
 
   setExtractingDesignSystem: (v) => set({ isExtractingDesignSystem: v }),
 
@@ -177,7 +188,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
       active: restored ? restored.active : active,
       versions: restored?.versions ?? [],
       activeVersionIndex: restored?.activeVersionIndex ?? -1,
-      designSystem: restored?.designSystem ?? null,
+      designSystem: restored?.designSystem ?? (() => {
+        try {
+          const raw = localStorage.getItem('springo-design-system');
+          return raw ? JSON.parse(raw) : null;
+        } catch { return null; }
+      })(),
       comments: restored?.comments ?? [],
       interactionMode: 'view',
     });

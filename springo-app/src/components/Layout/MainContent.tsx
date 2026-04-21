@@ -248,7 +248,11 @@ export default function MainContent() {
     const rt = s.runtimes[currentSessionId];
     return rt ? rt.messages.length > 0 : false;
   });
-  const showDesignDashboard = designActive && designVersionCount === 0 && !isStreaming && !hasMessages;
+  const [dashboardDismissed, setDashboardDismissed] = useState(false);
+  useEffect(() => { setDashboardDismissed(false); }, [currentSessionId]);
+  const pendingPrompt = useUIStore((s) => s.pendingPrompt);
+  useEffect(() => { if (pendingPrompt) setDashboardDismissed(true); }, [pendingPrompt]);
+  const showDesignDashboard = designActive && designVersionCount === 0 && !isStreaming && !hasMessages && !dashboardDismissed;
 
   return (
     <div className="main-content">

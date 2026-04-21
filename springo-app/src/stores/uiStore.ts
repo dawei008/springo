@@ -77,6 +77,9 @@ interface UIState {
   /** Maps sessionId → teamId for sessions that had team executions */
   sessionTeamMap: Record<string, string>;
 
+  /** Prompt text to pre-fill into MessageInput (consumed once) */
+  pendingPrompt: string | null;
+
   // Queue state (per-session)
   queueEnabled: boolean;
   queueItems: QueueItem[];
@@ -115,6 +118,8 @@ interface UIState {
   closeFileBrowser: () => void;
   setSessionTeam: (sessionId: string, teamId: string) => void;
   getSessionTeam: (sessionId: string) => string | null;
+  setPendingPrompt: (prompt: string | null) => void;
+  consumePendingPrompt: () => string | null;
 
   // Queue actions (per-session)
   toggleQueue: () => void;
@@ -156,6 +161,7 @@ export const useUIStore = create<UIState>((set, get) => ({
       return {};
     }
   })(),
+  pendingPrompt: null,
   queueEnabled: false,
   queueItems: [],
   sessionQueueMap: {},
@@ -250,6 +256,12 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
   getSessionTeam: (sessionId) => {
     return get().sessionTeamMap[sessionId] || null;
+  },
+  setPendingPrompt: (prompt) => set({ pendingPrompt: prompt }),
+  consumePendingPrompt: () => {
+    const p = get().pendingPrompt;
+    if (p !== null) set({ pendingPrompt: null });
+    return p;
   },
 
   // Queue actions (per-session)

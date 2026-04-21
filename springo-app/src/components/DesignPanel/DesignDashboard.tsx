@@ -3,6 +3,7 @@ import { useSessionStore } from '@/stores/sessionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useDesignStore } from '@/stores/designStore';
+import { useUIStore } from '@/stores/uiStore';
 import { DESIGN_TEMPLATES, TEMPLATE_CATEGORIES, type DesignTemplate } from '@/data/designTemplates';
 import type { DesignSystemConfig } from '@/types';
 
@@ -197,26 +198,23 @@ export default function DesignDashboard() {
 
   const handleCreateProject = useCallback(() => {
     const title = projectName.trim() || 'New Design';
-    const id = useSessionStore.getState().createSession(title, 'design');
-    const settings = useSettingsStore.getState().settings;
     const ds = useDesignStore.getState().designSystem;
 
+    // Rename current session if it's still "New Chat" / default
+    const ss = useSessionStore.getState();
+    const cur = ss.sessions.find(s => s.id === ss.currentSessionId);
+    if (cur && (!cur.title || ['New Chat', 'New Design'].includes(cur.title))) {
+      ss.renameSession(cur.id, title);
+    }
+
     const fidelityHint = fidelity === 'wireframe'
-      ? 'Create a LOW-FIDELITY WIREFRAME using only grayscale colors, simple shapes, and placeholder text. No colors, no detailed styling.'
-      : 'Create a HIGH-FIDELITY design with polished visuals, colors, shadows, and production-ready styling.';
+      ? 'Create a low-fidelity wireframe with grayscale colors and simple shapes.'
+      : 'Create a high-fidelity design with polished visuals and production-ready styling.';
 
-    const prompt = `${fidelityHint}\n\nDesign: ${title}`;
+    const dsHint = ds?.brandName ? ` Use ${ds.brandName} design system.` : '';
 
-    useChatStore.getState().sendMessage(id, prompt, [], {
-      model: settings.model,
-      maxTokens: settings.maxTokens,
-      temperature: settings.temperature,
-      systemPrompt: settings.systemPrompt,
-      compactModel: settings.compactModel,
-      sessionId: id,
-      designMode: true,
-      designSystem: ds || undefined,
-    });
+    const prompt = `${fidelityHint}${dsHint}\n\nDesign: ${title}`;
+    useUIStore.getState().setPendingPrompt(prompt);
     setProjectName('');
   }, [projectName, fidelity]);
 
