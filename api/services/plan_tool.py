@@ -1,29 +1,49 @@
 """
 Springo UltraPlan Generation Service
-深度计划服务 - 多阶段分析 → 结构化执行计划
+深度计划服务 - 多阶段分析（含工具探索）→ 结构化执行计划
+
+Phase 1 (Analysis) runs an agentic tool loop so the model can explore the
+codebase, read files, grep for patterns, etc. before producing its analysis.
+For non-code tasks the model simply reasons without calling any tools.
+
+Phase 2 (Planning) converts the analysis into structured JSON — no tools needed.
 """
 import json
 import uuid
 import logging
+import asyncio
 from typing import Optional, List, Dict, Any, AsyncGenerator
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
+READONLY_TOOLS = frozenset({
+    "read_file", "read_files", "list_directory", "search_files",
+    "glob", "grep", "get_file_info", "git",
+    "lsp_go_to_definition", "lsp_find_references",
+})
+
+MAX_ANALYSIS_ITERATIONS = 15
+
 # ---------------------------------------------------------------------------
-# Phase 1: Deep Analysis — free-form reasoning about task, risks, dependencies
+# Phase 1: Deep Analysis — agentic exploration + reasoning
 # ---------------------------------------------------------------------------
 
 ANALYSIS_SYSTEM_PROMPT = """You are a senior technical architect performing deep analysis before creating an execution plan.
 
-Given a task description (and optional conversation context), produce a thorough analysis covering:
+You have access to read-only tools (read_file, grep, glob, list_directory, etc.).
+If the task involves code or files, USE the tools to explore the codebase first — read key files, search for patterns, understand the current state. Do NOT guess about code structure.
+If the task is non-technical or doesn't require file exploration, just reason directly.
 
-1. **Requirements Decomposition** — break the task into its fundamental components
-2. **Dependency Graph** — which components must come before others and why
-3. **Risk Assessment** — what could go wrong, edge cases, failure modes
-4. **Technical Constraints** — limitations of the environment, tools, APIs
-5. **Effort Estimation** — relative complexity of each component (low/medium/high)
-6. **Validation Strategy** — how to verify each component works correctly
+After exploration, produce a thorough analysis covering:
+
+1. **Current State** — what exists now (based on what you read/found)
+2. **Requirements Decomposition** — break the task into fundamental components
+3. **Dependency Graph** — which components must come before others and why
+4. **Risk Assessment** — what could go wrong, edge cases, failure modes
+5. **Technical Constraints** — limitations of the environment, tools, APIs
+6. **Effort Estimation** — relative complexity of each component (low/medium/high)
+7. **Validation Strategy** — how to verify each component works correctly
 
 Think step-by-step. Be thorough. This analysis will feed into the structured plan.
 Use the same language as the user's task description."""
@@ -123,7 +143,7 @@ def _clean_json(text: str) -> str:
 
 
 async def _invoke_llm(model: str, system: str, messages: List[Dict], max_tokens: int = 8192, temperature: float = 0.3):
-    """Invoke LLM via vendor router."""
+    """Invoke LLM via vendor router (no tools)."""
     from .vendor_router import get_vendor_router
     router = get_vendor_router()
     request = {
@@ -137,13 +157,160 @@ async def _invoke_llm(model: str, system: str, messages: List[Dict], max_tokens:
     return await router.invoke_model(model_id, bedrock_body)
 
 
+async def _invoke_llm_with_tools(
+    model: str,
+    system: str,
+    messages: List[Dict],
+    tools: List[Dict],
+    max_tokens: int = 8192,
+    temperature: float = 0.3,
+):
+    """Invoke LLM via vendor router with tool definitions."""
+    from .vendor_router import get_vendor_router
+    router = get_vendor_router()
+    request = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "system": system,
+        "temperature": temperature,
+    }
+    model_id, bedrock_body = router.convert_request_to_bedrock(
+        request,
+        include_tools=True,
+        tools=tools,
+    )
+    return await router.invoke_model(model_id, bedrock_body)
+
+
+def _get_readonly_tools(all_tools: List) -> List[Dict]:
+    """Filter tool definitions to read-only exploration tools."""
+    result = []
+    for t in all_tools:
+        td = t.model_dump() if hasattr(t, "model_dump") else t
+        if td.get("name") in READONLY_TOOLS:
+            result.append(td)
+    return result
+
+
+async def _run_analysis_loop(
+    model: str,
+    messages: List[Dict],
+    tools: List[Dict],
+    max_tokens: int,
+    session_id: Optional[str] = None,
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """Run Phase 1 agentic loop: LLM calls tools to explore, then produces analysis.
+
+    Yields events:
+      {"type": "tool_call", "name": ..., "input": ...}
+      {"type": "tool_result", "name": ..., "content": ..., "is_error": ...}
+      {"type": "analysis_complete", "content": ...}
+    """
+    from .tool_manager import get_tool_manager
+    tool_manager = await get_tool_manager()
+
+    for iteration in range(MAX_ANALYSIS_ITERATIONS):
+        if tools:
+            response = await _invoke_llm_with_tools(
+                model=model,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                messages=messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=0.4,
+            )
+        else:
+            response = await _invoke_llm(
+                model=model,
+                system=ANALYSIS_SYSTEM_PROMPT,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=0.4,
+            )
+
+        content_blocks = response.get("content", [])
+        stop_reason = response.get("stop_reason", "end_turn")
+        text_parts = []
+        tool_uses = []
+
+        for block in content_blocks:
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    text_parts.append(block.get("text", ""))
+                elif block.get("type") == "tool_use":
+                    tool_uses.append(block)
+
+        if not tool_uses or stop_reason != "tool_use":
+            analysis_text = "".join(text_parts)
+            yield {"type": "analysis_complete", "content": analysis_text}
+            return
+
+        # Append assistant message with all content blocks
+        messages.append({"role": "assistant", "content": content_blocks})
+
+        # Execute tools and collect results
+        tool_results = []
+        for tool in tool_uses:
+            tool_name = tool.get("name", "")
+            tool_input = tool.get("input", {})
+            tool_id = tool.get("id", "")
+
+            yield {"type": "tool_call", "name": tool_name, "input": tool_input}
+
+            try:
+                result = await asyncio.wait_for(
+                    tool_manager.execute_tool(tool_name, tool_input, session_id=session_id),
+                    timeout=30,
+                )
+                result_content = result.get("content", "") if isinstance(result, dict) else str(result)
+                is_error = result.get("is_error", False) if isinstance(result, dict) else False
+            except asyncio.TimeoutError:
+                result_content = f"Tool {tool_name} timed out after 30s"
+                is_error = True
+            except Exception as e:
+                result_content = f"Tool {tool_name} failed: {e}"
+                is_error = True
+
+            # Truncate large results to keep context manageable
+            if len(str(result_content)) > 8000:
+                result_content = str(result_content)[:8000] + "\n... (truncated)"
+
+            yield {"type": "tool_result", "name": tool_name, "content": str(result_content)[:500], "is_error": is_error}
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_id,
+                "content": str(result_content),
+                "is_error": is_error,
+            })
+
+        messages.append({"role": "user", "content": tool_results})
+
+    # Exhausted iterations — ask for final analysis without tools
+    messages.append({"role": "user", "content": "You've done enough exploration. Now produce your final analysis based on everything you've learned."})
+    response = await _invoke_llm(
+        model=model,
+        system=ANALYSIS_SYSTEM_PROMPT,
+        messages=messages,
+        max_tokens=max_tokens,
+        temperature=0.4,
+    )
+    yield {"type": "analysis_complete", "content": _extract_text(response)}
+
+
 async def generate_ultraplan(
     task_description: str,
     model: str = "claude-sonnet-4-6",
     max_tokens: int = 16384,
     context_messages: Optional[List[Dict[str, Any]]] = None,
+    session_id: Optional[str] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
-    """Generate an ultraplan via multi-phase analysis. Yields phase events."""
+    """Generate an ultraplan via multi-phase analysis. Yields phase events.
+
+    Phase 1: Agentic exploration + deep analysis (with read-only tools)
+    Phase 2: Structured JSON plan from analysis (no tools)
+    """
 
     # Build context from conversation history
     context_msgs: List[Dict] = []
@@ -154,7 +321,18 @@ async def generate_ultraplan(
             if isinstance(content, str) and content.strip():
                 context_msgs.append({"role": role, "content": content})
 
-    # ── Phase 1: Deep Analysis ──
+    # Load read-only tools
+    readonly_tools: List[Dict] = []
+    try:
+        from .tool_manager import get_tool_manager
+        tool_manager = await get_tool_manager()
+        all_tools = tool_manager.get_tool_definitions()
+        readonly_tools = _get_readonly_tools(all_tools)
+        logger.info(f"UltraPlan: loaded {len(readonly_tools)} read-only tools for analysis")
+    except Exception as e:
+        logger.warning(f"UltraPlan: could not load tools, analysis will be tool-free: {e}")
+
+    # ── Phase 1: Agentic Analysis ──
     yield {"phase": "analysis", "status": "start"}
 
     analysis_messages = context_msgs + [{
@@ -163,18 +341,41 @@ async def generate_ultraplan(
     }]
 
     try:
-        analysis_response = await _invoke_llm(
+        analysis_text = ""
+        tool_calls_made = 0
+        async for event in _run_analysis_loop(
             model=model,
-            system=ANALYSIS_SYSTEM_PROMPT,
             messages=analysis_messages,
+            tools=readonly_tools,
             max_tokens=max_tokens,
-            temperature=0.4,
-        )
-        analysis_text = _extract_text(analysis_response)
+            session_id=session_id,
+        ):
+            if event["type"] == "tool_call":
+                tool_calls_made += 1
+                yield {
+                    "phase": "analysis",
+                    "status": "tool_call",
+                    "tool_name": event["name"],
+                    "tool_input": event.get("input", {}),
+                    "tool_count": tool_calls_made,
+                }
+            elif event["type"] == "tool_result":
+                yield {
+                    "phase": "analysis",
+                    "status": "tool_result",
+                    "tool_name": event["name"],
+                    "content": event.get("content", ""),
+                    "is_error": event.get("is_error", False),
+                }
+            elif event["type"] == "analysis_complete":
+                analysis_text = event["content"]
+
         if not analysis_text:
             raise ValueError("Empty analysis response")
 
+        logger.info(f"UltraPlan: analysis complete ({tool_calls_made} tool calls, {len(analysis_text)} chars)")
         yield {"phase": "analysis", "status": "complete", "content": analysis_text}
+
     except Exception as e:
         logger.error(f"Analysis phase failed: {e}")
         yield {"phase": "analysis", "status": "error", "error": str(e)}

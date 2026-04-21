@@ -32,15 +32,22 @@ const EFFORT_CONFIG: Record<string, { label: string; cls: string }> = {
 // ==================== Phase Indicator ====================
 
 function PhaseIndicator({ phase }: { phase: PlanPhase }) {
+  const analysisTool = usePlanStore((s) => s.analysisTool);
   if (!phase) return null;
-  const labels: Record<string, string> = {
-    analysis: 'Deep analysis...',
-    planning: 'Structuring plan...',
-  };
+
+  let label: string;
+  if (phase === 'analysis' && analysisTool) {
+    label = `Exploring: ${analysisTool.toolName} (${analysisTool.toolCount})`;
+  } else if (phase === 'analysis') {
+    label = 'Deep analysis...';
+  } else {
+    label = 'Structuring plan...';
+  }
+
   return (
     <div className="plan-phase-indicator">
       <div className="plan-spinner small" />
-      <span>{labels[phase] || phase}</span>
+      <span>{label}</span>
     </div>
   );
 }

@@ -46,6 +46,7 @@ async def generate_plan_endpoint(request: Request, body: PlanGenerateRequest):
                 model=body.model,
                 max_tokens=body.max_tokens,
                 context_messages=context_messages,
+                session_id=body.session_id,
             ):
                 phase = event.get("phase")
                 status = event.get("status")
@@ -55,6 +56,22 @@ async def generate_plan_endpoint(request: Request, body: PlanGenerateRequest):
                         "type": "plan_phase",
                         "phase": "analysis",
                         "status": "start",
+                    })
+                elif phase == "analysis" and status == "tool_call":
+                    yield format_sse_event("plan_phase", {
+                        "type": "plan_phase",
+                        "phase": "analysis",
+                        "status": "tool_call",
+                        "tool_name": event.get("tool_name", ""),
+                        "tool_count": event.get("tool_count", 0),
+                    })
+                elif phase == "analysis" and status == "tool_result":
+                    yield format_sse_event("plan_phase", {
+                        "type": "plan_phase",
+                        "phase": "analysis",
+                        "status": "tool_result",
+                        "tool_name": event.get("tool_name", ""),
+                        "is_error": event.get("is_error", False),
                     })
                 elif phase == "analysis" and status == "complete":
                     yield format_sse_event("plan_phase", {

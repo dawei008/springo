@@ -9,6 +9,11 @@ import { api } from '../services/api';
 
 export type PlanPhase = 'analysis' | 'planning' | null;
 
+interface AnalysisToolState {
+  toolName: string;
+  toolCount: number;
+}
+
 interface PlanStoreState {
   // State
   currentPlan: PlanStructure | null;
@@ -19,6 +24,7 @@ interface PlanStoreState {
   regeneratingSections: string[];
   currentPhase: PlanPhase;
   showAnalysis: boolean;
+  analysisTool: AnalysisToolState | null;
 
   // Actions
   generatePlan: (taskDescription: string, sessionId?: string, model?: string) => Promise<void>;
@@ -44,6 +50,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
   regeneratingSections: [],
   currentPhase: null,
   showAnalysis: false,
+  analysisTool: null,
 
   generatePlan: async (taskDescription, sessionId, model) => {
     set({ isGenerating: true, error: null, currentPlan: null, currentPhase: null, showAnalysis: false });
@@ -80,7 +87,18 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
               const event = JSON.parse(data);
 
               if (event.type === 'plan_phase') {
-                set({ currentPhase: event.phase as PlanPhase });
+                const phase = event.phase as string;
+                const status = event.status as string;
+                if (status === 'tool_call') {
+                  set({
+                    currentPhase: phase as PlanPhase,
+                    analysisTool: { toolName: event.tool_name || '', toolCount: event.tool_count || 0 },
+                  });
+                } else if (status === 'tool_result') {
+                  // Keep phase, clear tool after brief display
+                } else {
+                  set({ currentPhase: phase as PlanPhase, analysisTool: null });
+                }
               } else if (event.type === 'plan_generated' && event.plan) {
                 const plan = event.plan as PlanStructure;
                 set({
@@ -101,7 +119,7 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       const msg = e instanceof Error ? e.message : String(e);
       set({ error: msg });
     } finally {
-      set({ isGenerating: false, currentPhase: null });
+      set({ isGenerating: false, currentPhase: null, analysisTool: null });
     }
   },
 
@@ -306,6 +324,6 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
 
   setActiveSection: (sectionId) => set({ activeSection: sectionId }),
   setShowAnalysis: (show) => set({ showAnalysis: show }),
-  clearPlan: () => set({ currentPlan: null, isGenerating: false, isExecuting: false, activeSection: null, error: null, currentPhase: null, showAnalysis: false }),
+  clearPlan: () => set({ currentPlan: null, isGenerating: false, isExecuting: false, activeSection: null, error: null, currentPhase: null, showAnalysis: false, analysisTool: null }),
   clearError: () => set({ error: null }),
 }));
