@@ -4,25 +4,10 @@ import { useChatStore } from '@/stores/chatStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useVoiceStore } from '@/stores/voiceStore';
-import { useDesignStore } from '@/stores/designStore';
 import { useReplayStore } from '@/stores/replayStore';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import { useModeStore } from '@/stores/modeStore';
 import type { SessionMode } from '@/types';
-
-function getStatusTitle(visualStatus: string): string {
-  const titles: Record<string, string> = {
-    idle: 'Inactive',
-    recent: 'Recent',
-    current: 'Current session',
-    running: 'Running...',
-    completed: 'Completed',
-    'completed-unseen': 'Completed (unread)',
-    error: 'Error',
-    compacting: 'Compacting...',
-  };
-  return titles[visualStatus] || 'Inactive';
-}
 
 // ─── Section Header (collapsible) ───
 
@@ -742,13 +727,6 @@ export default function Sidebar() {
           </svg>
         </div>
         <div className="brand-name">Springo</div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
-          <button className="icon-btn-sm" onClick={handleNewChat} title="New chat (⌘N)">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
-        </div>
       </div>
 
       {/* Scrollable content */}
@@ -771,6 +749,7 @@ export default function Sidebar() {
             title={`Conversations (${totalCount})`}
             collapsed={!!collapsed.conversations}
             onToggle={() => toggleSection('conversations')}
+            onAdd={handleNewChat}
           />
           {!collapsed.conversations && (
             <>
