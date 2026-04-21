@@ -206,3 +206,66 @@ async def activate_skill(skill_name: str, request: ActivateSkillRequest = None):
     return {"success": True, "skill_name": skill_name}
 
 
+# ============ Skill Evaluation ============
+
+class EvalRequest(BaseModel):
+    max_samples: int = 10
+    use_llm: bool = True
+    judge_model: str = "claude-haiku-4-5-20251001"
+
+
+@router.post("/skills/{skill_name}/evaluate")
+async def evaluate_skill_endpoint(skill_name: str, request: EvalRequest = None):
+    """Evaluate a skill's effectiveness by mining session history."""
+    try:
+        from ..services.skill_evaluator import evaluate_skill
+    except ImportError:
+        raise HTTPException(status_code=501, detail="Skill evaluator not available")
+
+    req = request or EvalRequest()
+
+    vendor_router = None
+    if req.use_llm:
+        try:
+            from ..services.vendor_router import get_vendor_router
+            vendor_router = get_vendor_router()
+        except Exception:
+            pass
+
+    result = await evaluate_skill(
+        skill_name=skill_name,
+        max_samples=req.max_samples,
+        use_llm=req.use_llm,
+        vendor_router=vendor_router,
+        judge_model=req.judge_model,
+    )
+
+    return {
+        "skill_name": result.skill_name,
+        "usage_count": result.usage_count,
+        "sampled_count": result.sampled_count,
+        "avg_correctness": result.avg_correctness,
+        "avg_procedure_following": result.avg_procedure_following,
+        "avg_conciseness": result.avg_conciseness,
+        "overall_score": result.overall_score,
+        "keyword_proxy_score": result.keyword_proxy_score,
+        "evaluated_at": result.evaluated_at,
+    }
+
+
+@router.get("/skills/{skill_name}/evaluation")
+async def get_skill_evaluation(skill_name: str):
+    """Get cached evaluation results for a skill."""
+    try:
+        from ..services.skill_evaluator import load_eval_result
+    except ImportError:
+        raise HTTPException(status_code=501, detail="Skill evaluator not available")
+
+    result = load_eval_result(skill_name)
+    if not result:
+        raise HTTPException(status_code=404, detail=f"No evaluation found for skill: {skill_name}")
+
+    from dataclasses import asdict
+    return asdict(result)
+
+

@@ -97,7 +97,7 @@ __all__ = [
     # Search tools
     "web_search", "web_fetch", "set_search_config", "get_search_config",
     # Task tools
-    "todo_write", "todo_read", "ask_user", "use_skill", "manage_skill", "tool_search",
+    "todo_write", "todo_read", "ask_user", "use_skill", "skill_view", "manage_skill", "tool_search",
     # Planning tools
     "enter_plan_mode", "exit_plan_mode", "summarize_context",
     # Advanced tools

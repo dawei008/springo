@@ -219,35 +219,102 @@ def manage_skill(action: str, name: str = "", description: str = "",
         if action == "update" and not skill_dir.exists():
             return {"error": f"Skill '{safe_name}' not found. Use action='create' to create it."}
 
-        skill_dir.mkdir(parents=True, exist_ok=True)
-
-        # Build SKILL.md with YAML frontmatter
+        # Build SKILL.md content
+        effective_desc = description if description else f"Skill for {safe_name}"
         frontmatter_lines = [
             "---",
             f"name: {safe_name}",
-            f"description: {description}" if description else f"description: Skill for {safe_name}",
+            f"description: {effective_desc}",
         ]
         if triggers:
             frontmatter_lines.append(f"triggers: {triggers}")
         frontmatter_lines.append("---")
         frontmatter_lines.append("")
-
         skill_md = "\n".join(frontmatter_lines) + instructions
 
+        # --- Constraints validation ---
+        try:
+            from api.services.skills_guard import validate_constraints
+            existing_size = 0
+            if action == "update":
+                existing_file = skill_dir / "SKILL.md"
+                if existing_file.exists():
+                    existing_size = existing_file.stat().st_size
+            validation = validate_constraints(
+                content=skill_md, name=safe_name, description=effective_desc,
+                instructions=instructions, action=action, existing_size=existing_size,
+            )
+            if not validation.passed:
+                msgs = "; ".join(v.message for v in validation.violations)
+                return {"error": f"Validation failed: {msgs}"}
+        except ImportError:
+            pass
+
+        # --- Security scan ---
+        try:
+            from api.services.skills_guard import scan_skill, should_allow
+            scan_result = scan_skill(skill_md, source="agent-created")
+            allowed, reason = should_allow(scan_result, source="agent-created")
+            if not allowed:
+                return {
+                    "error": f"Blocked by security guard: {reason}",
+                    "findings": [
+                        {"category": f.category.value, "level": f.level.value,
+                         "match": f.match[:100], "line": f.line_number,
+                         "description": f.description}
+                        for f in scan_result.findings if f.level.value == "dangerous"
+                    ],
+                }
+        except ImportError:
+            pass
+
+        skill_dir.mkdir(parents=True, exist_ok=True)
         (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
 
         if HAS_SKILL_LOADER:
             get_skill_loader().force_reload()
+
+        scan_summary = ""
+        try:
+            scan_summary = scan_result.summary if scan_result.findings else ""
+        except NameError:
+            pass
 
         return {
             "success": True,
             "action": action,
             "skill_name": safe_name,
             "path": str(skill_dir),
+            "scan": scan_summary,
             "message": f"Skill '{safe_name}' {'created' if action == 'create' else 'updated'} at {skill_dir}",
         }
 
     return {"error": f"Unknown action: {action}. Use create, update, delete, or list."}
+
+
+def skill_view(skill_name: str) -> Dict[str, Any]:
+    """Load and return the full content of a skill for inspection before activation."""
+    if not HAS_SKILL_LOADER:
+        return {"error": "Skill loader not available"}
+
+    try:
+        loader = get_skill_loader()
+        skill = loader.get_skill(skill_name)
+
+        if not skill:
+            available = [s.name for s in loader.skills.values()]
+            return {"error": f"Skill '{skill_name}' not found", "available_skills": available}
+
+        return {
+            "success": True,
+            "skill_name": skill.name,
+            "description": skill.description,
+            "instructions": skill.instructions,
+            "resources": list(skill.resources.keys()),
+            "triggers": skill.triggers,
+        }
+    except Exception as e:
+        return {"error": f"Failed to load skill: {str(e)}"}
 
 
 def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) -> Dict[str, Any]:

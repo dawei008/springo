@@ -32,12 +32,13 @@ except Exception as _yaml_err:
 class Skill:
     """Represents a loaded skill"""
     def __init__(self, name: str, description: str, instructions: str, path: str,
-                 triggers: List[str] = None):
+                 triggers: List[str] = None, source: str = "agent-created"):
         self.name = name
         self.description = description
         self.instructions = instructions
         self.path = path
         self.triggers: List[str] = triggers or []
+        self.source = source
         self.resources: Dict[str, str] = {}
 
     def to_dict(self) -> dict:
@@ -48,6 +49,7 @@ class Skill:
             "path": self.path,
             "has_resources": bool(self.resources),
             "triggers": self.triggers,
+            "source": self.source,
         }
 
 
@@ -149,12 +151,14 @@ For example: `{skill_path_str}/html2pptx.md` or `{skill_path_str}/scripts/conver
             if isinstance(triggers, str):
                 triggers = [t.strip() for t in triggers.split(',')]
 
+            source = frontmatter.get('source', 'agent-created')
             skill = Skill(
                 name=name,
                 description=description,
                 instructions=enhanced_instructions,
                 path=str(skill_path.resolve()),
                 triggers=triggers,
+                source=source,
             )
 
             # Load additional resources

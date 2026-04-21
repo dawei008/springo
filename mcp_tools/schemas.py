@@ -283,6 +283,20 @@ tool_search(query="strands long term memory", auto_activate=true)
         }
     },
     {
+        "name": "skill_view",
+        "description": "View the full definition of a skill (instructions, resources, triggers). Use before activating a skill when you want to inspect its contents or when the skill index description is too short to decide.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_name": {
+                    "type": "string",
+                    "description": "The name of the skill to view"
+                }
+            },
+            "required": ["skill_name"]
+        }
+    },
+    {
         "name": "todo_write",
         "description": "Create or update a task list to track progress.",
         "input_schema": {

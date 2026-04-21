@@ -22,7 +22,7 @@ from .handlers import (
     # Search tools
     web_search, web_fetch,
     # Task tools
-    todo_write, todo_read, ask_user, use_skill, manage_skill, tool_search,
+    todo_write, todo_read, ask_user, use_skill, skill_view, manage_skill, tool_search,
     # Planning tools
     enter_plan_mode, exit_plan_mode, summarize_context,
     # Advanced tools
@@ -79,6 +79,7 @@ TOOL_HANDLERS = {
     # Browser tools removed - use MCP playwright instead
     # Skill tools
     "use_skill": use_skill,
+    "skill_view": skill_view,
     "manage_skill": manage_skill,
     # Optimized tools
     "glob": glob_files,
@@ -235,42 +236,46 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
     # Make a deep copy to avoid modifying the original
     tools = copy.deepcopy(TOOL_DEFINITIONS)
 
-    # Dynamically build skill list for use_skill tool
+    # Dynamically build skill list for use_skill tool (progressive disclosure)
+    COMPACT_THRESHOLD = 5
     if HAS_SKILL_LOADER:
         try:
             loader = get_skill_loader()
             loader.reload()
 
             skills_dir = str(loader.skills_dir)
+            skill_count = len(loader.skills)
             skill_entries = []
             for skill in loader.skills.values():
-                desc = skill.description or f"Skill for {skill.name} related tasks"
-                skill_entries.append(f"- {skill.name}: {desc}")
+                desc = skill.description or f"Skill for {skill.name}"
+                skill_entries.append(f"- {skill.name}: {desc[:80]}")
 
             skill_list = "\n".join(skill_entries) if skill_entries else "No skills available"
 
-            dynamic_description = f"""Execute a skill to complete specialized tasks like document creation, data processing, etc.
+            if skill_count <= COMPACT_THRESHOLD:
+                dynamic_description = f"""Execute a skill to complete specialized tasks.
 
-**CRITICAL: When a skill matches the user's request, you MUST invoke this tool IMMEDIATELY.**
-- NEVER pretend to create files (PPT, Word, Excel, PDF) without calling this tool first
-- NEVER announce "I'll create..." and then just output text - actually call the tool
-- This is a BLOCKING REQUIREMENT: invoke the skill tool BEFORE generating file-related responses
+**CRITICAL: When a skill matches the user's request, invoke this tool IMMEDIATELY.**
 
 Skills directory: `{skills_dir}/`
-Each skill is a subfolder with a SKILL.md file. To inspect a skill: `read_file {skills_dir}/<name>/SKILL.md`
 
 Available skills:
 {skill_list}
 
-When to use this tool:
-- User explicitly mentions a skill (e.g., "/pptx", "/pdf")
-- User asks to CREATE documents: PPT, Word, Excel, PDF -> use corresponding skill
-- User asks to EDIT existing documents -> use corresponding skill
-- Task matches a skill's description above
+When to use: user mentions a skill name, asks to create documents (PPT, Word, Excel, PDF), or task matches a skill description.
+Call with skill_name and optionally user_request."""
+            else:
+                dynamic_description = f"""Execute a skill to complete specialized tasks.
 
-Example: User says "create a presentation about X" -> MUST call use_skill(skill_name="pptx")
+**CRITICAL: When a skill matches the user's request, invoke this tool IMMEDIATELY.**
 
-Call with skill_name and optionally user_request. The skill will provide detailed implementation."""
+Skills directory: `{skills_dir}/`
+Total skills: {skill_count}
+
+Skill index (call skill_view for full details):
+{skill_list}
+
+Workflow: 1) Match user request to a skill above. 2) Optionally call skill_view(name) to inspect. 3) Call use_skill(skill_name, user_request)."""
 
             for tool in tools:
                 if tool["name"] == "use_skill":
