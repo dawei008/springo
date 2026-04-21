@@ -260,18 +260,16 @@ export default function MainContent() {
       {showDesignDashboard ? (
         <DesignDashboard />
       ) : (
-        <>
-          <div className="chat-panel-wrapper">
-            <div className="chat-area">
-              <ChatArea />
-              <StatusBar />
-            </div>
-            <ArtifactPanel />
-            <DesignPanel />
-            <PlanPanel />
+        <div className="chat-panel-wrapper">
+          <div className="chat-area">
+            <ChatArea />
+            <MessageInput />
+            <StatusBar />
           </div>
-          <MessageInput />
-        </>
+          <ArtifactPanel />
+          <DesignPanel />
+          <PlanPanel />
+        </div>
       )}
     </div>
   );

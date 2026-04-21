@@ -860,6 +860,12 @@
             background: var(--bg-primary);
         }
 
+        /* When design panel is open, shrink chat to give canvas more room */
+        .chat-panel-wrapper:has(.design-panel) .chat-area {
+            flex: 0 1 360px;
+            min-width: 280px;
+        }
+
         /* Chat Container */
         .chat-container {
             flex: 1;
@@ -2853,6 +2859,7 @@
         .input-area {
             padding: 16px 28px 20px;
             position: relative;
+            flex-shrink: 0;
             transition: background-color 0.2s, border-color 0.2s;
         }
 
@@ -3990,6 +3997,7 @@
             justify-content: space-between;
             border-top: 1px solid var(--border);
             background: var(--bg-primary);
+            flex-shrink: 0;
         }
 
         .status-connected { color: var(--success); }
@@ -9269,7 +9277,7 @@
 
 .design-panel {
     flex: 1 1 60%;
-    min-width: 400px;
+    min-width: 360px;
     max-width: 80%;
     height: 100%;
     display: flex;
@@ -9988,7 +9996,7 @@
 
 /* Design File Browser */
 .design-file-browser {
-    width: 200px;
+    width: 170px;
     flex-shrink: 0;
     border-right: 1px solid var(--border);
     background: var(--bg-primary);
