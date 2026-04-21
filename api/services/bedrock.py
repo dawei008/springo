@@ -14,7 +14,20 @@ import aioboto3
 from botocore.config import Config
 
 from ..config import settings
-from .error_handler import format_error_response as _eh_format_error, get_http_status, should_retry, parse_error
+from .error_handler import format_error_response as _eh_format_error, get_http_status, parse_error
+
+
+def _is_retryable_error(error_str: str) -> bool:
+    """Check if a Bedrock error is transient and worth retrying."""
+    _retryable = (
+        'ThrottlingException', '429', 'Too Many Requests',
+        'ServiceUnavailableException', '503', 'Service Unavailable',
+        'InternalServerException', '500', 'Internal Server Error',
+        'ModelTimeoutException', 'RequestTimeout', '408',
+        'ModelStreamErrorException',
+        'Connection reset', 'Connection aborted', 'Read timed out',
+    )
+    return any(token in error_str for token in _retryable)
 from .model_registry import (
     MODEL_REGISTRY,
     BEDROCK_MODEL_MAPPING,
@@ -1055,10 +1068,9 @@ class BedrockService:
                     return json.loads(response_body)
             except Exception as e:
                 error_str = str(e)
-                is_throttle = 'ThrottlingException' in error_str or '429' in error_str or 'Too Many Requests' in error_str
-                if is_throttle and attempt < max_retries - 1:
-                    backoff = min(2 ** attempt + random.random(), 5)
-                    logger.warning(f"Bedrock 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                if _is_retryable_error(error_str) and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 8)
+                    logger.warning(f"Bedrock invoke retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
                     await asyncio.sleep(backoff)
                     continue
                 raise
@@ -1111,10 +1123,9 @@ class BedrockService:
                 break  # Connection succeeded
             except Exception as e:
                 error_str = str(e)
-                is_throttle = 'ThrottlingException' in error_str or '429' in error_str or 'Too Many Requests' in error_str
-                if is_throttle and attempt < max_retries - 1:
-                    backoff = min(2 ** attempt + random.random(), 5)
-                    logger.warning(f"Bedrock stream 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                if _is_retryable_error(error_str) and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 8)
+                    logger.warning(f"Bedrock stream retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
                     if client_ctx:
                         try:
                             await client_ctx.__aexit__(None, None, None)
@@ -1122,7 +1133,6 @@ class BedrockService:
                             pass
                     await asyncio.sleep(backoff)
                     continue
-                # Non-retryable error or last attempt
                 if client_ctx:
                     try:
                         await client_ctx.__aexit__(None, None, None)
@@ -1252,10 +1262,9 @@ class BedrockService:
                 break
             except Exception as e:
                 error_str = str(e)
-                is_throttle = 'ThrottlingException' in error_str or '429' in error_str or 'Too Many Requests' in error_str
-                if is_throttle and attempt < max_retries - 1:
-                    backoff = min(2 ** attempt + random.random(), 5)
-                    logger.warning(f"Bedrock stream_text 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                if _is_retryable_error(error_str) and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 8)
+                    logger.warning(f"Bedrock stream_text retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
                     if client_ctx:
                         try:
                             await client_ctx.__aexit__(None, None, None)
@@ -1822,10 +1831,9 @@ class BedrockService:
                 break
             except Exception as e:
                 error_str = str(e)
-                is_throttle = "ThrottlingException" in error_str or "429" in error_str or "Too Many Requests" in error_str
-                if is_throttle and attempt < max_retries - 1:
-                    backoff = min(2 ** attempt + random.random(), 5)
-                    logger.warning(f"Converse stream 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                if _is_retryable_error(error_str) and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 8)
+                    logger.warning(f"Converse stream retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
                     if client_ctx:
                         try:
                             await client_ctx.__aexit__(None, None, None)
@@ -2229,10 +2237,9 @@ class BedrockService:
                 break
             except Exception as e:
                 error_str = str(e)
-                is_throttle = "ThrottlingException" in error_str or "429" in error_str or "Too Many Requests" in error_str
-                if is_throttle and attempt < max_retries - 1:
-                    backoff = min(2 ** attempt + random.random(), 5)
-                    logger.warning(f"Converse stream_text 429 throttled (attempt {attempt + 1}/{max_retries}), retrying in {backoff:.1f}s...")
+                if _is_retryable_error(error_str) and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 8)
+                    logger.warning(f"Converse stream_text retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
                     if client_ctx:
                         try:
                             await client_ctx.__aexit__(None, None, None)
