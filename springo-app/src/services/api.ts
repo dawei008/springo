@@ -441,6 +441,7 @@ export const api = {
       );
     },
     get: (planId: string) => get<PlanStructure>(`/plans/${planId}`),
+    getBySession: (sessionId: string) => get<PlanStructure>(`/plans/session/${sessionId}`),
     list: () => get<{ plans: PlanStructure[] }>('/plans'),
     feedback: (planId: string, body: { section_id: string; action: string; feedback?: string }) =>
       post<{ ok: boolean; section?: PlanSection; plan_status?: string }>(`/plans/${planId}/feedback`, body),

@@ -14,8 +14,38 @@ from ..services.plan_executor import execute_plan
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# In-memory plan storage (MVP)
+# In-memory plan cache — persisted to session metadata for durability
 _plans: Dict[str, Dict[str, Any]] = {}
+
+
+def _persist_plan(plan: Dict[str, Any]) -> None:
+    """Save plan to session metadata so it survives backend restart."""
+    session_id = plan.get("session_id")
+    if not session_id:
+        return
+    try:
+        from ..services.session_store import get_session_store
+        store = get_session_store()
+        store.update_metadata(session_id, {"plan": plan})
+    except Exception as e:
+        logger.warning(f"Failed to persist plan to session {session_id}: {e}")
+
+
+def _load_plan_for_session(session_id: str) -> Dict[str, Any] | None:
+    """Load a plan from session metadata into memory cache."""
+    try:
+        from ..services.session_store import get_session_store
+        store = get_session_store()
+        session = store.get_session(session_id)
+        if session:
+            meta = session.get("metadata", {})
+            plan = meta.get("plan")
+            if plan and isinstance(plan, dict) and plan.get("id"):
+                _plans[plan["id"]] = plan
+                return plan
+    except Exception as e:
+        logger.warning(f"Failed to load plan from session {session_id}: {e}")
+    return None
 
 
 @router.post("/plans/generate")
@@ -100,6 +130,7 @@ async def generate_plan_endpoint(request: Request, body: PlanGenerateRequest):
                 if body.session_id:
                     plan["session_id"] = body.session_id
                 _plans[plan["id"]] = plan
+                _persist_plan(plan)
                 yield SSEEventBuilder.plan_generated(plan)
 
             yield SSEEventBuilder.done()
@@ -110,6 +141,18 @@ async def generate_plan_endpoint(request: Request, body: PlanGenerateRequest):
             yield SSEEventBuilder.done()
 
     return create_sse_response(_stream(), request)
+
+
+@router.get("/plans/session/{session_id}")
+async def get_plan_by_session(session_id: str):
+    """Get a plan by session ID. Loads from session metadata if not in memory."""
+    for plan in _plans.values():
+        if plan.get("session_id") == session_id:
+            return plan
+    plan = _load_plan_for_session(session_id)
+    if plan:
+        return plan
+    raise HTTPException(status_code=404, detail="No plan found for session")
 
 
 @router.get("/plans/{plan_id}")
@@ -124,7 +167,7 @@ async def get_plan(plan_id: str):
 @router.post("/plans/{plan_id}/feedback")
 async def plan_feedback(request: Request, plan_id: str, body: PlanFeedbackRequest):
     """Submit feedback on a plan section. For 'reject', regenerates the section via SSE."""
-    plan = _plans.get(plan_id)
+    plan = _plans.get(plan_id) or _load_plan_from_session(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
@@ -149,6 +192,7 @@ async def plan_feedback(request: Request, plan_id: str, body: PlanFeedbackReques
         if all(s["status"] == "approved" for s in plan["sections"]):
             plan["status"] = "approved"
 
+        _persist_plan(plan)
         return {"ok": True, "section": section, "plan_status": plan["status"]}
 
     elif body.action == "reject":
@@ -173,6 +217,7 @@ async def plan_feedback(request: Request, plan_id: str, body: PlanFeedbackReques
 
                     # Update stored plan
                     plan["sections"][section_idx] = updated
+                    _persist_plan(plan)
 
                     yield SSEEventBuilder.plan_section_update(plan_id, updated)
                     yield SSEEventBuilder.done()
@@ -198,7 +243,7 @@ async def plan_feedback(request: Request, plan_id: str, body: PlanFeedbackReques
 @router.post("/plans/{plan_id}/approve-all")
 async def approve_all_sections(plan_id: str):
     """Approve all pending sections."""
-    plan = _plans.get(plan_id)
+    plan = _plans.get(plan_id) or _load_plan_from_session(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 
@@ -207,13 +252,14 @@ async def approve_all_sections(plan_id: str):
             s["status"] = "approved"
 
     plan["status"] = "approved"
+    _persist_plan(plan)
     return {"ok": True, "plan": plan}
 
 
 @router.post("/plans/{plan_id}/execute")
 async def execute_plan_endpoint(request: Request, plan_id: str, body: PlanExecuteRequest):
     """Execute all approved sections of a plan. Returns SSE stream."""
-    plan = _plans.get(plan_id)
+    plan = _plans.get(plan_id) or _load_plan_from_session(plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
 

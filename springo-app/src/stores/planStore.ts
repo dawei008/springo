@@ -355,5 +355,18 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       showAnalysis: false,
       analysisTool: null,
     });
+
+    if (!restored && sessionId) {
+      api.plans.getBySession(sessionId).then((resp) => {
+        if (resp.data) {
+          const plan = resp.data as unknown as PlanStructure;
+          set((s) => ({
+            currentPlan: plan,
+            activeSection: plan.sections[0]?.id || null,
+            sessionPlanMap: { ...s.sessionPlanMap, [sessionId]: plan },
+          }));
+        }
+      }).catch(() => {});
+    }
   },
 }));
