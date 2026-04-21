@@ -1638,4 +1638,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }));
 
+if (typeof window !== 'undefined') (window as any).__chatStore = useChatStore;
 

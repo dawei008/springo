@@ -6,15 +6,28 @@
  */
 import { create } from 'zustand';
 import type { DesignVersion, DesignSystemConfig, DesignFile, SelectedElement, DesignError, Message, ContentBlock } from '../types';
+import { extractModelArtifacts, parseSpringoFiles } from '../components/Visual/ArtifactRenderer';
+
+export interface DesignComment {
+  id: string;
+  x: number;
+  y: number;
+  text: string;
+  author: string;
+  timestamp: number;
+  resolved?: boolean;
+}
 
 export type ViewportMode = 'desktop' | 'tablet' | 'mobile';
 export type DesignViewMode = 'preview' | 'code';
+export type DesignInteractionMode = 'view' | 'comment' | 'edit' | 'draw';
 
 interface SessionDesignSnapshot {
   active: boolean;
   versions: DesignVersion[];
   activeVersionIndex: number;
   designSystem: DesignSystemConfig | null;
+  comments: DesignComment[];
 }
 
 export type VerificationStatus = 'ok' | 'warning' | 'error' | 'checking';
@@ -35,6 +48,10 @@ export interface DesignState {
   verificationStatus: VerificationStatus;
   tweaksOpen: boolean;
   comparisonMode: boolean;
+  zoom: number;
+  interactionMode: DesignInteractionMode;
+  presentMode: boolean;
+  comments: DesignComment[];
 
   activateDesignMode: () => void;
   deactivateDesignMode: () => void;
@@ -55,6 +72,15 @@ export interface DesignState {
   setVerificationStatus: (s: VerificationStatus) => void;
   setTweaksOpen: (open: boolean) => void;
   setComparisonMode: (on: boolean) => void;
+  setZoom: (zoom: number) => void;
+  zoomIn: () => void;
+  zoomOut: () => void;
+  resetZoom: () => void;
+  setInteractionMode: (mode: DesignInteractionMode) => void;
+  setPresentMode: (on: boolean) => void;
+  addComment: (comment: DesignComment) => void;
+  removeComment: (id: string) => void;
+  reloadCanvas: () => void;
   restoreFromMessages: (messages: Message[]) => void;
 }
 
@@ -80,6 +106,10 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   verificationStatus: 'ok',
   tweaksOpen: false,
   comparisonMode: false,
+  zoom: 100,
+  interactionMode: 'view',
+  presentMode: false,
+  comments: [],
 
   activateDesignMode: () => set({ active: true }),
 
@@ -123,7 +153,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
 
   setViewport: (mode) => set({ viewport: mode }),
 
-  setViewMode: (mode) => set({ viewMode: mode }),
+  setViewMode: (mode) => set({ viewMode: mode, ...(mode !== 'preview' ? { interactionMode: 'view' as DesignInteractionMode } : {}) }),
 
   selectFile: (path) => set({ activeFilePath: path }),
 
@@ -132,11 +162,11 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   setExtractingDesignSystem: (v) => set({ isExtractingDesignSystem: v }),
 
   switchSession: (sessionId) => {
-    const { currentSessionId, active, versions, activeVersionIndex, designSystem, sessionMap } = get();
+    const { currentSessionId, active, versions, activeVersionIndex, designSystem, sessionMap, comments } = get();
 
     const updatedMap = { ...sessionMap };
     if (currentSessionId) {
-      updatedMap[currentSessionId] = { active, versions, activeVersionIndex, designSystem };
+      updatedMap[currentSessionId] = { active, versions, activeVersionIndex, designSystem, comments };
     }
 
     const restored = sessionId ? updatedMap[sessionId] : null;
@@ -144,13 +174,12 @@ export const useDesignStore = create<DesignState>((set, get) => ({
     set({
       sessionMap: updatedMap,
       currentSessionId: sessionId,
-      // Preserve current active state for new sessions (no snapshot yet)
-      // This handles the race where /design activates design mode before
-      // switchSession runs via useEffect
       active: restored ? restored.active : active,
       versions: restored?.versions ?? [],
       activeVersionIndex: restored?.activeVersionIndex ?? -1,
       designSystem: restored?.designSystem ?? null,
+      comments: restored?.comments ?? [],
+      interactionMode: 'view',
     });
   },
 
@@ -177,10 +206,34 @@ export const useDesignStore = create<DesignState>((set, get) => ({
 
   setComparisonMode: (on) => set({ comparisonMode: on }),
 
+  setZoom: (zoom) => set({ zoom: Math.max(25, Math.min(200, zoom)) }),
+
+  zoomIn: () => set((s) => ({ zoom: Math.min(200, s.zoom + 25) })),
+
+  zoomOut: () => set((s) => ({ zoom: Math.max(25, s.zoom - 25) })),
+
+  resetZoom: () => set({ zoom: 100 }),
+
+  setInteractionMode: (mode) => set({ interactionMode: mode }),
+
+  setPresentMode: (on) => set({ presentMode: on }),
+
+  addComment: (comment) => set((s) => ({ comments: [...s.comments, comment] })),
+
+  removeComment: (id) => set((s) => ({ comments: s.comments.filter((c) => c.id !== id) })),
+
+  reloadCanvas: () => {
+    const { versions, activeVersionIndex } = get();
+    if (activeVersionIndex < 0 || activeVersionIndex >= versions.length) return;
+    const v = versions[activeVersionIndex];
+    const cloned = { ...v, id: v.id + '-reload-' + Date.now() };
+    const updated = [...versions];
+    updated[activeVersionIndex] = cloned;
+    set({ versions: updated });
+  },
+
   restoreFromMessages: (messages) => {
     if (get().versions.length > 0) return;
-
-    const { extractModelArtifacts, parseSpringoFiles } = require('@/components/Visual/ArtifactRenderer');
 
     function extractText(content: string | ContentBlock[] | undefined): string {
       if (!content) return '';

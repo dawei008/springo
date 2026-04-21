@@ -14,6 +14,77 @@ const VIEWPORT_WIDTHS: Record<ViewportMode, number | null> = {
   mobile: 375,
 };
 
+interface CdnLib {
+  scripts: string[];
+  global: string;
+  subExports?: Record<string, string>;
+}
+
+const CDN_LIBS: Record<string, CdnLib> = {
+  'recharts': {
+    scripts: ['https://unpkg.com/recharts@2/umd/Recharts.min.js'],
+    global: 'Recharts',
+  },
+  'lucide-react': {
+    scripts: ['https://unpkg.com/lucide-react@0.460.0/dist/umd/lucide-react.min.js'],
+    global: 'lucideReact',
+  },
+  'framer-motion': {
+    scripts: ['https://unpkg.com/framer-motion@11/dist/framer-motion.js'],
+    global: 'Motion',
+    subExports: { 'motion': 'Motion.motion', 'AnimatePresence': 'Motion.AnimatePresence' },
+  },
+  '@heroicons/react/24/outline': {
+    scripts: ['https://unpkg.com/heroicons-react@2.1.5/dist/outline.min.js'],
+    global: 'HeroiconsOutline',
+  },
+  '@heroicons/react/24/solid': {
+    scripts: ['https://unpkg.com/heroicons-react@2.1.5/dist/solid.min.js'],
+    global: 'HeroiconsSolid',
+  },
+  'date-fns': {
+    scripts: ['https://unpkg.com/date-fns@4/cdn.min.js'],
+    global: 'dateFns',
+  },
+  'chart.js': {
+    scripts: ['https://unpkg.com/chart.js@4/dist/chart.umd.js'],
+    global: 'Chart',
+  },
+  'three': {
+    scripts: ['https://unpkg.com/three@0.170.0/build/three.min.js'],
+    global: 'THREE',
+  },
+  'd3': {
+    scripts: ['https://unpkg.com/d3@7/dist/d3.min.js'],
+    global: 'd3',
+  },
+};
+
+function detectCdnLibs(files: DesignFile[]): { scripts: string[]; registrations: string[] } {
+  const allCode = files.map(f => f.content).join('\n');
+  const scripts: string[] = [];
+  const registrations: string[] = [];
+  const seen = new Set<string>();
+
+  for (const [pkg, lib] of Object.entries(CDN_LIBS)) {
+    const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`from\\s+['"]${escaped}['"]`, 'm');
+    if (re.test(allCode) && !seen.has(pkg)) {
+      seen.add(pkg);
+      scripts.push(...lib.scripts);
+      if (lib.subExports) {
+        for (const [name, expr] of Object.entries(lib.subExports)) {
+          registrations.push(`if (typeof ${expr} !== 'undefined') window.__c.${name} = ${expr};`);
+        }
+        registrations.push(`if (typeof ${lib.global} !== 'undefined') { var _k = Object.keys(${lib.global}); for (var _i=0;_i<_k.length;_i++) window.__c[_k[_i]] = ${lib.global}[_k[_i]]; }`);
+      } else {
+        registrations.push(`if (typeof ${lib.global} !== 'undefined') { var _k = Object.keys(${lib.global}); for (var _i=0;_i<_k.length;_i++) window.__c[_k[_i]] = ${lib.global}[_k[_i]]; }`);
+      }
+    }
+  }
+  return { scripts, registrations };
+}
+
 /**
  * Build an HTML runtime document that renders multi-file React projects.
  * Loads React 18 + Babel Standalone from CDN, injects CSS as <style> blocks,
@@ -160,6 +231,10 @@ function buildMultiFileRuntime(files: DesignFile[], entryFile?: string): string 
   // Embed JSX source as JSON array for manual transpilation
   const jsxSources = processedJsx.map(f => ({ path: f.path, code: f.code }));
 
+  // Auto-detect third-party libraries used in source and load their CDN builds
+  const cdnLibs = detectCdnLibs(files);
+  const cdnScriptTags = cdnLibs.scripts.map(url => `  <script src="${url}" crossorigin></script>`).join('\n');
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -168,6 +243,7 @@ function buildMultiFileRuntime(files: DesignFile[], entryFile?: string): string 
   <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+${cdnScriptTags}
   <style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: system-ui, -apple-system, 'SF Pro Display', sans-serif; }</style>
 ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')}
 </head>
@@ -209,6 +285,8 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
     }
     window.__c.React = React;
     window.__c.ReactDOM = ReactDOM;
+    // Register CDN library exports on window.__c
+    ${cdnLibs.registrations.join('\n    ')}
     function _showError(msg) {
       var root = document.getElementById('root');
       if (root) root.innerHTML =
@@ -374,6 +452,8 @@ export default function DesignCanvas({
 }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastSrcdocRef = useRef<string>('');
+  const zoom = useDesignStore((s) => s.zoom);
+  const interactionMode = useDesignStore((s) => s.interactionMode);
 
   const handleMessage = useCallback((e: MessageEvent) => {
     if (!e.data || typeof e.data.type !== 'string') return;
@@ -426,8 +506,15 @@ export default function DesignCanvas({
 
   const fixedWidth = VIEWPORT_WIDTHS[viewport];
 
+  const zoomStyle = zoom !== 100 ? {
+    transform: `scale(${zoom / 100})`,
+    transformOrigin: 'top left',
+    width: `${10000 / zoom}%`,
+    height: `${10000 / zoom}%`,
+  } : undefined;
+
   return (
-    <div className="design-canvas">
+    <div className={`design-canvas${interactionMode === 'comment' ? ' cursor-comment' : interactionMode === 'draw' ? ' cursor-draw' : ''}`}>
       <div
         className={`design-canvas-viewport design-canvas-viewport-${viewport}`}
         style={fixedWidth ? { width: fixedWidth, margin: '0 auto' } : undefined}
@@ -435,6 +522,7 @@ export default function DesignCanvas({
         <iframe
           ref={iframeRef}
           className="design-canvas-iframe"
+          style={zoomStyle}
           sandbox="allow-scripts allow-same-origin"
         />
       </div>

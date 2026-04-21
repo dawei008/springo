@@ -73,8 +73,9 @@ export const useModeStore = create<ModeState>((set, get) => ({
     set({ activeMode: mode });
     activateMode(mode);
 
-    const sessionId = get().currentSessionId;
+    const sessionId = get().currentSessionId || useSessionStore.getState().currentSessionId;
     if (sessionId) {
+      set({ currentSessionId: sessionId });
       set((state) => ({
         sessionModeMap: { ...state.sessionModeMap, [sessionId]: mode },
       }));
@@ -131,3 +132,5 @@ export const useModeStore = create<ModeState>((set, get) => ({
     }));
   },
 }));
+
+if (typeof window !== 'undefined') (window as any).__modeStore = useModeStore;

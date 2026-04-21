@@ -380,3 +380,5 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     return get().sessions.find((s) => s.id === id);
   },
 }));
+
+if (typeof window !== 'undefined') (window as any).__sessionStore = useSessionStore;

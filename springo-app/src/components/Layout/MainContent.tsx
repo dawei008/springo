@@ -5,6 +5,7 @@ import MessageInput from '@/components/Chat/MessageInput';
 import ArtifactPanel from '@/components/ArtifactPanel/ArtifactPanel';
 import DesignPanel from '@/components/DesignPanel/DesignPanel';
 import PlanPanel from '@/components/PlanPanel/PlanPanel';
+import DesignDashboard from '@/components/DesignPanel/DesignDashboard';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -237,19 +238,37 @@ export default function MainContent() {
     }
   }, [currentSessionId]);
 
+  const designActive = useDesignStore((s) => s.active);
+  const designVersionCount = useDesignStore((s) => s.versions.length);
+  const isStreaming = useChatStore((s) =>
+    currentSessionId ? s.isStreaming(currentSessionId) : false,
+  );
+  const hasMessages = useChatStore((s) => {
+    if (!currentSessionId) return false;
+    const rt = s.runtimes[currentSessionId];
+    return rt ? rt.messages.length > 0 : false;
+  });
+  const showDesignDashboard = designActive && designVersionCount === 0 && !isStreaming && !hasMessages;
+
   return (
     <div className="main-content">
       <Header />
-      <div className="chat-panel-wrapper">
-        <div className="chat-area">
-          <ChatArea />
-          <StatusBar />
-        </div>
-        <ArtifactPanel />
-        <DesignPanel />
-        <PlanPanel />
-      </div>
-      <MessageInput />
+      {showDesignDashboard ? (
+        <DesignDashboard />
+      ) : (
+        <>
+          <div className="chat-panel-wrapper">
+            <div className="chat-area">
+              <ChatArea />
+              <StatusBar />
+            </div>
+            <ArtifactPanel />
+            <DesignPanel />
+            <PlanPanel />
+          </div>
+          <MessageInput />
+        </>
+      )}
     </div>
   );
 }

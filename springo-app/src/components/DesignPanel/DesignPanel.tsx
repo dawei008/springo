@@ -15,6 +15,9 @@ import DesignVersionTimeline from './DesignVersionTimeline';
 import DesignElementPopover from './DesignElementPopover';
 import DesignTweaksPanel from './DesignTweaksPanel';
 import DesignComparisonView from './DesignComparisonView';
+import DesignCommentOverlay from './DesignCommentOverlay';
+import DesignDrawOverlay from './DesignDrawOverlay';
+import DesignPresentMode from './DesignPresentMode';
 
 export default function DesignPanel() {
   const active = useDesignStore((s) => s.active);
@@ -28,7 +31,7 @@ export default function DesignPanel() {
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
 
-  // Resize handle (same pattern as ArtifactPanel / PlanPanel)
+  // Resize handle — dragging overrides flex with an explicit width
   useEffect(() => {
     const handle = resizeRef.current;
     const panel = panelRef.current;
@@ -43,6 +46,7 @@ export default function DesignPanel() {
       startX = e.clientX;
       startW = panel.offsetWidth;
       handle.classList.add('dragging');
+      panel.classList.add('resizing');
       document.body.style.cursor = 'ew-resize';
       document.body.style.userSelect = 'none';
       e.preventDefault();
@@ -50,13 +54,16 @@ export default function DesignPanel() {
     const onMove = (e: MouseEvent) => {
       if (!dragging) return;
       const diff = startX - e.clientX;
-      const maxW = Math.floor(window.innerWidth * 0.75);
-      panel.style.width = Math.min(maxW, Math.max(400, startW + diff)) + 'px';
+      const maxW = Math.floor(window.innerWidth * 0.8);
+      const w = Math.min(maxW, Math.max(400, startW + diff));
+      panel.style.flex = 'none';
+      panel.style.width = w + 'px';
     };
     const onUp = () => {
       if (dragging) {
         dragging = false;
         handle.classList.remove('dragging');
+        panel.classList.remove('resizing');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
       }
@@ -134,6 +141,8 @@ export default function DesignPanel() {
               ) : (
                 <DesignCodeEditor />
               )}
+              {viewMode === 'preview' && <DesignCommentOverlay />}
+              {viewMode === 'preview' && <DesignDrawOverlay />}
               {viewMode === 'preview' && <DesignElementPopover />}
             </div>
             {viewMode === 'preview' && <DesignTweaksPanel />}
@@ -143,6 +152,9 @@ export default function DesignPanel() {
 
       {/* Version Timeline */}
       <DesignVersionTimeline />
+
+      {/* Present mode overlay */}
+      <DesignPresentMode />
     </div>
   );
 }

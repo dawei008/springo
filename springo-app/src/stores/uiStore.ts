@@ -290,3 +290,5 @@ export const useUIStore = create<UIState>((set, get) => ({
     set({ queueItems: sessionId ? (get().sessionQueueMap[sessionId] || []) : [] });
   },
 }));
+
+if (typeof window !== 'undefined') (window as any).__uiStore = useUIStore;

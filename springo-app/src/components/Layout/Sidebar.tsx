@@ -711,22 +711,17 @@ export default function Sidebar() {
     };
   }, []);
 
-  return (<>
+  return (
     <aside className={`sidebar${sidebarOpen ? '' : ' collapsed'}`} ref={sidebarRef}>
       <div className="sidebar-resize" ref={sidebarResizeRef} />
-      {/* Sidebar header: dog logo + "Springo" + new chat button */}
+      {/* Sidebar header */}
       <div className="sidebar-header">
-        <div className="brand-mark">
-          <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
-            <ellipse cx="50" cy="38" rx="22" ry="20"/>
-            <path d="M28 35 C15 38, 8 55, 12 72 C14 78, 18 80, 22 78 C28 75, 30 65, 30 55"/>
-            <path d="M72 35 C85 38, 92 55, 88 72 C86 78, 82 80, 78 78 C72 75, 70 65, 70 55"/>
-            <circle cx="40" cy="35" r="3" fill="white"/>
-            <circle cx="60" cy="35" r="3" fill="white"/>
-            <ellipse cx="50" cy="48" rx="5" ry="4" fill="white"/>
-            <path d="M45 52 Q50 58, 55 52"/>
+        <button className="titlebar-sidebar-toggle" onClick={toggleSidebar} title="Hide sidebar (⌘⇧S)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="9" y1="3" x2="9" y2="21" />
           </svg>
-        </div>
+        </button>
         <div className="brand-name">Springo</div>
       </div>
 
@@ -888,13 +883,6 @@ export default function Sidebar() {
           <div className="footer-user-name">Springo User</div>
           <div className="footer-user-plan">Local · Bedrock</div>
         </div>
-        <button className="sidebar-collapse-btn" onClick={toggleSidebar} title="Hide sidebar (⌘⇧S)">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <line x1="9" y1="3" x2="9" y2="21" />
-            <polyline points="15 8 12 12 15 16" />
-          </svg>
-        </button>
         <button className="icon-btn-sm" onClick={handleOpenSettings} title="Settings">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3"/>
@@ -903,16 +891,6 @@ export default function Sidebar() {
         </button>
       </div>
     </aside>
-    {!sidebarOpen && (
-      <button className="sidebar-expand-btn" onClick={toggleSidebar} title="Show sidebar (⌘⇧S)">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <line x1="9" y1="3" x2="9" y2="21" />
-          <polyline points="13 8 16 12 13 16" />
-        </svg>
-      </button>
-    )}
-  </>
   );
 }
 
