@@ -111,7 +111,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               createdAt,
               updatedAt,
               status: 'idle' as ConversationStatus,
-              workingDir: (meta.workingDir || s.workingDir || '') as string,
+              workingDir: (meta.workingDir || meta.working_dir || s.workingDir || s.working_dir || '') as string,
               isCustomTitle: (meta.isCustomTitle || false) as boolean,
               mode: ((meta.session_mode || s.session_mode || 'general') as SessionMode),
               messages: [],

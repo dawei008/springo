@@ -101,13 +101,14 @@ function StatusBar() {
         e.target.value = displayDir;
       } else if (value) {
         setWorkingDir(value);
-        // Also update current session's workingDir
+        // Also update current session's workingDir (local + backend)
         if (currentSessionId) {
           useSessionStore.setState((state) => ({
             sessions: state.sessions.map((s) =>
               s.id === currentSessionId ? { ...s, workingDir: value } : s,
             ),
           }));
+          useSessionStore.getState().updateSessionMetadata(currentSessionId, { workingDir: value });
         }
       }
     },

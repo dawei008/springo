@@ -81,7 +81,7 @@ class SessionStore:
                     "session_id": session_id,
                     "created": metadata.get("created_at", stat.st_ctime),
                     "modified": stat.st_mtime * 1000,  # Convert to milliseconds for JS Date compatibility
-                    "working_dir": metadata.get("working_dir", ""),
+                    "working_dir": metadata.get("working_dir") or metadata.get("workingDir", ""),
                     "title": metadata.get("title", ""),
                     "message_count": metadata.get("message_count", 0),
                     "session_mode": metadata.get("session_mode", "general")
