@@ -22,7 +22,7 @@ from .handlers import (
     # Search tools
     web_search, web_fetch,
     # Task tools
-    todo_write, todo_read, ask_user, use_skill, tool_search,
+    todo_write, todo_read, ask_user, use_skill, manage_skill, tool_search,
     # Planning tools
     enter_plan_mode, exit_plan_mode, summarize_context,
     # Advanced tools
@@ -77,8 +77,9 @@ TOOL_HANDLERS = {
     "git_push": git_push,
     "git_clone": git_clone,
     # Browser tools removed - use MCP playwright instead
-    # Skill tool
+    # Skill tools
     "use_skill": use_skill,
+    "manage_skill": manage_skill,
     # Optimized tools
     "glob": glob_files,
     "grep": grep_search,

@@ -252,6 +252,37 @@ tool_search(query="strands long term memory", auto_activate=true)
         }
     },
     {
+        "name": "manage_skill",
+        "description": "Create, update, or delete a reusable skill. PROACTIVE USE: After completing a complex multi-step task (deployment, data pipeline, document generation, debugging pattern, etc.), suggest to the user: 'This procedure could be saved as a skill for reuse. Want me to install it?' If user agrees, distill the procedure into a clean, self-contained skill with step-by-step instructions. Good skills capture: prerequisites, exact steps, tool calls needed, error handling, and verification steps.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["create", "update", "delete", "list"],
+                    "description": "Action to perform"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Skill name in kebab-case (e.g. 'deploy-ecs-service'). Required for create/update/delete."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "One-line description of what the skill does"
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "Full markdown instructions for the agent to follow when this skill is activated. Should be a complete, self-contained procedure."
+                },
+                "triggers": {
+                    "type": "string",
+                    "description": "Comma-separated trigger phrases that should activate this skill (e.g. 'deploy to ecs, ecs deployment')"
+                }
+            },
+            "required": ["action"]
+        }
+    },
+    {
         "name": "todo_write",
         "description": "Create or update a task list to track progress.",
         "input_schema": {

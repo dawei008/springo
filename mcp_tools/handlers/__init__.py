@@ -50,6 +50,7 @@ from .task_tools import (
     todo_read,
     ask_user,
     use_skill,
+    manage_skill,
     tool_search,
 )
 

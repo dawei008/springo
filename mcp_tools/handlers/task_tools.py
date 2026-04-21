@@ -162,6 +162,94 @@ Now proceed with the task using the skill instructions."""
         return {"error": f"Failed to load skill: {str(e)}"}
 
 
+def manage_skill(action: str, name: str = "", description: str = "",
+                  instructions: str = "", triggers: str = "") -> Dict[str, Any]:
+    """Create, update, or delete a reusable skill from conversation experience.
+
+    Args:
+        action: "create", "update", "delete", or "list"
+        name: Skill name (kebab-case, e.g. "deploy-ecs-service")
+        description: One-line description of what the skill does
+        instructions: Full markdown instructions the agent should follow
+        triggers: Comma-separated trigger phrases (optional)
+    """
+    import os
+    from pathlib import Path
+
+    skills_dir = Path(os.path.expanduser("~/.springo/skills"))
+    skills_dir.mkdir(parents=True, exist_ok=True)
+
+    if action == "list":
+        if not HAS_SKILL_LOADER:
+            return {"error": "Skill loader not available"}
+        loader = get_skill_loader()
+        loader.reload(force=True)
+        return {
+            "success": True,
+            "skills": [
+                {"name": s.name, "description": s.description}
+                for s in loader.skills.values()
+            ],
+            "count": len(loader.skills),
+        }
+
+    if not name:
+        return {"error": "name is required for create/update/delete"}
+
+    # Sanitize name to kebab-case directory name
+    safe_name = name.lower().replace(" ", "-")
+    skill_dir = skills_dir / safe_name
+
+    if action == "delete":
+        if not skill_dir.exists():
+            return {"error": f"Skill '{safe_name}' not found"}
+        import shutil
+        shutil.rmtree(skill_dir)
+        if HAS_SKILL_LOADER:
+            get_skill_loader().force_reload()
+        return {"success": True, "message": f"Skill '{safe_name}' deleted"}
+
+    if action in ("create", "update"):
+        if not instructions:
+            return {"error": "instructions is required for create/update"}
+
+        if action == "create" and skill_dir.exists():
+            return {"error": f"Skill '{safe_name}' already exists. Use action='update' to modify it."}
+
+        if action == "update" and not skill_dir.exists():
+            return {"error": f"Skill '{safe_name}' not found. Use action='create' to create it."}
+
+        skill_dir.mkdir(parents=True, exist_ok=True)
+
+        # Build SKILL.md with YAML frontmatter
+        frontmatter_lines = [
+            "---",
+            f"name: {safe_name}",
+            f"description: {description}" if description else f"description: Skill for {safe_name}",
+        ]
+        if triggers:
+            frontmatter_lines.append(f"triggers: {triggers}")
+        frontmatter_lines.append("---")
+        frontmatter_lines.append("")
+
+        skill_md = "\n".join(frontmatter_lines) + instructions
+
+        (skill_dir / "SKILL.md").write_text(skill_md, encoding="utf-8")
+
+        if HAS_SKILL_LOADER:
+            get_skill_loader().force_reload()
+
+        return {
+            "success": True,
+            "action": action,
+            "skill_name": safe_name,
+            "path": str(skill_dir),
+            "message": f"Skill '{safe_name}' {'created' if action == 'create' else 'updated'} at {skill_dir}",
+        }
+
+    return {"error": f"Unknown action: {action}. Use create, update, delete, or list."}
+
+
 def tool_search(query: str, auto_activate: bool = True, max_results: int = 5) -> Dict[str, Any]:
     """Search for deferred tools and optionally auto-activate the best match.
 
