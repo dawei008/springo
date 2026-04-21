@@ -30,12 +30,14 @@ async def sse_generator(
     """
     try:
         async for event in async_gen:
-            # Check if client disconnected
-            if request and await request.is_disconnected():
-                logger.warning("SSE client disconnected - stopping generator")
-                break
+            # NOTE: Do NOT check request.is_disconnected() here.
+            # Starlette's is_disconnected() gives false positives inside async
+            # generators after yielding SSE events, causing the stream to terminate
+            # mid-auto-loop (sessions end at tool_result with no follow-up model call).
+            # Client disconnection is handled by: cancel_event in the auto-loop,
+            # AbortController on the frontend, and CancelledError from Starlette.
             yield event
-            
+
     except asyncio.CancelledError:
         logger.warning("SSE generator cancelled")
         raise

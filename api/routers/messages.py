@@ -665,7 +665,9 @@ async def messages_auto_api(
                                 yield SSEEventBuilder.context_compact_failed(str(_compact_err))
                             _prompt_too_long = True
                         else:
-                            raise  # Re-raise non-token-limit errors
+                            logger.error(f"[Auto] Stream error at iteration {iteration}: {_err_msg}")
+                            yield SSEEventBuilder.error(f"Stream error: {_err_msg}", error_type="stream_error")
+                            break  # Exit loop gracefully instead of crashing the generator
 
                     if _prompt_too_long:
                         continue  # Retry the iteration with compacted messages
@@ -977,7 +979,21 @@ async def messages_auto_api(
                 if session_id:
                     _cleanup_cancel_event(session_id)
 
-            return create_sse_response(auto_stream_generator(), request)
+            async def auto_stream_generator_safe() -> AsyncGenerator[str, None]:
+                """Wrap generator with top-level error handling so uncaught
+                exceptions produce an SSE error event instead of being
+                silently swallowed by the sse_generator wrapper."""
+                try:
+                    async for event in auto_stream_generator():
+                        yield event
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.error(f"[Auto] Unhandled exception in auto_stream_generator: {e}", exc_info=True)
+                    yield SSEEventBuilder.error(f"Internal error: {e}", error_type="internal_error")
+                    yield SSEEventBuilder.done()
+
+            return create_sse_response(auto_stream_generator_safe(), request)
         
         else:
             # Non-streaming auto execution
