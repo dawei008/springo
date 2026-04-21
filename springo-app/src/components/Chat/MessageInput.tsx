@@ -125,6 +125,7 @@ export default function MessageInput() {
   const teamModeEnabled = useUIStore((s) => s.teamModeEnabled);
   const teamCollaborativeMode = useUIStore((s) => s.teamCollaborativeMode);
   const activeTeamId = useUIStore((s) => s.activeTeamId);
+  const planModeActive = useUIStore((s) => s.planModeActive);
   const queueItems = useUIStore((s) => s.queueItems);
 
   // Token usage tracking
@@ -422,17 +423,17 @@ export default function MessageInput() {
       return;
     }
 
-    // Plan mode: /plan, /ultraplan, or bare "ultraplan" triggers plan generation
+    // Plan mode: /plan, /ultraplan, bare "ultraplan", or active plan mode via sidebar
     const planMatch = content.match(/^(?:\/(?:plan|ultraplan)|ultraplan)\s+(.+)/);
-    if (planMatch) {
-      const taskDesc = planMatch[1].trim();
-      if (taskDesc) {
-        setText('');
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
-        const currentSettings = useSettingsStore.getState().settings;
-        usePlanStore.getState().generatePlan(taskDesc, currentSessionId || undefined, currentSettings.model);
-        return;
-      }
+    const isPlanModeActive = useUIStore.getState().planModeActive;
+    const planTask = planMatch ? planMatch[1].trim() : (isPlanModeActive ? content : null);
+    if (planTask) {
+      setText('');
+      setAttachments([]);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      const currentSettings = useSettingsStore.getState().settings;
+      usePlanStore.getState().generatePlan(planTask, currentSessionId || undefined, currentSettings.model);
+      return;
     }
 
     let convId = currentSessionId;
@@ -1032,7 +1033,9 @@ export default function MessageInput() {
                     ? 'Team Collaborative Mode - agents work together...'
                     : teamModeEnabled
                       ? 'Team Mode - multi-agent collaboration...'
-                      : 'Message Springo... (/ for skills)'
+                      : planModeActive
+                        ? 'Describe your task — UltraPlan will analyze and create a plan...'
+                        : 'Message Springo... (/ for skills)'
             }
             rows={1}
             value={text}
