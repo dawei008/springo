@@ -14,8 +14,8 @@ import type {
   TimelineEvent,
 } from '../components/NovelPanel/types';
 import { emptyNovel, countWords, slugify } from '../components/NovelPanel/types';
-
-const BASE_URL = 'http://127.0.0.1:8081';
+import { api } from '../services/api';
+import { useSessionStore } from './sessionStore';
 
 interface SessionNovelSnapshot {
   active: boolean;
@@ -116,13 +116,9 @@ function newId(prefix: string): string {
 
 async function execTool(name: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
   try {
-    const res = await fetch(`${BASE_URL}/v1/tools/execute`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, input }),
-    });
-    const data = await res.json();
-    return (data.result as Record<string, unknown>) || data;
+    const res = await api.tools.execute(name, input);
+    if (!res.ok || !res.data) return { error: res.error || 'unknown error' };
+    return res.data.result || {};
   } catch (err) {
     return { error: String(err) };
   }
@@ -242,11 +238,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
     if (restored) {
       nextActive = restored.active;
     } else if (sessionId) {
-      // Lazy-import-safe: we don't reach across imports at top level.
-      // Hint: this cross-store peek is OK because sessionStore is always
-      // initialised before novelStore gets a sessionId.
-      const sessions = (window as unknown as { __sessionStore?: { getState: () => { sessions: Array<{ id: string; mode?: string }> } } })
-        .__sessionStore?.getState().sessions ?? [];
+      const sessions = useSessionStore.getState().sessions;
       const sess = sessions.find((s) => s.id === sessionId);
       nextActive = sess?.mode === 'novel';
     } else {
@@ -548,31 +540,38 @@ export const useNovelStore = create<NovelState>((set, get) => ({
       const chapterOrder: string[] = [];
       const order = novel.chapter_order || [];
 
-      for (let i = 0; i < order.length; i++) {
-        const cid = order[i];
-        // Try common filename patterns (we don't store the exact filename; search by prefix)
-        const listRes = await execTool('list_directory', { path: `${workingDir}/chapters`, show_hidden: false });
-        const files = (listRes.entries as Array<{ name: string }> | undefined) || [];
-        const match = files.find((f) => f.name.startsWith(`ch${String(i + 1).padStart(3, '0')}-`));
-        if (!match) continue;
-        const mdRes = await execTool('read_file', { path: `${workingDir}/chapters/${match.name}` });
-        if (mdRes.error) continue;
-        const { meta, body } = parseChapterMd(String(mdRes.content || ''));
-        const ch: Chapter = {
-          id: meta.id || cid,
-          title: meta.title || `Chapter ${i + 1}`,
-          status: (meta.status as Chapter['status']) || 'draft',
-          content: body,
-          wordCount: countWords(body),
-          updatedAt: meta.updated_at ? Date.parse(meta.updated_at) : Date.now(),
-        };
+      const listRes = await execTool('list_directory', { path: `${workingDir}/chapters`, show_hidden: false });
+      const dirFiles = (listRes.entries as Array<{ name: string }> | undefined) || [];
+
+      const chapterResults = await Promise.all(
+        order.map(async (cid, i) => {
+          const match = dirFiles.find((f) => f.name.startsWith(`ch${String(i + 1).padStart(3, '0')}-`));
+          if (!match) return null;
+          const mdRes = await execTool('read_file', { path: `${workingDir}/chapters/${match.name}` });
+          if (mdRes.error) return null;
+          const { meta, body } = parseChapterMd(String(mdRes.content || ''));
+          return {
+            id: meta.id || cid,
+            title: meta.title || `Chapter ${i + 1}`,
+            status: (meta.status as Chapter['status']) || 'draft',
+            content: body,
+            wordCount: countWords(body),
+            updatedAt: meta.updated_at ? Date.parse(meta.updated_at) : Date.now(),
+          } as Chapter;
+        }),
+      );
+
+      for (const ch of chapterResults) {
+        if (!ch) continue;
         chapters[ch.id] = ch;
         chapterOrder.push(ch.id);
       }
 
-      const charsRes = await execTool('read_file', { path: `${workingDir}/characters.json` });
-      const worldRes = await execTool('read_file', { path: `${workingDir}/worldbuilding.json` });
-      const tlRes = await execTool('read_file', { path: `${workingDir}/timeline.json` });
+      const [charsRes, worldRes, tlRes] = await Promise.all([
+        execTool('read_file', { path: `${workingDir}/characters.json` }),
+        execTool('read_file', { path: `${workingDir}/worldbuilding.json` }),
+        execTool('read_file', { path: `${workingDir}/timeline.json` }),
+      ]);
 
       const parseJson = <T>(r: Record<string, unknown>, fallback: T): T => {
         if (r.error) return fallback;

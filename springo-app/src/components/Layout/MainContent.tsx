@@ -4,6 +4,7 @@ import ChatArea from '@/components/Chat/ChatArea';
 import MessageInput from '@/components/Chat/MessageInput';
 import ArtifactPanel from '@/components/ArtifactPanel/ArtifactPanel';
 import DesignPanel from '@/components/DesignPanel/DesignPanel';
+import DesignModeLayout from '@/components/DesignPanel/DesignModeLayout';
 import PlanPanel from '@/components/PlanPanel/PlanPanel';
 import DesignDashboard from '@/components/DesignPanel/DesignDashboard';
 import NovelDashboard from '@/components/NovelPanel/NovelDashboard';
@@ -505,7 +506,9 @@ export default function MainContent() {
   return (
     <div className="main-content">
       <Header />
-      {showDesignDashboard ? (
+      {designActive && !showDesignDashboard ? (
+        <DesignModeLayout />
+      ) : showDesignDashboard ? (
         <DesignDashboard />
       ) : showNovelDashboard ? (
         <NovelDashboard />

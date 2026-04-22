@@ -399,6 +399,38 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
         if (!e.altKey && _highlight) removeHighlight();
       });
 
+      // Pin element on regular click (for design-mode-layout)
+      document.addEventListener('click', function(e) {
+        if (e.altKey) return;
+        var el = e.target;
+        if (!el || el === document.body || el === document.documentElement || el === document.getElementById('root')) return;
+        // Walk up to find the nearest "component-like" ancestor (capitalized data attr or meaningful class)
+        var compName = el.tagName.toLowerCase();
+        var walkEl = el;
+        while (walkEl && walkEl !== document.body) {
+          // Check if this was a registered component via window.__c
+          var dn = walkEl.getAttribute && walkEl.getAttribute('data-component');
+          if (dn) { compName = dn; break; }
+          // Use className as a hint
+          if (walkEl.className && typeof walkEl.className === 'string') {
+            var classes = walkEl.className.trim().split(/\s+/);
+            var meaningful = classes.find(function(c) { return c.length > 2 && !/^(p|m|d|w|h|flex|grid|text|bg|border|rounded|shadow|overflow|relative|absolute|block|inline)/.test(c); });
+            if (meaningful) { compName = meaningful; break; }
+          }
+          walkEl = walkEl.parentElement;
+        }
+        window.parent.postMessage({
+          type: 'springo:element-pinned',
+          payload: {
+            componentName: compName,
+            cssPath: getCssPath(el),
+            tagName: el.tagName.toLowerCase(),
+            className: (typeof el.className === 'string' ? el.className : '') || undefined,
+            id: el.id || undefined
+          }
+        }, '*');
+      });
+
       // Error capture
       var _origError = window.onerror;
       window.onerror = function(msg, src, line) {
@@ -453,6 +485,8 @@ export default function DesignCanvas({
     if (!e.data || typeof e.data.type !== 'string') return;
     if (e.data.type === 'springo:element-selected') {
       useDesignStore.getState().selectElement(e.data.payload);
+    } else if (e.data.type === 'springo:element-pinned') {
+      useDesignStore.getState().pinElement(e.data.payload);
     } else if (e.data.type === 'springo:error') {
       useDesignStore.getState().addError(e.data.payload);
     }

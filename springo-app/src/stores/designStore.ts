@@ -5,7 +5,7 @@
  * and per-session state persistence.
  */
 import { create } from 'zustand';
-import type { DesignVersion, DesignSystemConfig, DesignFile, SelectedElement, DesignError, Message, ContentBlock } from '../types';
+import type { DesignVersion, DesignSystemConfig, DesignFile, DesignFileType, SelectedElement, DesignError, Message, ContentBlock } from '../types';
 import { extractModelArtifacts, parseSpringoFiles } from '../components/Visual/ArtifactRenderer';
 
 export interface DesignComment {
@@ -16,6 +16,14 @@ export interface DesignComment {
   author: string;
   timestamp: number;
   resolved?: boolean;
+}
+
+export interface PinnedElement {
+  componentName: string;
+  cssPath: string;
+  tagName: string;
+  className?: string;
+  id?: string;
 }
 
 export type ViewportMode = 'desktop' | 'tablet' | 'mobile';
@@ -45,6 +53,7 @@ export interface DesignState {
   sessionMap: Record<string, SessionDesignSnapshot>;
   currentSessionId: string | null;
   selectedElement: SelectedElement | null;
+  pinnedElement: PinnedElement | null;
   errors: DesignError[];
   verificationStatus: VerificationStatus;
   tweaksOpen: boolean;
@@ -73,6 +82,9 @@ export interface DesignState {
   switchSession: (sessionId: string | null) => void;
   currentDesign: () => DesignVersion | null;
   selectElement: (el: SelectedElement | null) => void;
+  pinElement: (el: PinnedElement | null) => void;
+  clearPin: () => void;
+  applyPatch: (patch: { files: Array<{ path: string; action: string; content: string; fileType: string }> }) => void;
   addError: (err: DesignError) => void;
   clearErrors: () => void;
   setVerificationStatus: (s: VerificationStatus) => void;
@@ -120,6 +132,7 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   sessionMap: {},
   currentSessionId: null,
   selectedElement: null,
+  pinnedElement: null,
   errors: [],
   verificationStatus: 'ok',
   tweaksOpen: false,
@@ -275,6 +288,59 @@ export const useDesignStore = create<DesignState>((set, get) => ({
   },
 
   selectElement: (el) => set({ selectedElement: el }),
+
+  pinElement: (el) => set({ pinnedElement: el }),
+
+  clearPin: () => set({ pinnedElement: null }),
+
+  applyPatch: (patch) => {
+    const current = get().currentDesign();
+    if (!current) return;
+
+    const files = [...current.files];
+
+    for (const pf of patch.files) {
+      switch (pf.action) {
+        case 'replace': {
+          const idx = files.findIndex((f) => f.path === pf.path);
+          if (idx !== -1) {
+            files[idx] = { ...files[idx], content: pf.content };
+          } else {
+            // treat as create if not found
+            files.push({ path: pf.path, type: pf.fileType as DesignFileType, content: pf.content });
+          }
+          break;
+        }
+        case 'create': {
+          files.push({ path: pf.path, type: pf.fileType as DesignFileType, content: pf.content });
+          break;
+        }
+        case 'delete': {
+          const delIdx = files.findIndex((f) => f.path === pf.path);
+          if (delIdx !== -1) files.splice(delIdx, 1);
+          break;
+        }
+      }
+    }
+
+    const newVersion: DesignVersion = {
+      id: `design-${++designIdCounter}-${Date.now()}`,
+      title: (current.title || 'Design') + ' (patched)',
+      files,
+      html: current.html || '',
+      entryFile: current.entryFile,
+      timestamp: Date.now(),
+      prompt: '',
+    };
+
+    set((state) => {
+      const versions = [...state.versions, newVersion];
+      return {
+        versions,
+        activeVersionIndex: versions.length - 1,
+      };
+    });
+  },
 
   addError: (err) => set((s) => ({
     errors: [...s.errors.slice(-49), err],

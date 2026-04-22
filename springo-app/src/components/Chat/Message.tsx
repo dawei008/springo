@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
 import ArtifactRenderer, { extractModelArtifacts, parseSpringoFiles } from '@/components/Visual/ArtifactRenderer';
+import { hasPatch, parsePatch } from '@/utils/designPatchParser';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
@@ -620,6 +621,19 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           });
         } else {
           store.updateVersion(stableId, { html: a.content, title });
+        }
+      }
+
+      // Handle <springo-patch> — incremental file updates
+      if (hasPatch(rawText)) {
+        const patch = parsePatch(rawText);
+        if (patch && patch.files.length > 0) {
+          const store = useDesignStore.getState();
+          const patchId = `patch-${message.id}`;
+          const alreadyApplied = store.versions.some((v) => v.id === patchId);
+          if (!alreadyApplied) {
+            store.applyPatch(patch);
+          }
         }
       }
 

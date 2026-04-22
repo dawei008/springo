@@ -15,9 +15,23 @@ const BASE_URL = 'http://127.0.0.1:8081';
 /** Build design context string for iteration — serializes multi-file projects as springo-file blocks */
 function buildDesignContext(design: DesignVersion): string {
   if (design.files && design.files.length > 0) {
-    return design.files.map(f =>
+    const filesBlock = design.files.map(f =>
       `<springo-file path="${f.path}" type="text/${f.type}">\n${f.content}\n</springo-file>`
     ).join('\n\n');
+
+    const ds = useDesignStore.getState().designSystem;
+    const pinned = useDesignStore.getState().pinnedElement;
+
+    let ctx = '<design-context>\n';
+    if (ds) {
+      ctx += `<design-system>\n  brandName: ${ds.brandName || ''}\n  colors: ${JSON.stringify(ds.colors)}\n  fonts: ${JSON.stringify(ds.fonts)}\n</design-system>\n\n`;
+    }
+    ctx += `<current-files>\n${filesBlock}\n</current-files>\n`;
+    if (pinned) {
+      ctx += `\n<pinned-element>\n  component: ${pinned.componentName}\n  cssPath: ${pinned.cssPath}\n  tagName: ${pinned.tagName}${pinned.className ? `\n  className: ${pinned.className}` : ''}${pinned.id ? `\n  id: ${pinned.id}` : ''}\n</pinned-element>\n`;
+    }
+    ctx += '</design-context>';
+    return ctx;
   }
   return design.html;
 }
@@ -340,12 +354,12 @@ export default function MessageInput() {
     const designSystem = isDesignMode ? useDesignStore.getState().designSystem : null;
     const prevDesign = isDesignMode ? useDesignStore.getState().currentDesign() : null;
     const designContext = prevDesign ? buildDesignContext(prevDesign) : undefined;
-    const selectedEl = isDesignMode ? useDesignStore.getState().selectedElement : null;
+    const pinnedEl = isDesignMode ? useDesignStore.getState().pinnedElement : null;
 
     let finalContent = content;
-    if (isDesignMode && selectedEl) {
-      finalContent = `[User clicked element: <${selectedEl.tagName}> at "${selectedEl.cssPath}"${selectedEl.textPreview ? ` text="${selectedEl.textPreview}"` : ''}${selectedEl.computedStyles ? ` styles=${JSON.stringify(selectedEl.computedStyles)}` : ''}]\n\n${content}`;
-      useDesignStore.getState().selectElement(null);
+    if (isDesignMode && pinnedEl) {
+      finalContent = `[Pinned element: ${pinnedEl.componentName} (${pinnedEl.tagName}) at "${pinnedEl.cssPath}"]\n\n${content}`;
+      useDesignStore.getState().clearPin();
     }
 
     await useChatStore.getState().sendMessage(convId, finalContent, atts, {
