@@ -197,6 +197,12 @@ function SessionModeIcon({ mode, status }: { mode?: SessionMode; status?: string
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>
         </div>
       );
+    case 'novel':
+      return (
+        <div className={cls}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+        </div>
+      );
     default:
       return (
         <div className={cls}>
@@ -234,6 +240,11 @@ function ModeSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
       label: 'Team',
       icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
     },
+    {
+      mode: 'novel',
+      label: 'Novel',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>,
+    },
   ];
 
   return (
@@ -264,6 +275,15 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isTranscribing = useVoiceStore((s) => s.isTranscribing);
   const language = useVoiceStore((s) => s.language);
+
+  const handleOpenNovelStudio = useCallback(() => {
+    const sid = useSessionStore.getState().createSession(undefined, 'novel');
+    setTimeout(() => {
+      useModeStore.getState().switchMode('novel');
+      // switchMode will call activateMode('novel') which loads from workingDir if present
+      void sid;
+    }, 100);
+  }, []);
 
   const handleMeetingToggle = useCallback(() => {
     if (isTranscribing) {
@@ -339,6 +359,11 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
             label="Screen Recording"
             status={isRecording ? 'rec' : undefined}
             onClick={handleRecordToggle}
+          />
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>}
+            label="Novel Studio"
+            onClick={handleOpenNovelStudio}
           />
         </>
       )}

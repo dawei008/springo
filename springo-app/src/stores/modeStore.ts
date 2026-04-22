@@ -4,6 +4,7 @@ import { useDesignStore } from './designStore';
 import { useUIStore } from './uiStore';
 import { useArtifactStore, createArtifactId } from './artifactStore';
 import { useSessionStore } from './sessionStore';
+import { useNovelStore } from './novelStore';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
@@ -21,6 +22,7 @@ interface ModeState {
 function deactivateAllModes() {
   useDesignStore.getState().deactivateDesignMode();
   useUIStore.getState().setPlanModeActive(false);
+  useNovelStore.getState().deactivateNovelMode();
   const artifact = useArtifactStore.getState().activeArtifact;
   if (artifact?.componentId === 'team' || artifact?.componentId === 'plan' || artifact?.componentId === 'recording') {
     useArtifactStore.getState().closePanel();
@@ -55,6 +57,18 @@ function activateMode(mode: SessionMode) {
         timestamp: Date.now(),
       });
       break;
+    case 'novel': {
+      const sessionId = useSessionStore.getState().currentSessionId;
+      const session = sessionId
+        ? useSessionStore.getState().sessions.find((s) => s.id === sessionId)
+        : undefined;
+      useNovelStore.getState().activateNovelMode();
+      if (session?.workingDir) {
+        useNovelStore.setState({ workingDir: session.workingDir });
+        useNovelStore.getState().loadFromDisk(session.workingDir).catch(() => {});
+      }
+      break;
+    }
   }
 }
 

@@ -15,6 +15,8 @@ import { useArtifactStore } from '@/stores/artifactStore';
 import { useDesignStore } from '@/stores/designStore';
 import { usePlanStore } from '@/stores/planStore';
 import { useModeStore } from '@/stores/modeStore';
+import { useNovelStore } from '@/stores/novelStore';
+import NovelPanel from '@/components/NovelPanel/NovelPanel';
 import type { UsageData } from '@/types';
 
 const BASE_URL = 'http://127.0.0.1:8081';
@@ -455,6 +457,12 @@ export default function MainContent() {
     useDesignStore.getState().switchSession(currentSessionId ?? null);
     usePlanStore.getState().switchSession(currentSessionId ?? null);
     useModeStore.getState().switchSession(currentSessionId ?? null);
+    {
+      const session = currentSessionId
+        ? useSessionStore.getState().sessions.find((s) => s.id === currentSessionId)
+        : null;
+      useNovelStore.getState().switchSession(currentSessionId ?? null, session?.workingDir ?? null);
+    }
 
     // Restore design versions from message history if switching to a design-mode
     // session with no in-memory snapshot (e.g. after app restart)
@@ -505,6 +513,7 @@ export default function MainContent() {
           <ArtifactPanel />
           <DesignPanel />
           <PlanPanel />
+          <NovelPanel />
         </div>
       )}
     </div>

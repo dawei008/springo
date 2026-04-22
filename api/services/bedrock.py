@@ -1144,11 +1144,17 @@ class BedrockService:
                         pass
                 raise
 
+        if response is None:
+            logger.error(f"Bedrock connection failed after {max_retries} retries for {model_id}")
+            yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': 'connection_error', 'message': f'Failed to connect to Bedrock after {max_retries} retries'}})}\n\n"
+            return
+
         try:
             message_id = f"msg_{uuid.uuid4().hex[:24]}"
             current_block_index = -1
             started_message = False
             chunk_timeout = settings.bedrock_stream_chunk_timeout
+            _chunk_count = 0
 
             body_iter = response['body'].__aiter__()
             while True:
@@ -1157,8 +1163,9 @@ class BedrockService:
                 except StopAsyncIteration:
                     break
                 except asyncio.TimeoutError:
-                    logger.error(f"Bedrock stream stalled: no chunk received in {chunk_timeout}s")
+                    logger.error(f"Bedrock stream stalled: no chunk received in {chunk_timeout}s (got {_chunk_count} chunks before stall)")
                     raise Exception(f"Stream stalled: no data received in {chunk_timeout} seconds")
+                _chunk_count += 1
                 chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
                 chunk_type = chunk.get("type")
 
@@ -1195,7 +1202,14 @@ class BedrockService:
 
             # Ensure message was started
             if not started_message:
-                logger.warning(f"Bedrock stream returned empty response (no chunks) for {model_id}")
+                _msg_count = len(body.get("messages", []))
+                _sys_len = len(body.get("system", ""))
+                _max_tok = body.get("max_tokens", "?")
+                _tools_count = len(body.get("tools", []))
+                logger.warning(
+                    f"Bedrock stream returned empty response (0 chunks) for {model_id}: "
+                    f"msgs={_msg_count}, system_len={_sys_len}, max_tokens={_max_tok}, tools={_tools_count}"
+                )
                 empty_msg = {
                     'id': message_id,
                     'type': 'message',

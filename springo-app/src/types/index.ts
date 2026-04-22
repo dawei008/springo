@@ -106,7 +106,7 @@ export type ConversationStatus = 'idle' | 'running' | 'completed' | 'error' | 'c
 /** Alias used by session store */
 export type SessionStatus = ConversationStatus;
 
-export type SessionMode = 'general' | 'design' | 'plan' | 'team' | 'meeting' | 'recording';
+export type SessionMode = 'general' | 'design' | 'plan' | 'team' | 'meeting' | 'recording' | 'novel';
 
 export interface Conversation {
   id: string;
