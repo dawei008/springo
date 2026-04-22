@@ -2,7 +2,7 @@
  * NovelSidebar — left column of NovelPanel.
  * Four tabs: Chapters / Characters / World / Timeline.
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { useNovelStore } from '@/stores/novelStore';
 import type { Character, WorldEntry, TimelineEvent } from './types';
 
@@ -45,9 +45,30 @@ function ChapterList() {
   const deleteChapter = useNovelStore((s) => s.deleteChapter);
   const updateChapter = useNovelStore((s) => s.updateChapter);
   const reorderChapters = useNovelStore((s) => s.reorderChapters);
+  const importChaptersFromFiles = useNovelStore((s) => s.importChaptersFromFiles);
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onImportClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const onImportChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const fileList = e.target.files;
+      if (!fileList || fileList.length === 0) return;
+      const ids = await importChaptersFromFiles(Array.from(fileList));
+      // Reset input so selecting the same file again re-fires the event
+      e.target.value = '';
+      if (ids.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`[NovelPanel] imported ${ids.length} chapter(s)`);
+      }
+    },
+    [importChaptersFromFiles],
+  );
 
   const onDragStart = useCallback((e: React.DragEvent, id: string) => {
     e.dataTransfer.setData('text/plain', id);
@@ -70,7 +91,26 @@ function ChapterList() {
     <>
       <div className="novel-list-header">
         <span>共 {chapterOrder.length} 章</span>
-        <button className="novel-add-btn" onClick={() => addChapter()} title="新增章节">+</button>
+        <div className="novel-list-header-actions">
+          <button
+            className="novel-add-btn"
+            onClick={onImportClick}
+            title="从 .md 文件导入章节（可多选）"
+          >
+            📥
+          </button>
+          <button className="novel-add-btn" onClick={() => addChapter()} title="新增章节">
+            +
+          </button>
+        </div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".md,.markdown,text/markdown"
+          multiple
+          style={{ display: 'none' }}
+          onChange={onImportChange}
+        />
       </div>
       <div className="novel-list">
         {chapterOrder.length === 0 && (

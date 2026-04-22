@@ -6,6 +6,7 @@ import ArtifactPanel from '@/components/ArtifactPanel/ArtifactPanel';
 import DesignPanel from '@/components/DesignPanel/DesignPanel';
 import PlanPanel from '@/components/PlanPanel/PlanPanel';
 import DesignDashboard from '@/components/DesignPanel/DesignDashboard';
+import NovelDashboard from '@/components/NovelPanel/NovelDashboard';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -484,6 +485,8 @@ export default function MainContent() {
 
   const designActive = useDesignStore((s) => s.active);
   const designVersionCount = useDesignStore((s) => s.versions.length);
+  const novelActive = useNovelStore((s) => s.active);
+  const novelChapterCount = useNovelStore((s) => s.project.chapterOrder.length);
   const isStreaming = useChatStore((s) =>
     currentSessionId ? s.isStreaming(currentSessionId) : false,
   );
@@ -497,12 +500,15 @@ export default function MainContent() {
   const pendingPrompt = useUIStore((s) => s.pendingPrompt);
   useEffect(() => { if (pendingPrompt) setDashboardDismissed(true); }, [pendingPrompt]);
   const showDesignDashboard = designActive && designVersionCount === 0 && !isStreaming && !hasMessages && !dashboardDismissed;
+  const showNovelDashboard = novelActive && novelChapterCount === 0 && !isStreaming && !hasMessages && !dashboardDismissed;
 
   return (
     <div className="main-content">
       <Header />
       {showDesignDashboard ? (
         <DesignDashboard />
+      ) : showNovelDashboard ? (
+        <NovelDashboard />
       ) : (
         <div className="chat-panel-wrapper">
           <div className="chat-area">

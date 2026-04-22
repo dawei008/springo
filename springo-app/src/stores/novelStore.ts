@@ -30,6 +30,22 @@ export interface Selection {
   end: number;
 }
 
+/**
+ * Tracks what the user last asked the AI to do, so the editor's
+ * "Apply AI reply" button knows where to splice/append the result.
+ */
+export interface PendingAIIntent {
+  kind: 'continue' | 'rewrite';
+  chapterId: string;
+  /** Only set for 'rewrite': the selection bounds at the time of request. */
+  start?: number;
+  end?: number;
+  /** Message count at the time the intent was issued, so Apply can detect fresh replies. */
+  baselineMessageCount: number;
+  /** Timestamp for display ("pending since …"). */
+  createdAt: number;
+}
+
 export interface NovelState {
   active: boolean;
   project: NovelProject;
@@ -40,6 +56,7 @@ export interface NovelState {
   currentSessionId: string | null;
   isLoading: boolean;
   isSaving: boolean;
+  pendingAIIntent: PendingAIIntent | null;
 
   activateNovelMode: () => void;
   deactivateNovelMode: () => void;
@@ -55,8 +72,28 @@ export interface NovelState {
   setActiveChapter: (id: string | null) => void;
 
   setSelection: (sel: Selection | null) => void;
+  setPendingAIIntent: (intent: PendingAIIntent | null) => void;
   applyAIWrite: (chapterId: string, mode: 'replace' | 'append' | 'insert_at', text: string, offset?: number) => void;
   spliceSelection: (chapterId: string, start: number, end: number, replacement: string) => void;
+
+  /** Concatenated word count of every chapter. */
+  totalWordCount: () => number;
+
+  /** Export the whole novel as a single markdown string (returns path written). */
+  exportAsMarkdown: () => Promise<string | null>;
+
+  /**
+   * Import one or more .md files as chapters.
+   * Each file becomes a new chapter appended to chapterOrder. Existing
+   * frontmatter (id/title/status) is respected; otherwise the filename (minus
+   * extension) is used as the title and status defaults to "draft".
+   *
+   * Accepts File objects (from an <input type="file">) or { name, content }
+   * pairs. Returns the ids of newly-added chapters in order.
+   */
+  importChaptersFromFiles: (
+    files: ReadonlyArray<File | { name: string; content: string }>,
+  ) => Promise<string[]>;
 
   upsertCharacter: (c: Character) => void;
   deleteCharacter: (name: string) => void;
@@ -121,6 +158,55 @@ function parseChapterMd(md: string): { meta: Record<string, string>; body: strin
   return { meta, body: m[2].replace(/^\n/, '') };
 }
 
+/**
+ * Matches a Markdown H2 that looks like a chapter/episode/section marker.
+ * Supports Chinese ("第 9 集：...", "第1章 XXX", "第3回 XXX", "第5话 XXX")
+ * and English ("Chapter 3 — ..."). Non-chapter H2s (like "附录" or
+ * "修订对照总览") are deliberately *not* matched, so they fold into the
+ * preceding chapter instead of becoming their own nodes.
+ */
+const CHAPTER_H2_RE =
+  /^##\s+(?:(?:第\s*[0-9零一二三四五六七八九十百千两]+\s*[集章回节卷部篇幕话].*)|(?:Chapter\s+\d+.*)|(?:Episode\s+\d+.*))$/i;
+
+/**
+ * Split a markdown body into chapter sections by scanning for chapter-pattern
+ * H2 headings. Content before the first chapter heading is returned as
+ * `preamble`. Non-chapter H2s between two chapter headings remain part of
+ * the earlier chapter's content (they become subsections of that chapter).
+ *
+ * If no chapter headings are found, returns `{ preamble: body, chapters: [] }`
+ * so the caller can fall back to "one chapter per file".
+ */
+function splitByChapterHeadings(body: string): {
+  preamble: string;
+  chapters: Array<{ title: string; content: string }>;
+} {
+  const lines = body.split('\n');
+  const chapters: Array<{ title: string; content: string }> = [];
+  const preambleLines: string[] = [];
+  let currentTitle: string | null = null;
+  let currentLines: string[] = [];
+
+  for (const line of lines) {
+    if (CHAPTER_H2_RE.test(line)) {
+      // Flush previous chapter
+      if (currentTitle !== null) {
+        chapters.push({ title: currentTitle, content: currentLines.join('\n').trim() });
+      }
+      currentTitle = line.replace(/^##\s+/, '').trim();
+      currentLines = [];
+    } else if (currentTitle === null) {
+      preambleLines.push(line);
+    } else {
+      currentLines.push(line);
+    }
+  }
+  if (currentTitle !== null) {
+    chapters.push({ title: currentTitle, content: currentLines.join('\n').trim() });
+  }
+  return { preamble: preambleLines.join('\n').trim(), chapters };
+}
+
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 
 export const useNovelStore = create<NovelState>((set, get) => ({
@@ -133,6 +219,7 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   currentSessionId: null,
   isLoading: false,
   isSaving: false,
+  pendingAIIntent: null,
 
   activateNovelMode: () => set({ active: true }),
   deactivateNovelMode: () => set({ active: false }),
@@ -148,10 +235,28 @@ export const useNovelStore = create<NovelState>((set, get) => ({
 
     const restored = sessionId ? updatedMap[sessionId] : null;
 
+    // If no prior snapshot exists, infer active from the session's own mode —
+    // a freshly-created `mode: 'novel'` session should open the novel panel
+    // immediately, without waiting for the user to re-toggle the mode.
+    let nextActive: boolean;
+    if (restored) {
+      nextActive = restored.active;
+    } else if (sessionId) {
+      // Lazy-import-safe: we don't reach across imports at top level.
+      // Hint: this cross-store peek is OK because sessionStore is always
+      // initialised before novelStore gets a sessionId.
+      const sessions = (window as unknown as { __sessionStore?: { getState: () => { sessions: Array<{ id: string; mode?: string }> } } })
+        .__sessionStore?.getState().sessions ?? [];
+      const sess = sessions.find((s) => s.id === sessionId);
+      nextActive = sess?.mode === 'novel';
+    } else {
+      nextActive = false;
+    }
+
     set({
       sessionMap: updatedMap,
       currentSessionId: sessionId,
-      active: restored ? restored.active : false,
+      active: nextActive,
       project: restored?.project ?? emptyNovel(),
       activeChapterId: restored?.activeChapterId ?? null,
       workingDir: workingDir !== undefined ? workingDir : (restored?.workingDir ?? null),
@@ -236,6 +341,115 @@ export const useNovelStore = create<NovelState>((set, get) => ({
   setActiveChapter: (id) => set({ activeChapterId: id, selection: null }),
 
   setSelection: (sel) => set({ selection: sel }),
+
+  setPendingAIIntent: (intent) => set({ pendingAIIntent: intent }),
+
+  totalWordCount: () => {
+    const { project } = get();
+    return project.chapterOrder.reduce((sum, cid) => {
+      const ch = project.chapters[cid];
+      return sum + (ch?.wordCount || 0);
+    }, 0);
+  },
+
+  exportAsMarkdown: async () => {
+    const { project, workingDir } = get();
+    if (!workingDir) return null;
+    const parts: string[] = [];
+    parts.push(`# ${project.title}`);
+    if (project.synopsis) parts.push(`\n> ${project.synopsis.split('\n').join('\n> ')}`);
+    parts.push('');
+    for (const cid of project.chapterOrder) {
+      const ch = project.chapters[cid];
+      if (!ch) continue;
+      parts.push(`\n## ${ch.title}\n`);
+      parts.push(ch.content);
+    }
+    const outputPath = `${workingDir}/${slugify(project.title || 'novel')}-export.md`;
+    await execTool('write_file', {
+      path: outputPath,
+      content: parts.join('\n'),
+    });
+    return outputPath;
+  },
+
+  importChaptersFromFiles: async (files) => {
+    const newIds: string[] = [];
+    for (const f of files) {
+      // Read content — handle both File and {name, content}
+      let rawName: string;
+      let raw: string;
+      if ('text' in f && typeof f.text === 'function') {
+        rawName = f.name;
+        raw = await f.text();
+      } else {
+        rawName = (f as { name: string; content: string }).name;
+        raw = (f as { name: string; content: string }).content;
+      }
+
+      // Strip extension + directory prefix from filename for a fallback title
+      const baseName = rawName.replace(/^.*[\\/]/, '').replace(/\.(md|markdown)$/i, '');
+
+      // If file has our own frontmatter, honor id/title/status; otherwise
+      // derive title from filename and fall back to the first H1/H2 inside.
+      const parsed = parseChapterMd(raw);
+      const fmTitle = parsed.meta.title?.trim();
+      const status = (parsed.meta.status as Chapter['status']) || 'draft';
+
+      // Try to split the body by chapter-pattern H2 headings
+      // ("## 第 9 集：...", "## Chapter 3 — ..."). If any are found, each
+      // becomes its own chapter. Otherwise fall back to one chapter per file.
+      const { preamble, chapters: sections } = splitByChapterHeadings(parsed.body);
+
+      const chaptersToAdd: Array<{ title: string; content: string }> = [];
+      if (sections.length > 0) {
+        // If there's meaningful preamble (e.g., a file-level intro or
+        // "修订对照总览"), keep it as a leading "前言" chapter so the user
+        // doesn't lose it. Empty / whitespace-only preambles are dropped.
+        if (preamble && countWords(preamble) > 20) {
+          chaptersToAdd.push({
+            title: fmTitle || baseName || '前言',
+            content: preamble,
+          });
+        }
+        for (const sec of sections) {
+          // Clean up title: "第 9 集：保险柜的密码" → keep as-is.
+          chaptersToAdd.push({ title: sec.title, content: sec.content });
+        }
+      } else {
+        // No chapter headings — whole file becomes one chapter.
+        const bodyFirstHeading = parsed.body.match(/^#+\s+(.+)$/m)?.[1]?.trim();
+        chaptersToAdd.push({
+          title: fmTitle || bodyFirstHeading || baseName || '未命名章节',
+          content: parsed.body,
+        });
+      }
+
+      for (const { title, content } of chaptersToAdd) {
+        const id = newId('ch');
+        const chapter: Chapter = {
+          id,
+          title,
+          status,
+          content,
+          wordCount: countWords(content),
+          updatedAt: Date.now(),
+        };
+        set((s) => ({
+          project: {
+            ...s.project,
+            chapters: { ...s.project.chapters, [id]: chapter },
+            chapterOrder: [...s.project.chapterOrder, id],
+          },
+          // Activate the first imported chapter so the user sees feedback
+          activeChapterId: newIds.length === 0 ? id : s.activeChapterId,
+        }));
+        newIds.push(id);
+      }
+    }
+    if (newIds.length > 0) get().scheduleAutosave();
+    return newIds;
+  },
 
   applyAIWrite: (chapterId, mode, text, offset) => {
     const ch = get().project.chapters[chapterId];

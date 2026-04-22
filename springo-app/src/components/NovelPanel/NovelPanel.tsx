@@ -3,7 +3,7 @@
  * Two-column layout: NovelSidebar (chapters/characters/world/timeline) + NovelEditor (textarea).
  * Visibility is driven by novelStore.active, mirroring DesignPanel / PlanPanel pattern.
  */
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNovelStore } from '@/stores/novelStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import NovelSidebar from './NovelSidebar';
@@ -15,9 +15,13 @@ export default function NovelPanel() {
   const workingDir = useNovelStore((s) => s.workingDir);
   const setProjectMeta = useNovelStore((s) => s.setProjectMeta);
   const saveToDisk = useNovelStore((s) => s.saveToDisk);
+  const exportAsMarkdown = useNovelStore((s) => s.exportAsMarkdown);
   const deactivate = useNovelStore((s) => s.deactivateNovelMode);
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const session = useSessionStore((s) => s.sessions.find((x) => x.id === s.currentSessionId));
+  const [showSynopsis, setShowSynopsis] = useState(false);
+
+  const totalWords = Object.values(project.chapters).reduce((sum, c) => sum + (c?.wordCount || 0), 0);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const resizeRef = useRef<HTMLDivElement>(null);
@@ -92,6 +96,9 @@ export default function NovelPanel() {
           onChange={(e) => setProjectMeta({ title: e.target.value })}
           placeholder="小说标题"
         />
+        <span className="novel-total-words" title="全书字数">
+          {totalWords.toLocaleString()} 字
+        </span>
         <div className="novel-panel-toolbar">
           {!workingDir && !session?.workingDir && (
             <span className="novel-warning" title="当前会话未设置工作目录，内容无法自动保存到磁盘">
@@ -99,21 +106,49 @@ export default function NovelPanel() {
             </span>
           )}
           <button
+            className={`novel-toolbar-btn${showSynopsis ? ' active' : ''}`}
+            onClick={() => setShowSynopsis((v) => !v)}
+            title="编辑梗概"
+          >
+            ☰ 梗概
+          </button>
+          <button
+            className="novel-toolbar-btn"
+            onClick={async () => {
+              const path = await exportAsMarkdown();
+              if (path) alert(`已导出到：${path}`);
+              else alert('没有设置工作目录，无法导出');
+            }}
+            title="导出整本小说为单个 Markdown 文件"
+          >
+            ↗ 导出
+          </button>
+          <button
             className="novel-toolbar-btn"
             onClick={() => saveToDisk().catch(() => {})}
-            title="保存"
+            title="立即保存"
           >
             ⬇
           </button>
           <button
             className="novel-toolbar-btn"
             onClick={deactivate}
-            title="关闭 Novel 模式"
+            title="关闭 Novel 面板"
           >
             ×
           </button>
         </div>
       </div>
+      {showSynopsis && (
+        <div className="novel-synopsis-editor">
+          <textarea
+            value={project.synopsis}
+            onChange={(e) => setProjectMeta({ synopsis: e.target.value })}
+            placeholder="写一段梗概（一句话或一段话概括全书），AI 在续写和改写时会自动参考此处。"
+            rows={4}
+          />
+        </div>
+      )}
       <div className="novel-panel-body">
         <NovelSidebar />
         <NovelEditor />

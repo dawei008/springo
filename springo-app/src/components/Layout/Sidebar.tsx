@@ -278,11 +278,11 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 
   const handleOpenNovelStudio = useCallback(() => {
     const sid = useSessionStore.getState().createSession(undefined, 'novel');
-    setTimeout(() => {
-      useModeStore.getState().switchMode('novel');
-      // switchMode will call activateMode('novel') which loads from workingDir if present
-      void sid;
-    }, 100);
+    // MainContent's switchSession effect (triggered by the sessionId change)
+    // will call modeStore.switchSession and activate novel mode automatically
+    // based on session.mode. We do NOT call switchMode('novel') here because
+    // that would toggle novel → general when the effect already flipped it on.
+    void sid;
   }, []);
 
   const handleMeetingToggle = useCallback(() => {
