@@ -703,22 +703,38 @@ async def messages_auto_api(
                     if stop_reason and stop_reason != "empty_response":
                         _empty_retries = 0
 
-                    # Handle empty/failed Bedrock response — retry up to 2 times
+                    # Handle empty/failed Bedrock response — retry with exponential backoff.
+                    # Bedrock returns empty streams (0 chunks) under load or with large
+                    # contexts + many tools.  bedrock.py already retries 3 times internally;
+                    # this outer retry refreshes the session and forces context compaction
+                    # to reduce request size.
                     if not stop_reason or stop_reason == "empty_response":
                         _empty_retries += 1
-                        if _empty_retries <= 2:
+                        if _empty_retries <= 3:
+                            _backoff = min(2 ** (_empty_retries - 1) + 1, 8)
                             logger.warning(
                                 f"[Auto] Empty response (stop_reason={stop_reason}) at iteration {iteration}, "
-                                f"session={session_id}, retry {_empty_retries}/2"
+                                f"session={session_id}, retry {_empty_retries}/3, backoff={_backoff}s"
                             )
                             yield SSEEventBuilder.heartbeat(0, "empty_response_retry")
-                            await asyncio.sleep(1)
+                            # On 2nd+ retry: force context compaction to shrink request
+                            if _empty_retries >= 2:
+                                try:
+                                    _pre_tokens = count_messages_tokens(messages)
+                                    messages = truncate_tool_results(messages, max_size=4096)
+                                    _post_tokens = count_messages_tokens(messages)
+                                    if _pre_tokens != _post_tokens:
+                                        logger.info(f"[Auto] Compacted context for empty retry: {_pre_tokens:,} -> {_post_tokens:,} tokens")
+                                        _saved_msg_count = 0
+                                except Exception:
+                                    pass
+                            await asyncio.sleep(_backoff)
                             content_blocks = []
                             tool_uses = []
                             continue  # Re-enter while loop to retry model call
                         else:
                             logger.error(
-                                f"[Auto] Empty response persists after 2 retries, session={session_id}"
+                                f"[Auto] Empty response persists after 3 retries, session={session_id}"
                             )
 
                     # Handle max_tokens truncation during tool call generation:

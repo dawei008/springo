@@ -1107,10 +1107,15 @@ class BedrockService:
         body.pop("_original_model", None)
         body.pop("extended_context", None)
 
-        # Retry connection phase for 429 throttling
-        response = None
-        client_ctx = None
+        body_json = json.dumps(body)
+        message_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+        # Retry wrapper: handles both connection errors AND empty stream responses.
+        # Bedrock occasionally returns 0 chunks (empty stream) especially for large
+        # contexts with many tools.  We retry with exponential backoff, refreshing
+        # the aioboto3 session after repeated failures.
         for attempt in range(max_retries):
+            client_ctx = None
             try:
                 client_ctx = self.session.client(
                     'bedrock-runtime',
@@ -1120,125 +1125,119 @@ class BedrockService:
                 client = await client_ctx.__aenter__()
                 response = await client.invoke_model_with_response_stream(
                     modelId=model_id,
-                    body=json.dumps(body),
+                    body=body_json,
                     contentType="application/json",
                     accept="application/json"
                 )
-                break  # Connection succeeded
-            except Exception as e:
-                error_str = str(e)
-                if _is_retryable_error(error_str) and attempt < max_retries - 1:
-                    backoff = min(2 ** attempt + random.random(), 8)
-                    logger.warning(f"Bedrock stream retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
-                    if client_ctx:
-                        try:
-                            await client_ctx.__aexit__(None, None, None)
-                        except Exception:
-                            pass
-                    await asyncio.sleep(backoff)
-                    continue
-                if client_ctx:
+
+                current_block_index = -1
+                started_message = False
+                chunk_timeout = settings.bedrock_stream_chunk_timeout
+                _chunk_count = 0
+
+                body_iter = response['body'].__aiter__()
+                while True:
                     try:
-                        await client_ctx.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                raise
+                        event = await asyncio.wait_for(body_iter.__anext__(), timeout=chunk_timeout)
+                    except StopAsyncIteration:
+                        break
+                    except asyncio.TimeoutError:
+                        logger.error(f"Bedrock stream stalled: no chunk received in {chunk_timeout}s (got {_chunk_count} chunks before stall)")
+                        raise Exception(f"Stream stalled: no data received in {chunk_timeout} seconds")
+                    _chunk_count += 1
+                    chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
+                    chunk_type = chunk.get("type")
 
-        if response is None:
-            logger.error(f"Bedrock connection failed after {max_retries} retries for {model_id}")
-            yield f"event: error\ndata: {json.dumps({'type': 'error', 'error': {'type': 'connection_error', 'message': f'Failed to connect to Bedrock after {max_retries} retries'}})}\n\n"
-            return
+                    if chunk_type == "message_start":
+                        started_message = True
+                        msg = chunk.get("message", {})
+                        msg["model"] = original_model
+                        yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': msg})}\n\n"
 
-        try:
-            message_id = f"msg_{uuid.uuid4().hex[:24]}"
-            current_block_index = -1
-            started_message = False
-            chunk_timeout = settings.bedrock_stream_chunk_timeout
-            _chunk_count = 0
+                    elif chunk_type == "content_block_start":
+                        current_block_index = chunk.get("index", 0)
+                        content_block = chunk.get("content_block", {})
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': content_block})}\n\n"
 
-            body_iter = response['body'].__aiter__()
-            while True:
+                    elif chunk_type == "content_block_delta":
+                        index = chunk.get("index", current_block_index)
+                        delta = chunk.get("delta", {})
+                        yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': index, 'delta': delta})}\n\n"
+
+                    elif chunk_type == "content_block_stop":
+                        index = chunk.get("index", current_block_index)
+                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
+
+                    elif chunk_type == "message_delta":
+                        delta_data = {
+                            'type': 'message_delta',
+                            'delta': chunk.get('delta', {}),
+                            'usage': chunk.get('usage', {})
+                        }
+                        yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
+
+                    elif chunk_type == "message_stop":
+                        yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+
+                # Stream finished — close client cleanly BEFORE checking if empty
                 try:
-                    event = await asyncio.wait_for(body_iter.__anext__(), timeout=chunk_timeout)
-                except StopAsyncIteration:
-                    break
-                except asyncio.TimeoutError:
-                    logger.error(f"Bedrock stream stalled: no chunk received in {chunk_timeout}s (got {_chunk_count} chunks before stall)")
-                    raise Exception(f"Stream stalled: no data received in {chunk_timeout} seconds")
-                _chunk_count += 1
-                chunk = json.loads(event.get("chunk", {}).get("bytes", b"{}"))
-                chunk_type = chunk.get("type")
+                    await client_ctx.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                client_ctx = None
 
-                if chunk_type == "message_start":
-                    started_message = True
-                    msg = chunk.get("message", {})
-                    msg["model"] = original_model
-                    yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': msg})}\n\n"
+                if started_message:
+                    return  # Success — chunks were yielded
 
-                elif chunk_type == "content_block_start":
-                    current_block_index = chunk.get("index", 0)
-                    content_block = chunk.get("content_block", {})
-                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': current_block_index, 'content_block': content_block})}\n\n"
-
-                elif chunk_type == "content_block_delta":
-                    index = chunk.get("index", current_block_index)
-                    delta = chunk.get("delta", {})
-                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': index, 'delta': delta})}\n\n"
-
-                elif chunk_type == "content_block_stop":
-                    index = chunk.get("index", current_block_index)
-                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
-
-                elif chunk_type == "message_delta":
-                    delta_data = {
-                        'type': 'message_delta',
-                        'delta': chunk.get('delta', {}),
-                        'usage': chunk.get('usage', {})
-                    }
-                    yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
-
-                elif chunk_type == "message_stop":
-                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
-
-            # Ensure message was started
-            if not started_message:
+                # Empty stream (0 chunks) — retry with backoff
                 _msg_count = len(body.get("messages", []))
                 _sys_len = len(body.get("system", ""))
                 _max_tok = body.get("max_tokens", "?")
                 _tools_count = len(body.get("tools", []))
                 logger.warning(
-                    f"Bedrock stream returned empty response (0 chunks) for {model_id}: "
+                    f"Bedrock stream returned empty (0 chunks) for {model_id}, "
+                    f"attempt {attempt + 1}/{max_retries}: "
                     f"msgs={_msg_count}, system_len={_sys_len}, max_tokens={_max_tok}, tools={_tools_count}"
                 )
+                if attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random() * 2, 10)
+                    logger.info(f"Retrying empty stream in {backoff:.1f}s (attempt {attempt + 2}/{max_retries})")
+                    if attempt >= 1:
+                        self.refresh_session()
+                        logger.info("Refreshed aioboto3 session after repeated empty stream")
+                    await asyncio.sleep(backoff)
+                    continue
+
+                # All retries exhausted — emit synthetic empty_response
+                logger.error(f"Bedrock empty stream persists after {max_retries} attempts for {model_id}")
                 empty_msg = {
-                    'id': message_id,
-                    'type': 'message',
-                    'role': 'assistant',
-                    'content': [],
-                    'model': original_model,
-                    'stop_reason': 'empty_response',
-                    'stop_sequence': None,
+                    'id': message_id, 'type': 'message', 'role': 'assistant',
+                    'content': [], 'model': original_model,
+                    'stop_reason': 'empty_response', 'stop_sequence': None,
                     'usage': {'input_tokens': 0, 'output_tokens': 0}
                 }
                 yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': empty_msg})}\n\n"
-                delta_data = {
-                    'type': 'message_delta',
-                    'delta': {'stop_reason': 'empty_response'},
-                    'usage': {'output_tokens': 0},
-                }
-                yield f"event: message_delta\ndata: {json.dumps(delta_data)}\n\n"
+                yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'empty_response'}, 'usage': {'output_tokens': 0}})}\n\n"
                 yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                return
 
-        except Exception as e:
-            logger.error(f"Bedrock streaming error: {e}")
-            error_data = format_error_response(e)
-            yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
-        finally:
-            if client_ctx:
-                try:
-                    await client_ctx.__aexit__(None, None, None)
-                except Exception:
-                    pass
+            except Exception as e:
+                error_str = str(e)
+                if _is_retryable_error(error_str) and attempt < max_retries - 1:
+                    backoff = min(2 ** attempt + random.random(), 8)
+                    logger.warning(f"Bedrock stream retryable error (attempt {attempt + 1}/{max_retries}): {error_str[:120]}. Retrying in {backoff:.1f}s...")
+                    await asyncio.sleep(backoff)
+                    continue
+                logger.error(f"Bedrock streaming error: {e}", exc_info=True)
+                error_data = format_error_response(e)
+                yield f"event: error\ndata: {json.dumps(error_data)}\n\n"
+                return
+            finally:
+                if client_ctx:
+                    try:
+                        await client_ctx.__aexit__(None, None, None)
+                    except Exception:
+                        pass
 
     async def invoke_model_stream_text(
         self,
