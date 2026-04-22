@@ -581,29 +581,38 @@ async def messages_auto_api(
                     _current_block_idx = -1
 
                     # Stream response (with safety net for token limit errors)
-                    # Wrap with heartbeat so the frontend SSE timeout doesn't fire
-                    # while Bedrock is connecting / thinking before the first chunk.
+                    # Stream with concurrent heartbeat — DO NOT use asyncio.wait_for
+                    # on the stream iterator.  wait_for cancels the underlying coroutine
+                    # on timeout, which corrupts aioboto3's stream state and causes
+                    # the generator to return 0 chunks (the root cause of session
+                    # interruptions).  Instead, run a background heartbeat task.
                     _prompt_too_long = False
                     _stream_start = asyncio.get_event_loop().time()
                     _hb_interval = settings.sse_heartbeat_interval
+                    _heartbeat_queue: asyncio.Queue[str] = asyncio.Queue()
+                    _stream_done = False
+
+                    async def _heartbeat_emitter():
+                        while not _stream_done:
+                            await asyncio.sleep(_hb_interval)
+                            if not _stream_done:
+                                elapsed = asyncio.get_event_loop().time() - _stream_start
+                                _heartbeat_queue.put_nowait(
+                                    SSEEventBuilder.heartbeat(elapsed, f"llm_iter_{iteration}")
+                                )
+
+                    _hb_task = asyncio.create_task(_heartbeat_emitter())
                     try:
-                        _stream_iter = bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format).__aiter__()
-                        while True:
+                        async for event in bedrock.invoke_model_stream(model_id, bedrock_body, original_model, api_format=api_format):
                             # Check cancellation
                             if cancel_event and cancel_event.is_set():
                                 logger.info(f"[Auto] Cancelled during Bedrock stream at iteration {iteration}")
                                 stop_reason = "cancelled"
                                 break
 
-                            # Wait for next chunk with heartbeat fallback
-                            try:
-                                event = await asyncio.wait_for(_stream_iter.__anext__(), timeout=_hb_interval)
-                            except StopAsyncIteration:
-                                break
-                            except asyncio.TimeoutError:
-                                elapsed = asyncio.get_event_loop().time() - _stream_start
-                                yield SSEEventBuilder.heartbeat(elapsed, f"llm_iter_{iteration}")
-                                continue
+                            # Drain any pending heartbeats first
+                            while not _heartbeat_queue.empty():
+                                yield _heartbeat_queue.get_nowait()
 
                             yield event
 
@@ -669,6 +678,13 @@ async def messages_auto_api(
                             logger.error(f"[Auto] Stream error at iteration {iteration}: {_err_msg}")
                             yield SSEEventBuilder.error(f"Stream error: {_err_msg}", error_type="stream_error")
                             break  # Exit loop gracefully instead of crashing the generator
+                    finally:
+                        _stream_done = True
+                        _hb_task.cancel()
+                        try:
+                            await _hb_task
+                        except asyncio.CancelledError:
+                            pass
 
                     if _prompt_too_long:
                         continue  # Retry the iteration with compacted messages
