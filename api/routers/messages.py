@@ -717,17 +717,34 @@ async def messages_auto_api(
                                 f"session={session_id}, retry {_empty_retries}/3, backoff={_backoff}s"
                             )
                             yield SSEEventBuilder.heartbeat(0, "empty_response_retry")
-                            # On 2nd+ retry: force context compaction to shrink request
-                            if _empty_retries >= 2:
-                                try:
-                                    _pre_tokens = count_messages_tokens(messages)
+                            # Force aggressive context compaction to reduce request size
+                            try:
+                                _pre_tokens = count_messages_tokens(messages)
+                                if _empty_retries >= 2 and _pre_tokens > 80000:
+                                    # Full summarization — drastic reduction
+                                    logger.info(f"[Auto] Triggering full compaction ({_pre_tokens:,} tokens) for empty retry {_empty_retries}")
+                                    yield SSEEventBuilder.context_compact('empty_retry', 'haiku', _pre_tokens)
+                                    messages = truncate_tool_results(messages, max_size=2048)
+                                    result = await summarize_context(messages, bedrock_service=bedrock, keep_recent=RECENT_MESSAGES_TO_KEEP, compact_model=compact_model)
+                                    if result.get("success") and not result.get("skipped"):
+                                        messages = result["messages"]
+                                        _saved_msg_count = 0
+                                        _post_tokens = count_messages_tokens(messages)
+                                        logger.info(f"[Auto] Full compaction: {_pre_tokens:,} -> {_post_tokens:,} tokens")
+                                        yield SSEEventBuilder.context_compact_done(0, len(messages), _post_tokens)
+                                    else:
+                                        messages = truncate_tool_results(messages, max_size=4096)
+                                        _post_tokens = count_messages_tokens(messages)
+                                        logger.info(f"[Auto] Truncated context for empty retry: {_pre_tokens:,} -> {_post_tokens:,} tokens")
+                                        _saved_msg_count = 0
+                                else:
                                     messages = truncate_tool_results(messages, max_size=4096)
                                     _post_tokens = count_messages_tokens(messages)
                                     if _pre_tokens != _post_tokens:
-                                        logger.info(f"[Auto] Compacted context for empty retry: {_pre_tokens:,} -> {_post_tokens:,} tokens")
+                                        logger.info(f"[Auto] Truncated context for empty retry: {_pre_tokens:,} -> {_post_tokens:,} tokens")
                                         _saved_msg_count = 0
-                                except Exception:
-                                    pass
+                            except Exception as _compact_err:
+                                logger.debug(f"[Auto] Compaction during empty retry failed: {_compact_err}")
                             await asyncio.sleep(_backoff)
                             content_blocks = []
                             tool_uses = []

@@ -1132,6 +1132,7 @@ class BedrockService:
 
                 current_block_index = -1
                 started_message = False
+                got_stop_reason = False
                 chunk_timeout = settings.bedrock_stream_chunk_timeout
                 _chunk_count = 0
 
@@ -1169,6 +1170,7 @@ class BedrockService:
                         yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': index})}\n\n"
 
                     elif chunk_type == "message_delta":
+                        got_stop_reason = bool(chunk.get('delta', {}).get('stop_reason'))
                         delta_data = {
                             'type': 'message_delta',
                             'delta': chunk.get('delta', {}),
@@ -1186,16 +1188,31 @@ class BedrockService:
                     pass
                 client_ctx = None
 
-                if started_message:
-                    return  # Success — chunks were yielded
+                if started_message and got_stop_reason:
+                    return  # Success — complete response received
 
-                # Empty stream (0 chunks) — retry with backoff
                 _msg_count = len(body.get("messages", []))
                 _sys_len = len(body.get("system", ""))
                 _max_tok = body.get("max_tokens", "?")
                 _tools_count = len(body.get("tools", []))
+
+                if started_message and not got_stop_reason:
+                    # Partial stream: message_start arrived but stream ended
+                    # before message_delta with stop_reason.  Can't retry at
+                    # this level because SSE events were already yielded.
+                    # Emit a synthetic message_delta so the auto-loop sees
+                    # empty_response and can retry at its level.
+                    logger.warning(
+                        f"Bedrock partial stream ({_chunk_count} chunks, no stop_reason) for {model_id}: "
+                        f"msgs={_msg_count}, max_tokens={_max_tok}, tools={_tools_count}"
+                    )
+                    yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': 'empty_response'}, 'usage': {'output_tokens': 0}})}\n\n"
+                    yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+                    return
+
+                # Zero-chunk empty stream — safe to retry (nothing yielded yet)
                 logger.warning(
-                    f"Bedrock stream returned empty (0 chunks) for {model_id}, "
+                    f"Bedrock empty stream (0 chunks) for {model_id}, "
                     f"attempt {attempt + 1}/{max_retries}: "
                     f"msgs={_msg_count}, system_len={_sys_len}, max_tokens={_max_tok}, tools={_tools_count}"
                 )
