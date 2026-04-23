@@ -27,7 +27,7 @@
     --border-strong: rgba(0, 0, 0, 0.18);
     --sidebar-bg: #f7f7f8;
     --code-bg: #1e1e2e;
-    --code-text: #e0def4;
+    --code-text: #f0eeff;
 
     /* === Semantic Colors === */
     --success: #34a853;
@@ -116,7 +116,7 @@
     --border-strong: rgba(255, 255, 255, 0.20);
     --sidebar-bg: #161616;
     --code-bg: #0d0d14;
-    --code-text: #e0def4;
+    --code-text: #f0eeff;
     --success-bg: rgba(52, 168, 83, 0.15);
     --success-text: #6dd58c;
     --warning-bg: rgba(245, 158, 11, 0.15);
@@ -146,7 +146,7 @@
         --border-strong: rgba(255, 255, 255, 0.20);
         --sidebar-bg: #161616;
         --code-bg: #0d0d14;
-        --code-text: #e0def4;
+        --code-text: #f0eeff;
         --success-bg: rgba(52, 168, 83, 0.15);
         --success-text: #6dd58c;
         --warning-bg: rgba(245, 158, 11, 0.15);

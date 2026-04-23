@@ -45,13 +45,13 @@ function mapArtifactType(typeAttr: string): ModelArtifact['type'] {
 
 let modelArtifactCounter = 0
 
-import type { DesignFile, DesignFileType } from '@/types'
+import type { ArtifactFile } from '@/stores/unifiedArtifactStore'
 
 /**
  * Parse <springo-file> tags from within a design/project artifact.
  */
-export function parseSpringoFiles(content: string): DesignFile[] {
-  const files: DesignFile[] = []
+export function parseSpringoFiles(content: string): ArtifactFile[] {
+  const files: ArtifactFile[] = []
   const re = /<springo-file\s+([^>]*?)>([\s\S]*?)<\/springo-file>/g
   let m: RegExpExecArray | null
   while ((m = re.exec(content)) !== null) {
@@ -61,7 +61,7 @@ export function parseSpringoFiles(content: string): DesignFile[] {
     const typeMatch = attrs.match(/type="([^"]*)"/)
     const path = pathMatch?.[1] || `file-${files.length}`
     const rawType = typeMatch?.[1] || ''
-    let fileType: DesignFileType = 'text'
+    let fileType: ArtifactFile['type'] = 'text'
     if (rawType.includes('jsx') || path.endsWith('.jsx') || path.endsWith('.tsx')) fileType = 'jsx'
     else if (rawType.includes('css') || path.endsWith('.css')) fileType = 'css'
     else if (rawType.includes('html') || path.endsWith('.html')) fileType = 'html'

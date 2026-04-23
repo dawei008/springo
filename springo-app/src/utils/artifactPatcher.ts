@@ -1,4 +1,6 @@
-import type { DesignFile, DesignFileType } from '@/types';
+import type { ArtifactFile } from '@/stores/unifiedArtifactStore';
+
+type ArtifactFileType = ArtifactFile['type'];
 
 // ── Types ──────────────────────────────────────────────────────
 
@@ -8,16 +10,17 @@ export interface FilePatch {
   path: string;
   action: PatchAction;
   content: string;
-  fileType: DesignFileType;
+  fileType: ArtifactFileType;
 }
 
 export interface DesignPatch {
   files: FilePatch[];
+  artifactId?: string;
 }
 
 // ── Helpers ────────────────────────────────────────────────────
 
-function inferFileType(path: string): DesignFileType {
+function inferFileType(path: string): ArtifactFileType {
   const ext = path.split('.').pop()?.toLowerCase();
   switch (ext) {
     case 'jsx':
@@ -54,10 +57,14 @@ export function hasPatch(raw: string): boolean {
  * Returns `null` when no patch block is found.
  */
 export function parsePatch(raw: string): DesignPatch | null {
-  const patchMatch = raw.match(/<springo-patch>([\s\S]*?)<\/springo-patch>/);
+  const patchMatch = raw.match(/<springo-patch(\s[^>]*)?>(([\s\S]*?))<\/springo-patch>/);
   if (!patchMatch) return null;
 
-  const patchBody = patchMatch[1];
+  const attrsStr = patchMatch[1] || '';
+  const artifactIdMatch = attrsStr.match(/artifact="([^"]*)"/);
+  const artifactId = artifactIdMatch?.[1] || undefined;
+
+  const patchBody = patchMatch[2];
 
   const fileRegex =
     /<springo-file\s+([^>]*)>([\s\S]*?)<\/springo-file>/g;
@@ -90,44 +97,32 @@ export function parsePatch(raw: string): DesignPatch | null {
     });
   }
 
-  return { files };
+  return { files, artifactId };
 }
 
-/**
- * Apply a `DesignPatch` to an existing array of `DesignFile`s and return
- * a new array reflecting the patch operations.
- */
-export function applyPatchToFiles(
-  currentFiles: DesignFile[],
-  patch: DesignPatch,
-): DesignFile[] {
-  const result = currentFiles.map((f) => ({ ...f }));
+export interface ArtifactAction {
+  artifactId?: string;
+  payload: Record<string, unknown>;
+}
 
-  for (const fp of patch.files) {
-    switch (fp.action) {
-      case 'replace': {
-        const idx = result.findIndex((f) => f.path === fp.path);
-        if (idx !== -1) {
-          result[idx] = { path: fp.path, type: fp.fileType, content: fp.content };
-        } else {
-          // Not found — treat as create
-          result.push({ path: fp.path, type: fp.fileType, content: fp.content });
-        }
-        break;
-      }
-      case 'create': {
-        result.push({ path: fp.path, type: fp.fileType, content: fp.content });
-        break;
-      }
-      case 'delete': {
-        const idx = result.findIndex((f) => f.path === fp.path);
-        if (idx !== -1) {
-          result.splice(idx, 1);
-        }
-        break;
-      }
-    }
+export function hasAction(raw: string): boolean {
+  return raw.includes('<springo-action');
+}
+
+export function parseAction(raw: string): ArtifactAction | null {
+  const match = raw.match(/<springo-action(\s[^>]*)?>(([\s\S]*?))<\/springo-action>/);
+  if (!match) return null;
+
+  const attrsStr = match[1] || '';
+  const artifactIdMatch = attrsStr.match(/artifact="([^"]*)"/);
+  const artifactId = artifactIdMatch?.[1] || undefined;
+
+  const body = match[2].trim();
+  try {
+    const payload = JSON.parse(body);
+    return { artifactId, payload };
+  } catch {
+    return null;
   }
-
-  return result;
 }
+

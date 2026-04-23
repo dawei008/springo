@@ -860,25 +860,7 @@ export interface DesignError {
   timestamp: number;
 }
 
-// ======================== Design Mode ========================
-
-export type DesignFileType = 'html' | 'jsx' | 'css' | 'json' | 'text';
-
-export interface DesignFile {
-  path: string;           // Virtual path e.g. "components/Header.jsx"
-  type: DesignFileType;
-  content: string;
-}
-
-export interface DesignVersion {
-  id: string;
-  html: string;           // Legacy: single HTML string
-  files: DesignFile[];    // Multi-file project (empty for legacy single-HTML)
-  title: string;
-  prompt: string;
-  timestamp: number;
-  entryFile?: string;     // Entry point file path (default: "index.html")
-}
+// ======================== Design System ========================
 
 export interface DesignSystemSource {
   companyBlurb: string;

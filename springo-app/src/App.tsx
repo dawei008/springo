@@ -32,11 +32,7 @@ export default function App() {
     loadSettings()
     loadModels()
     loadWorkingDir()
-    loadSessions().then(() => {
-      import('@/stores/modeStore').then(({ useModeStore }) => {
-        useModeStore.getState().hydrateFromSessions();
-      });
-    })
+    loadSessions()
     useToolsStore.getState().fetchAll()
     useScheduleStore.getState().loadTasks()
   }, [loadSettings, loadModels, loadWorkingDir, loadSessions])

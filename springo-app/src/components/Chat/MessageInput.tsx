@@ -5,35 +5,58 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useToolsStore } from '@/stores/toolsStore';
 import { usePlanStore } from '@/stores/planStore';
-import { useDesignStore } from '@/stores/designStore';
+import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { api } from '@/services/api';
-import type { Attachment, Skill, DesignVersion } from '@/types';
+import type { Attachment, Skill } from '@/types';
 import ToolsPicker from './ToolsPicker';
 
 const BASE_URL = 'http://127.0.0.1:8081';
 
-/** Build design context string for iteration — serializes multi-file projects as springo-file blocks */
-function buildDesignContext(design: DesignVersion): string {
-  if (design.files && design.files.length > 0) {
-    const filesBlock = design.files.map(f =>
-      `<springo-file path="${f.path}" type="text/${f.type}">\n${f.content}\n</springo-file>`
-    ).join('\n\n');
+function escXml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
-    const ds = useDesignStore.getState().designSystem;
-    const pinned = useDesignStore.getState().pinnedElement;
+function buildArtifactContext(): string | undefined {
+  const store = useUnifiedArtifactStore.getState();
+  const artifact = store.activeArtifactId ? store.artifacts[store.activeArtifactId] : null;
+  if (!artifact) return undefined;
 
-    let ctx = '<design-context>\n';
-    if (ds) {
-      ctx += `<design-system>\n  brandName: ${ds.brandName || ''}\n  colors: ${JSON.stringify(ds.colors)}\n  fonts: ${JSON.stringify(ds.fonts)}\n</design-system>\n\n`;
+  const totalLines = artifact.files.reduce((sum, f) => sum + f.content.split('\n').length, 0);
+  const includeFullContent = totalLines < 500;
+
+  let ctx = `<artifact-context>\n`;
+  ctx += `  <artifact name="${escXml(artifact.name)}" type="${escXml(artifact.type)}" id="${escXml(artifact.id)}">\n`;
+  ctx += `    <state>\n      ${JSON.stringify(artifact.state)}\n    </state>\n`;
+
+  if (includeFullContent) {
+    ctx += `    <files count="${artifact.files.length}">\n`;
+    for (const f of artifact.files) {
+      ctx += `<springo-file path="${escXml(f.path)}" type="text/${f.type}">\n${f.content}\n</springo-file>\n`;
     }
-    ctx += `<current-files>\n${filesBlock}\n</current-files>\n`;
-    if (pinned) {
-      ctx += `\n<pinned-element>\n  component: ${pinned.componentName}\n  cssPath: ${pinned.cssPath}\n  tagName: ${pinned.tagName}${pinned.className ? `\n  className: ${pinned.className}` : ''}${pinned.id ? `\n  id: ${pinned.id}` : ''}\n</pinned-element>\n`;
+    ctx += `    </files>\n`;
+  } else {
+    ctx += `    <files count="${artifact.files.length}">\n`;
+    for (const f of artifact.files) {
+      const lines = f.content.split('\n').length;
+      ctx += `      <file path="${escXml(f.path)}" lines="${lines}" />\n`;
     }
-    ctx += '</design-context>';
-    return ctx;
+    ctx += `    </files>\n`;
   }
-  return design.html;
+
+  const pinned = store.pinnedElement;
+  if (pinned) {
+    ctx += `    <pinned-element>\n`;
+    ctx += `      component: ${pinned.componentName}\n`;
+    ctx += `      cssPath: ${pinned.cssPath}\n`;
+    ctx += `      tagName: ${pinned.tagName}\n`;
+    if (pinned.className) ctx += `      className: ${pinned.className}\n`;
+    if (pinned.id) ctx += `      id: ${pinned.id}\n`;
+    ctx += `    </pinned-element>\n`;
+  }
+
+  ctx += `  </artifact>\n`;
+  ctx += `</artifact-context>`;
+  return ctx;
 }
 
 const FILE_ACCEPT =
@@ -269,31 +292,23 @@ export default function MessageInput() {
 
     if (isStreaming) return;
 
-    // Design mode: /design activates design mode (with optional initial prompt)
+    // /design — send as a design-mode message
     const designMatch = content.match(/^\/design(?:\s+(.+))?/);
     if (designMatch) {
       const designPrompt = designMatch[1]?.trim();
-      let convId = currentSessionId;
-      if (!convId) convId = useSessionStore.getState().createSession();
-      const { useModeStore } = await import('@/stores/modeStore');
-      useModeStore.getState().switchMode('design');
       if (!designPrompt) {
-        // Just activate design mode, no message to send
         setText('');
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
         return;
       }
-      // Fall through with the prompt text — design_mode flag will be attached below
+      let convId = currentSessionId;
+      if (!convId) convId = useSessionStore.getState().createSession();
       setText('');
-      if (textareaRef.current) textareaRef.current.style.height = 'auto';
-      // Replace content with just the design prompt for sending
-      const designContent = designPrompt;
       setAttachments([]);
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
       const currentSettings = useSettingsStore.getState().settings;
-      const designSystem = useDesignStore.getState().designSystem;
-      const prevDesign = useDesignStore.getState().currentDesign();
-      const designContext = prevDesign ? buildDesignContext(prevDesign) : undefined;
-      await useChatStore.getState().sendMessage(convId, designContent, [], {
+      const artifactCtx = buildArtifactContext();
+      await useChatStore.getState().sendMessage(convId, designPrompt, [], {
         model: currentSettings.model,
         maxTokens: currentSettings.maxTokens,
         temperature: currentSettings.temperature,
@@ -301,8 +316,7 @@ export default function MessageInput() {
         compactModel: currentSettings.compactModel,
         sessionId: convId,
         designMode: true,
-        designSystem: designSystem as unknown as Record<string, unknown> || undefined,
-        designContext,
+        ...(artifactCtx ? { designContext: artifactCtx } : {}),
       });
       return;
     }
@@ -350,16 +364,13 @@ export default function MessageInput() {
     }));
 
     const currentSettings = useSettingsStore.getState().settings;
-    const isDesignMode = useDesignStore.getState().active;
-    const designSystem = isDesignMode ? useDesignStore.getState().designSystem : null;
-    const prevDesign = isDesignMode ? useDesignStore.getState().currentDesign() : null;
-    const designContext = prevDesign ? buildDesignContext(prevDesign) : undefined;
-    const pinnedEl = isDesignMode ? useDesignStore.getState().pinnedElement : null;
+    const artifactCtx = buildArtifactContext();
+    const artifactPinned = useUnifiedArtifactStore.getState().pinnedElement;
 
     let finalContent = content;
-    if (isDesignMode && pinnedEl) {
-      finalContent = `[Pinned element: ${pinnedEl.componentName} (${pinnedEl.tagName}) at "${pinnedEl.cssPath}"]\n\n${content}`;
-      useDesignStore.getState().clearPin();
+    if (artifactPinned) {
+      finalContent = `[Pinned element: ${artifactPinned.componentName} (${artifactPinned.tagName}) at "${artifactPinned.cssPath}"]\n\n${content}`;
+      useUnifiedArtifactStore.getState().clearPin();
     }
 
     await useChatStore.getState().sendMessage(convId, finalContent, atts, {
@@ -369,11 +380,7 @@ export default function MessageInput() {
       systemPrompt: currentSettings.systemPrompt,
       compactModel: currentSettings.compactModel,
       sessionId: convId,
-      ...(isDesignMode ? {
-        designMode: true,
-        designSystem: designSystem as unknown as Record<string, unknown> || undefined,
-        designContext,
-      } : {}),
+      ...(artifactCtx ? { designContext: artifactCtx } : {}),
     });
 
     if (useUIStore.getState().activeSkill) {

@@ -1,17 +1,19 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
 import ArtifactRenderer, { extractModelArtifacts, parseSpringoFiles } from '@/components/Visual/ArtifactRenderer';
-import { hasPatch, parsePatch } from '@/utils/designPatchParser';
+import { hasPatch, parsePatch, hasAction, parseAction } from '@/utils/artifactPatcher';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import type { ArtifactType } from '@/stores/artifactStore';
-import { useDesignStore, createDesignId } from '@/stores/designStore';
+import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useTeamStore } from '@/stores/teamStore';
 import type { Message as MessageType, ContentBlock, ToolUseBlock } from '@/types';
+
+const PATH_KEYS = ['file_path', 'filePath', 'path', 'output_path', 'outputPath', 'filename'];
 
 // ==================== SVG Avatar Icons ====================
 
@@ -558,7 +560,6 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
   const isDelegationResult = message.isDelegationResult || false;
   const isTaskResult = message.isTaskResult || false;
   const isThinking = message.isThinking || false;
-  const designActive = useDesignStore((s) => s.active);
 
   const { avatar, label, extraClass } = useMemo(() => {
     if (isDelegationResult) {
@@ -584,101 +585,86 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
     );
   }, [message.mergedContent, message.displayContent, message.content]);
 
-  // Extract model-generated artifacts (<springo-artifact> tags)
+  // Extract model-generated artifacts (<springo-artifact> tags) — pure derivation
   const { textAfterArtifacts, modelArtifacts } = useMemo(() => {
     if (message.role !== 'assistant' || !rawText) return { textAfterArtifacts: rawText, modelArtifacts: [] };
     const { cleaned, artifacts } = extractModelArtifacts(rawText);
+    return { textAfterArtifacts: cleaned, modelArtifacts: artifacts };
+  }, [message.role, rawText]);
 
-    // Design mode: route artifacts to design store as new versions
-    if (designActive) {
-      // Handle complete artifacts
-      for (let ai = 0; ai < artifacts.length; ai++) {
-        const a = artifacts[ai];
-        const isProject = (a as any)._isProject === true;
-        const isHtml = a.type === 'html' && !isProject;
-        if (!isProject && !isHtml) continue;
+  // Route artifacts/patches/actions to stores (side effects)
+  useEffect(() => {
+    if (message.role !== 'assistant' || !rawText) return;
+    const msgId = (message as any).id || message.timestamp || 0;
 
-        const stableId = `design-${message.id}-${ai}`;
-        const store = useDesignStore.getState();
-        const existingIdx = store.versions.findIndex((v) => v.id === stableId);
-        const title = a.title || `Design v${store.versions.length + 1}`;
-        const ts = message.timestamp || Date.now();
+    // Route <springo-artifact> to unified store
+    if (modelArtifacts.length > 0) {
+      for (let ai = 0; ai < modelArtifacts.length; ai++) {
+        const a = modelArtifacts[ai];
+        const stableId = `art-msg-${msgId}-${ai}`;
+        const store = useUnifiedArtifactStore.getState();
 
-        if (isProject) {
-          const files = parseSpringoFiles(a.content);
-          if (existingIdx === -1) {
-            store.addVersion({
-              id: stableId, html: '', files, title, prompt: '', timestamp: ts,
-              entryFile: files.find(f => f.path === 'index.html')?.path || files[0]?.path,
-            });
-          } else {
-            // Update existing version with latest files (streaming refinement)
-            store.updateVersion(stableId, { files, title });
-          }
-        } else if (existingIdx === -1) {
-          store.addVersion({
-            id: stableId, html: a.content, files: [], title, prompt: '', timestamp: ts,
-          });
-        } else {
-          store.updateVersion(stableId, { html: a.content, title });
+        if (store.artifacts[stableId]) continue;
+
+        const files = parseSpringoFiles(a.content);
+        if (files.length === 0 && a.content) {
+          files.push({ path: 'index.html', type: 'html' as const, content: a.content });
         }
-      }
+        if (files.length === 0) continue;
 
-      // Handle <springo-patch> — incremental file updates
-      if (hasPatch(rawText)) {
-        const patch = parsePatch(rawText);
-        if (patch && patch.files.length > 0) {
-          const store = useDesignStore.getState();
-          const patchId = `patch-${message.id}`;
-          const alreadyApplied = store.versions.some((v) => v.id === patchId);
+        const name = a.title || 'Artifact';
+        const icon = (a as any).icon || '\uD83D\uDCE6';
+        const artifactType = (a as any).artifactType || 'app';
+
+        store.createArtifact({
+          id: stableId,
+          name,
+          icon,
+          type: artifactType,
+          files: files.map(f => ({
+            path: f.path,
+            type: f.type as 'html' | 'jsx' | 'css' | 'json' | 'text',
+            content: f.content,
+          })),
+        });
+      }
+    }
+
+    // Route <springo-patch> to unified store
+    if (hasPatch(rawText)) {
+      const patch = parsePatch(rawText);
+      if (patch && patch.files.length > 0) {
+        const uStore = useUnifiedArtifactStore.getState();
+        const targetId = patch.artifactId || uStore.activeArtifactId;
+        if (targetId && uStore.artifacts[targetId]) {
+          const patchKey = `patch-${msgId}`;
+          const art = uStore.artifacts[targetId];
+          const alreadyApplied = art.versions.some((v) => v.id.includes(patchKey));
           if (!alreadyApplied) {
-            store.applyPatch(patch);
-          }
-        }
-      }
-
-      // Handle streaming: incomplete artifact (opening tag but no closing tag yet)
-      if (artifacts.length === 0) {
-        const incompleteMatch = rawText.match(/<springo-artifact\s+([^>]*?)>([\s\S]*)$/);
-        if (incompleteMatch) {
-          const attrs = incompleteMatch[1];
-          const partialContent = incompleteMatch[2];
-          const titleMatch = attrs.match(/title="([^"]*)"/);
-          const rawType = attrs.match(/type="([^"]*)"/)?.[1] || '';
-          const isProject = rawType === 'design/project';
-          const title = titleMatch?.[1] || 'Generating...';
-          const stableId = `design-${message.id}-0`;
-          const store = useDesignStore.getState();
-          const existingIdx = store.versions.findIndex((v) => v.id === stableId);
-          const ts = message.timestamp || Date.now();
-
-          if (isProject) {
-            const files = parseSpringoFiles(partialContent);
-            if (files.length > 0) {
-              if (existingIdx === -1) {
-                store.addVersion({
-                  id: stableId, html: '', files, title, prompt: '', timestamp: ts,
-                  entryFile: files.find(f => f.path === 'index.html')?.path || files[0]?.path,
-                });
-              } else {
-                store.updateVersion(stableId, { files, title });
-              }
-            }
-          } else if (partialContent.length > 100) {
-            if (existingIdx === -1) {
-              store.addVersion({
-                id: stableId, html: partialContent, files: [], title, prompt: '', timestamp: ts,
-              });
-            } else {
-              store.updateVersion(stableId, { html: partialContent, title });
-            }
+            uStore.applyPatch(targetId, patch.files);
           }
         }
       }
     }
 
-    return { textAfterArtifacts: cleaned, modelArtifacts: artifacts };
-  }, [message.role, rawText, message.timestamp, designActive]);
+    // Route <springo-action> to iframe via postMessage
+    if (hasAction(rawText)) {
+      const action = parseAction(rawText);
+      if (action) {
+        const uStore = useUnifiedArtifactStore.getState();
+        const targetId = action.artifactId || uStore.activeArtifactId;
+        if (targetId) {
+          const iframe = document.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
+          if (iframe?.contentWindow) {
+            iframe.contentWindow.postMessage({
+              type: 'springo:chat-action',
+              payload: action.payload,
+            }, '*');
+          }
+        }
+      }
+    }
+  }, [message.role, rawText, message.timestamp, modelArtifacts]);
 
   // Detect skill-wrapped user messages
   const skillInfo = useMemo(() => {
@@ -824,11 +810,10 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           const { toolFilePath, toolUrl } = (() => {
             let filePath: string | undefined;
             let url: string | undefined;
-            const pathKeys = ['file_path', 'filePath', 'path', 'output_path', 'outputPath', 'filename'];
             const urlKeys = ['url', 'href', 'link'];
             // Check input fields
             const inp = tool.input || {};
-            for (const key of pathKeys) {
+            for (const key of PATH_KEYS) {
               const v = inp[key];
               if (typeof v === 'string' && v.startsWith('/')) { filePath = v; break; }
             }
@@ -839,7 +824,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
             // Check result object fields
             if (tool.result && typeof tool.result === 'object' && !Array.isArray(tool.result)) {
               const res = tool.result as Record<string, unknown>;
-              if (!filePath) for (const key of pathKeys) {
+              if (!filePath) for (const key of PATH_KEYS) {
                 const v = res[key];
                 if (typeof v === 'string' && v.startsWith('/')) { filePath = v; break; }
               }
@@ -994,9 +979,8 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
           for (const tool of toolUses) {
             if (!fileModTools.includes(tool.name)) continue;
             const inp = tool.input || {};
-            const pathKeys = ['file_path', 'filePath', 'path', 'output_path', 'outputPath', 'filename'];
             let fp: string | undefined;
-            for (const key of pathKeys) {
+            for (const key of PATH_KEYS) {
               const v = inp[key];
               if (typeof v === 'string' && v.startsWith('/')) { fp = v; break; }
             }

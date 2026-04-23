@@ -1,18 +1,4 @@
-/**
- * DesignCanvas - iframe renderer with viewport simulation and React/Babel runtime
- */
-import { useRef, useEffect, useCallback } from 'react';
-import type { DesignVersion, DesignFile } from '@/types';
-import type { ViewportMode } from '@/stores/designStore';
-import { useDesignStore } from '@/stores/designStore';
-import DesignTemplateLibrary from './DesignTemplateLibrary';
-import type { DesignTemplate } from '@/data/designTemplates';
-
-const VIEWPORT_WIDTHS: Record<ViewportMode, number | null> = {
-  desktop: null,
-  tablet: 768,
-  mobile: 375,
-};
+import type { ArtifactFile } from '@/stores/unifiedArtifactStore';
 
 interface CdnLib {
   scripts: string[];
@@ -54,7 +40,7 @@ const CDN_LIBS: Record<string, CdnLib> = {
   },
 };
 
-function detectCdnLibs(files: DesignFile[]): { scripts: string[]; registrations: string[] } {
+function detectCdnLibs(files: ArtifactFile[]): { scripts: string[]; registrations: string[] } {
   const allCode = files.map(f => f.content).join('\n');
   const scripts: string[] = [];
   const registrations: string[] = [];
@@ -84,25 +70,21 @@ function detectCdnLibs(files: DesignFile[]): { scripts: string[]; registrations:
  * Loads React 18 + Babel Standalone from CDN, injects CSS as <style> blocks,
  * and JSX as <script type="text/babel"> blocks.
  */
-function buildMultiFileRuntime(files: DesignFile[], entryFile?: string): string {
+export function buildMultiFileRuntime(files: ArtifactFile[], entryFile?: string): string {
   const cssFiles = files.filter(f => f.type === 'css');
   const jsxFiles = files.filter(f => f.type === 'jsx');
   const htmlFile = files.find(f => f.path === (entryFile || 'index.html'));
 
-  // If there's only an HTML file with no JSX, use it directly
   if (jsxFiles.length === 0 && htmlFile) {
     return htmlFile.content;
   }
 
-  // Topological sort: files that are imported by others come first
-  // Build dependency graph from import statements
   const importRe = /import\s+(?:\{[^}]+\}|\w+)\s+from\s+['"]\.\/([^'"]+)['"]/g;
-  const fileBaseNames = new Map<string, DesignFile>();
+  const fileBaseNames = new Map<string, ArtifactFile>();
   for (const f of jsxFiles) {
     const base = f.path.replace(/^.*\//, '').replace(/\.\w+$/, '');
     fileBaseNames.set(base, f);
   }
-  // deps[filePath] = set of filePaths it imports
   const deps = new Map<string, Set<string>>();
   for (const f of jsxFiles) {
     const fileDeps = new Set<string>();
@@ -116,7 +98,6 @@ function buildMultiFileRuntime(files: DesignFile[], entryFile?: string): string 
     }
     deps.set(f.path, fileDeps);
   }
-  // Topological sort via Kahn's algorithm
   const inDegree = new Map<string, number>();
   for (const f of jsxFiles) inDegree.set(f.path, 0);
   for (const [, fileDeps] of deps) {
@@ -124,87 +105,62 @@ function buildMultiFileRuntime(files: DesignFile[], entryFile?: string): string 
       inDegree.set(dep, (inDegree.get(dep) || 0) + 1);
     }
   }
-  const queue: string[] = [];
-  for (const [path, deg] of inDegree) {
-    if (deg === 0) queue.push(path);
-  }
-  // Files with 0 in-degree go last (they import others, are not imported)
-  // Files with high in-degree go first (they are imported by many = leaf/utility)
-  const sorted: DesignFile[] = [];
-  const visited = new Set<string>();
-  // Start with files that have highest in-degree (most depended-upon)
-  const byInDegree = [...jsxFiles].sort((a, b) => {
+
+  const sorted: ArtifactFile[] = [...jsxFiles].sort((a, b) => {
     const aIsApp = a.path.toLowerCase().replace(/^.*\//, '') === 'app.jsx';
     const bIsApp = b.path.toLowerCase().replace(/^.*\//, '') === 'app.jsx';
     if (aIsApp) return 1;
     if (bIsApp) return -1;
     const aDeps = deps.get(a.path)?.size || 0;
     const bDeps = deps.get(b.path)?.size || 0;
-    // Files with fewer imports (dependencies) first = they're leaf/utility
     if (aDeps !== bDeps) return aDeps - bDeps;
-    // Tie-break: files imported by more others first
     const aIn = inDegree.get(a.path) || 0;
     const bIn = inDegree.get(b.path) || 0;
     if (aIn !== bIn) return bIn - aIn;
     return a.path.localeCompare(b.path);
   });
-  sorted.push(...byInDegree);
 
-  // Pre-process JSX: rewrite imports/exports for window.__c global registry
   const processedJsx = sorted.map(f => {
     let code = f.content;
-    // Rewrite: import { X, Y } from './path' → const { X, Y } = window.__c;
     code = code.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]\s*;?/g,
       (_m, names) => `const {${names}} = window.__c;`
     );
-    // Rewrite: import X from './path' → const X = window.__c.X;
     code = code.replace(
       /import\s+(\w+)\s+from\s+['"][^'"]+['"]\s*;?/g,
       (_m, name) => `const ${name} = window.__c.${name};`
     );
 
-    // Collect names to register on window.__c after eval
     const exportedNames: string[] = [];
-
-    // export default function X(...) → function X(...) + register
     code = code.replace(
       /export\s+default\s+function\s+(\w+)/g,
       (_m, name) => { exportedNames.push(name); return `function ${name}`; }
     );
-    // export default class X → class X + register
     code = code.replace(
       /export\s+default\s+class\s+(\w+)/g,
       (_m, name) => { exportedNames.push(name); return `class ${name}`; }
     );
-    // export function X → function X + register
     code = code.replace(
       /export\s+function\s+(\w+)/g,
       (_m, name) => { exportedNames.push(name); return `function ${name}`; }
     );
-    // export const X = → const X = + register (but const is block-scoped, use var)
     code = code.replace(
       /export\s+const\s+(\w+)\s*=/g,
       (_m, name) => { exportedNames.push(name); return `var ${name} =`; }
     );
-    // Catch remaining: export default <expression>
     const baseName = f.path.replace(/^.*\//, '').replace(/\.\w+$/, '');
     code = code.replace(
       /export\s+default\s+(\w+)\s*;/g,
       (_m, ident) => {
-        // "export default SomeVar;" — just register the existing variable, don't redeclare
         exportedNames.push(ident);
         return `/* exported ${ident} */`;
       }
     );
-    // export default <anonymous expression> (object literal, arrow fn, etc.)
     code = code.replace(
       /export\s+default\s+/g,
       () => { exportedNames.push(baseName); return `var ${baseName} = `; }
     );
 
-    // Append registration: window.__c.X = X; window.X = X;
-    // (window.X for App so the mount code can find it)
     const uniqueNames = [...new Set(exportedNames)];
     if (uniqueNames.length > 0) {
       code += '\n' + uniqueNames.map(n =>
@@ -215,17 +171,13 @@ function buildMultiFileRuntime(files: DesignFile[], entryFile?: string): string 
     return { path: f.path, code };
   });
 
-  // Extract <body> content from HTML entry if it exists
   let htmlBody = '';
   if (htmlFile) {
     const bodyMatch = htmlFile.content.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
     htmlBody = bodyMatch?.[1] || '';
   }
 
-  // Embed JSX source as JSON array for manual transpilation
   const jsxSources = processedJsx.map(f => ({ path: f.path, code: f.code }));
-
-  // Auto-detect third-party libraries used in source and load their CDN builds
   const cdnLibs = detectCdnLibs(files);
   const cdnScriptTags = cdnLibs.scripts.map(url => `  <script src="${url}" crossorigin></script>`).join('\n');
 
@@ -245,15 +197,10 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
   <div id="root"></div>
   ${htmlBody}
   <script>
-    // Seed global component registry with React hooks & utilities
-    // Use a Proxy so any unresolved import returns a placeholder component
-    // instead of undefined (prevents blank screen when LLM omits a file)
     window.__c = new Proxy({}, {
       get: function(target, prop) {
         if (prop in target) return target[prop];
         if (typeof prop === 'string' && /^[A-Z]/.test(prop)) {
-          // Return a placeholder component that renders its children
-          // and also acts as a namespace (e.g. Icon.Chat)
           var _ph = new Proxy(
             function _Placeholder(props) {
               return React.createElement('span', {
@@ -272,14 +219,12 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
         return undefined;
       }
     });
-    // Expose React hooks so "const { useState } = window.__c" works
     var _rh = ['useState','useEffect','useRef','useCallback','useMemo','useContext','useReducer','createContext','Fragment','createElement','Children','cloneElement','forwardRef','memo','lazy','Suspense','startTransition','useTransition','useDeferredValue','useId'];
     for (var _hi = 0; _hi < _rh.length; _hi++) {
       if (React[_rh[_hi]]) window.__c[_rh[_hi]] = React[_rh[_hi]];
     }
     window.__c.React = React;
     window.__c.ReactDOM = ReactDOM;
-    // Register CDN library exports on window.__c
     ${cdnLibs.registrations.join('\n    ')}
     function _showError(msg) {
       var root = document.getElementById('root');
@@ -288,7 +233,6 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
         '<b>Render Error:</b>\\n' + String(msg) + '</div>';
     }
     window.onerror = function(msg) { _showError(msg); };
-    // Manual transpile + eval for correct ordering
     var _sources = ${JSON.stringify(jsxSources)};
     try {
       for (var i = 0; i < _sources.length; i++) {
@@ -296,11 +240,8 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
         var code = Babel.transform(s.code, { presets: ['react'] }).code;
         (new Function(code))();
       }
-      // Mount App with error boundary
-      // Try window.App first, then window.__c.App, then any component registered last
       var _AppComponent = window.App || window.__c.App;
       if (!_AppComponent) {
-        // Fallback: use the last registered component (App.jsx is sorted last)
         var _keys = Object.keys(window.__c).filter(function(k) {
           return typeof window.__c[k] === 'function' && /^[A-Z]/.test(k) && k !== 'React' && k !== 'ReactDOM';
         });
@@ -311,7 +252,6 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
         var _onError = function(e) { _showError(e.message || e); };
         ReactDOM.createRoot(root, { onRecoverableError: _onError }).render(
           React.createElement(
-            // Inline ErrorBoundary
             (function() {
               class EB extends React.Component {
                 constructor(p) { super(p); this.state = { err: null }; }
@@ -340,7 +280,6 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
     }
   </script>
   <script>
-    // === Springo: element click handler + error capture ===
     (function() {
       var _highlight = null;
       function getCssPath(el) {
@@ -398,22 +337,17 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
       document.addEventListener('click', function(e) {
         if (!e.altKey && _highlight) removeHighlight();
       });
-
-      // Pin element on regular click (for design-mode-layout)
       document.addEventListener('click', function(e) {
         if (e.altKey) return;
         var el = e.target;
         if (!el || el === document.body || el === document.documentElement || el === document.getElementById('root')) return;
-        // Walk up to find the nearest "component-like" ancestor (capitalized data attr or meaningful class)
         var compName = el.tagName.toLowerCase();
         var walkEl = el;
         while (walkEl && walkEl !== document.body) {
-          // Check if this was a registered component via window.__c
           var dn = walkEl.getAttribute && walkEl.getAttribute('data-component');
           if (dn) { compName = dn; break; }
-          // Use className as a hint
           if (walkEl.className && typeof walkEl.className === 'string') {
-            var classes = walkEl.className.trim().split(/\s+/);
+            var classes = walkEl.className.trim().split(/\\s+/);
             var meaningful = classes.find(function(c) { return c.length > 2 && !/^(p|m|d|w|h|flex|grid|text|bg|border|rounded|shadow|overflow|relative|absolute|block|inline)/.test(c); });
             if (meaningful) { compName = meaningful; break; }
           }
@@ -430,8 +364,6 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
           }
         }, '*');
       });
-
-      // Error capture
       var _origError = window.onerror;
       window.onerror = function(msg, src, line) {
         window.parent.postMessage({ type: 'springo:error', payload: { type: 'runtime', message: String(msg), source: src, line: line, timestamp: Date.now() } }, '*');
@@ -446,15 +378,11 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
       window.addEventListener('unhandledrejection', function(e) {
         window.parent.postMessage({ type: 'springo:error', payload: { type: 'runtime', message: 'Unhandled rejection: ' + (e.reason && e.reason.message || e.reason || 'unknown'), timestamp: Date.now() } }, '*');
       });
-
-      // Listen for tweak CSS variable updates from parent
       window.addEventListener('message', function(e) {
         if (e.data && e.data.type === 'springo:set-css-var') {
           document.documentElement.style.setProperty(e.data.name, e.data.value);
         }
       });
-
-      // Blank screen detection: if #root is empty after 3s
       setTimeout(function() {
         var root = document.getElementById('root');
         if (root && root.innerHTML.trim() === '') {
@@ -465,95 +393,4 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
   </script>
 </body>
 </html>`;
-}
-
-export default function DesignCanvas({
-  design,
-  viewport,
-  onTemplateSelect,
-}: {
-  design: DesignVersion | null;
-  viewport: ViewportMode;
-  onTemplateSelect?: (template: DesignTemplate) => void;
-}) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const lastSrcdocRef = useRef<string>('');
-  const zoom = useDesignStore((s) => s.zoom);
-  const interactionMode = useDesignStore((s) => s.interactionMode);
-
-  const handleMessage = useCallback((e: MessageEvent) => {
-    if (!e.data || typeof e.data.type !== 'string') return;
-    if (e.data.type === 'springo:element-selected') {
-      useDesignStore.getState().selectElement(e.data.payload);
-    } else if (e.data.type === 'springo:element-pinned') {
-      useDesignStore.getState().pinElement(e.data.payload);
-    } else if (e.data.type === 'springo:error') {
-      useDesignStore.getState().addError(e.data.payload);
-    }
-  }, []);
-
-  useEffect(() => {
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [handleMessage]);
-
-  useEffect(() => {
-    useDesignStore.getState().clearErrors();
-    useDesignStore.getState().selectElement(null);
-  }, [design?.id]);
-
-  useEffect(() => {
-    const iframe = iframeRef.current;
-    if (!iframe || !design) return;
-    let srcdoc: string;
-    if (design.files && design.files.length > 0) {
-      srcdoc = buildMultiFileRuntime(design.files, design.entryFile);
-    } else {
-      srcdoc = design.html;
-    }
-    // Skip identical reloads (streaming sends many updates with same content)
-    if (srcdoc === lastSrcdocRef.current) return;
-    lastSrcdocRef.current = srcdoc;
-    iframe.srcdoc = srcdoc;
-  }, [design?.html, design?.files, design?.entryFile]);
-
-  if (!design) {
-    return (
-      <div className="design-canvas-empty">
-        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" opacity="0.3">
-          <rect x="3" y="3" width="18" height="18" rx="2" />
-          <circle cx="8.5" cy="8.5" r="1.5" />
-          <path d="M21 15l-5-5L5 21" />
-        </svg>
-        <p>Send a message to generate a design</p>
-        <p className="design-canvas-empty-hint">or pick a template below</p>
-        <DesignTemplateLibrary onSelect={(t) => onTemplateSelect?.(t)} />
-      </div>
-    );
-  }
-
-  const fixedWidth = VIEWPORT_WIDTHS[viewport];
-
-  const zoomStyle = zoom !== 100 ? {
-    transform: `scale(${zoom / 100})`,
-    transformOrigin: 'top left',
-    width: `${10000 / zoom}%`,
-    height: `${10000 / zoom}%`,
-  } : undefined;
-
-  return (
-    <div className={`design-canvas${interactionMode === 'comment' ? ' cursor-comment' : interactionMode === 'draw' ? ' cursor-draw' : ''}`}>
-      <div
-        className={`design-canvas-viewport design-canvas-viewport-${viewport}`}
-        style={fixedWidth ? { width: fixedWidth, margin: '0 auto' } : undefined}
-      >
-        <iframe
-          ref={iframeRef}
-          className="design-canvas-iframe"
-          style={zoomStyle}
-          sandbox="allow-scripts allow-same-origin"
-        />
-      </div>
-    </div>
-  );
 }

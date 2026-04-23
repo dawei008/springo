@@ -3,22 +3,16 @@ import Header from './Header';
 import ChatArea from '@/components/Chat/ChatArea';
 import MessageInput from '@/components/Chat/MessageInput';
 import ArtifactPanel from '@/components/ArtifactPanel/ArtifactPanel';
-import DesignPanel from '@/components/DesignPanel/DesignPanel';
-import DesignModeLayout from '@/components/DesignPanel/DesignModeLayout';
 import PlanPanel from '@/components/PlanPanel/PlanPanel';
-import DesignDashboard from '@/components/DesignPanel/DesignDashboard';
-import NovelDashboard from '@/components/NovelPanel/NovelDashboard';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
 import { useArtifactStore } from '@/stores/artifactStore';
-import { useDesignStore } from '@/stores/designStore';
 import { usePlanStore } from '@/stores/planStore';
-import { useModeStore } from '@/stores/modeStore';
-import { useNovelStore } from '@/stores/novelStore';
-import NovelPanel from '@/components/NovelPanel/NovelPanel';
+import Canvas from '@/components/Canvas/Canvas';
+import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { UsageData } from '@/types';
 
 const BASE_URL = 'http://127.0.0.1:8081';
@@ -453,78 +447,28 @@ export default function MainContent() {
     }
   }, [currentSessionId]);
 
-  // Save/restore artifact panel, design, plan, and mode state per session
+  // Save/restore artifact panel and plan state per session
   useEffect(() => {
     useArtifactStore.getState().switchSession(currentSessionId ?? null);
-    useDesignStore.getState().switchSession(currentSessionId ?? null);
+    useUnifiedArtifactStore.getState().switchSession(currentSessionId ?? null);
     usePlanStore.getState().switchSession(currentSessionId ?? null);
-    useModeStore.getState().switchSession(currentSessionId ?? null);
-    {
-      const session = currentSessionId
-        ? useSessionStore.getState().sessions.find((s) => s.id === currentSessionId)
-        : null;
-      useNovelStore.getState().switchSession(currentSessionId ?? null, session?.workingDir ?? null);
-    }
-
-    // Restore design versions from message history if switching to a design-mode
-    // session with no in-memory snapshot (e.g. after app restart)
-    if (currentSessionId) {
-      const session = useSessionStore.getState().sessions.find(s => s.id === currentSessionId);
-      if (session?.mode === 'design') {
-        setTimeout(() => {
-          const ds = useDesignStore.getState();
-          if (ds.versions.length === 0) {
-            const runtime = useChatStore.getState().runtimes[currentSessionId];
-            if (runtime?.messages?.length) {
-              ds.restoreFromMessages(runtime.messages);
-            }
-          }
-        }, 300);
-      }
-    }
   }, [currentSessionId]);
 
-  const designActive = useDesignStore((s) => s.active);
-  const designVersionCount = useDesignStore((s) => s.versions.length);
-  const novelActive = useNovelStore((s) => s.active);
-  const novelChapterCount = useNovelStore((s) => s.project.chapterOrder.length);
-  const isStreaming = useChatStore((s) =>
-    currentSessionId ? s.isStreaming(currentSessionId) : false,
-  );
-  const hasMessages = useChatStore((s) => {
-    if (!currentSessionId) return false;
-    const rt = s.runtimes[currentSessionId];
-    return rt ? rt.messages.length > 0 : false;
-  });
-  const [dashboardDismissed, setDashboardDismissed] = useState(false);
-  useEffect(() => { setDashboardDismissed(false); }, [currentSessionId]);
-  const pendingPrompt = useUIStore((s) => s.pendingPrompt);
-  useEffect(() => { if (pendingPrompt) setDashboardDismissed(true); }, [pendingPrompt]);
-  const showDesignDashboard = designActive && designVersionCount === 0 && !isStreaming && !hasMessages && !dashboardDismissed;
-  const showNovelDashboard = novelActive && novelChapterCount === 0 && !isStreaming && !hasMessages && !dashboardDismissed;
+  const hasActiveArtifact = useUnifiedArtifactStore((s) => s.activeArtifactId !== null);
 
   return (
     <div className="main-content">
       <Header />
-      {designActive && !showDesignDashboard ? (
-        <DesignModeLayout />
-      ) : showDesignDashboard ? (
-        <DesignDashboard />
-      ) : showNovelDashboard ? (
-        <NovelDashboard />
-      ) : (
-        <div className="chat-panel-wrapper">
-          <div className="chat-area">
-            <ChatArea />
-            <MessageInput />
-            <StatusBar />
-          </div>
-          <ArtifactPanel />
-          <DesignPanel />
-          <PlanPanel />
-          <NovelPanel />
+      <div className="chat-panel-wrapper">
+        <div className="chat-area">
+          <ChatArea />
+          <MessageInput />
+          <StatusBar />
         </div>
-      )}
+        {hasActiveArtifact && <Canvas />}
+        <ArtifactPanel />
+        <PlanPanel />
+      </div>
     </div>
   );
 }
