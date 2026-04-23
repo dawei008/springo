@@ -59,6 +59,8 @@ const DEFAULT_SETTINGS: Settings = {
   temperature: 0.7,
   compactModel: 'claude-haiku-4-5-20251001',
   enable1mContext: false,
+  thinkingEnabled: true,
+  thinkingEffort: 'xhigh',
 };
 
 export const useSettingsStore = create<SettingsState>()(

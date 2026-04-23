@@ -89,6 +89,10 @@ class MessageRequest(BaseModel):
     # Extended context (1M beta)
     extended_context: Optional[bool] = Field(default=None, description="Enable 1M context for supported models")
 
+    # Adaptive thinking (Opus 4.7)
+    thinking_enabled: Optional[bool] = Field(default=None, description="Enable adaptive thinking (Opus 4.7)")
+    thinking_effort: Optional[str] = Field(default=None, description="Thinking effort: low | medium | high | xhigh | max")
+
     # Headers passed through
     x_session_id: Optional[str] = Field(default=None, description="Session ID from header")
 
@@ -100,10 +104,10 @@ class MessageAutoRequest(MessageRequest):
     parallel_tool_execution: bool = Field(default=True, description="Enable parallel tool execution")
     working_directory: Optional[str] = Field(default=None, description="Override working directory for tool execution")
 
-    # Design mode
-    design_mode: bool = Field(default=False, description="Enable design mode — LLM generates visual HTML designs")
-    design_system: Optional[Dict[str, Any]] = Field(default=None, description="Design system config (colors, fonts, components)")
-    design_context: Optional[str] = Field(default=None, description="Previous design HTML for iterative refinement")
+    # Design mode — invokes the springo-design-mode skill; design_context carries the
+    # current artifact's files + pinned element (built by the frontend).
+    design_mode: bool = Field(default=False, description="Enable design mode — loads springo-design-mode skill guidelines")
+    design_context: Optional[str] = Field(default=None, description="Current artifact context (files + pinned element) for iteration")
 
 
 class ToolExecuteRequest(BaseModel):

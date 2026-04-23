@@ -314,6 +314,9 @@ export default function MessageInput() {
         temperature: currentSettings.temperature,
         systemPrompt: currentSettings.systemPrompt,
         compactModel: currentSettings.compactModel,
+        enable1mContext: currentSettings.enable1mContext === true,
+        thinkingEnabled: currentSettings.thinkingEnabled !== false,
+        thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
         sessionId: convId,
         designMode: true,
         ...(artifactCtx ? { designContext: artifactCtx } : {}),
@@ -379,6 +382,9 @@ export default function MessageInput() {
       temperature: currentSettings.temperature,
       systemPrompt: currentSettings.systemPrompt,
       compactModel: currentSettings.compactModel,
+      enable1mContext: currentSettings.enable1mContext === true,
+      thinkingEnabled: currentSettings.thinkingEnabled !== false,
+      thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
       sessionId: convId,
       ...(artifactCtx ? { designContext: artifactCtx } : {}),
     });
@@ -639,6 +645,9 @@ export default function MessageInput() {
             temperature: currentSettings.temperature,
             systemPrompt: currentSettings.systemPrompt,
             compactModel: currentSettings.compactModel,
+            enable1mContext: currentSettings.enable1mContext === true,
+            thinkingEnabled: currentSettings.thinkingEnabled !== false,
+            thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
             sessionId: currentSessionId,
           });
         }, 500);

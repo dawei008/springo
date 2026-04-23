@@ -185,6 +185,10 @@ export interface Settings {
   systemPrompt?: string;
   /** Compact model used for context summarization */
   compactModel?: string;
+  /** Enable adaptive thinking for Opus 4.7 */
+  thinkingEnabled?: boolean;
+  /** Thinking effort level: low | medium | high | xhigh | max */
+  thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
   [key: string]: unknown;
 }
 
@@ -858,32 +862,6 @@ export interface DesignError {
   source?: string;
   line?: number;
   timestamp: number;
-}
-
-// ======================== Design System ========================
-
-export interface DesignSystemSource {
-  companyBlurb: string;
-  githubLinks: string[];
-  notes: string;
-  codeFileNames: string[];
-  assetFileNames: string[];
-}
-
-export interface DesignSystemConfig {
-  id?: string;
-  colors: Record<string, string>;
-  fonts: { heading: string; body: string };
-  components: string[];
-  brandName?: string;
-  sourceDir?: string;
-  raw?: string;
-  published?: boolean;
-  isDefault?: boolean;
-  createdAt?: number;
-  updatedAt?: number;
-  author?: string;
-  source?: DesignSystemSource;
 }
 
 // ======================== Plan Mode ========================

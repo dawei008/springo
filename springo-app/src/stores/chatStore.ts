@@ -8,7 +8,6 @@ import type {
   ConvRuntime,
   ToolUse,
   UsageData,
-  DesignSystemConfig,
 } from '@/types';
 import { processStreamingResponse } from '@/services/sse';
 import { api } from '@/services/api';
@@ -360,9 +359,10 @@ interface ChatState {
       systemPrompt?: string;
       compactModel?: string;
       enable1mContext?: boolean;
+      thinkingEnabled?: boolean;
+      thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
       sessionId?: string;
       designMode?: boolean;
-      designSystem?: DesignSystemConfig | Record<string, unknown>;
       designContext?: string;
       onTextUpdate?: (text: string, tools: ToolUse[]) => void;
       onComplete?: () => void;
@@ -745,9 +745,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         session_id: options.sessionId || convId,
         compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
         extended_context: options.enable1mContext === true,
+        ...(options.thinkingEnabled !== false && model === 'claude-opus-4-7' ? {
+          thinking_enabled: true,
+          thinking_effort: options.thinkingEffort || 'xhigh',
+        } : {}),
         ...(options.designMode ? {
           design_mode: true,
-          ...(options.designSystem ? { design_system: options.designSystem } : {}),
           ...(options.designContext ? { design_context: options.designContext } : {}),
         } : {}),
       };

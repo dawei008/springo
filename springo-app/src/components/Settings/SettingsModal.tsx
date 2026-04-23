@@ -73,6 +73,10 @@ export default function SettingsModal() {
   const [localMaxTokens, setLocalMaxTokens] = useState(settings.maxTokens || 16384)
   const [localTemperature, setLocalTemperature] = useState(settings.temperature || 0.7)
   const [localCompactModel, setLocalCompactModel] = useState(settings.compactModel || defaultCompactModel)
+  const [localThinkingEnabled, setLocalThinkingEnabled] = useState(settings.thinkingEnabled !== false)
+  const [localThinkingEffort, setLocalThinkingEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max'>(
+    (settings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh'
+  )
 
   // Tools tab state
   const [plugins, setPlugins] = useState<Array<{
@@ -226,6 +230,8 @@ export default function SettingsModal() {
         temperature: localTemperature,
         compactModel: localCompactModel,
         enable1mContext: localEnable1mContext,
+        thinkingEnabled: localThinkingEnabled,
+        thinkingEffort: localThinkingEffort,
       })
       // Persist default working dir to backend (~/.springo/config.json)
       if (localDefaultWorkdir.trim()) {
@@ -1124,6 +1130,38 @@ export default function SettingsModal() {
                     Enable 1M Context Window (Beta)
                   </label>
                   <div className="hint">Uses full 1,000,000 token context (vs standard 200,000). Requires Bedrock beta access.</div>
+                </div>
+                <div
+                  className="setting-group"
+                  style={{ display: localModel === 'claude-opus-4-7' ? undefined : 'none' }}
+                >
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={localThinkingEnabled}
+                      onChange={(e) => setLocalThinkingEnabled(e.target.checked)}
+                    />
+                    Enable Extended Thinking (Adaptive)
+                  </label>
+                  <div className="hint">Opus 4.7 decides when to think deeply. Summary shown in chat.</div>
+                </div>
+                <div
+                  className="setting-group"
+                  style={{ display: localModel === 'claude-opus-4-7' && localThinkingEnabled ? undefined : 'none' }}
+                >
+                  <label>Thinking Effort</label>
+                  <select
+                    value={localThinkingEffort}
+                    onChange={(e) => setLocalThinkingEffort(e.target.value as 'low' | 'medium' | 'high' | 'xhigh' | 'max')}
+                  >
+                    <option value="low">Low — minimal thinking, fastest</option>
+                    <option value="medium">Medium — may skip simple queries</option>
+                    <option value="high">High — always thinks (API default)</option>
+                    <option value="xhigh">XHigh — deep exploration (Opus 4.7 only)</option>
+                    <option value="max">Max — no depth limit</option>
+                  </select>
+                  <div className="hint">Higher effort = deeper reasoning but slower and more tokens.</div>
                 </div>
                 <div className="setting-group">
                   <label>Max Tokens</label>
