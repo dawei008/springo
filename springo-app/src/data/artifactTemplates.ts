@@ -1,9 +1,10 @@
 import type { ArtifactFile, UnifiedArtifactType } from '@/stores/unifiedArtifactStore';
+import type { ArtifactIconName } from '@/components/Canvas/ArtifactIcon';
 
 export interface ArtifactTemplate {
   id: string;
   name: string;
-  icon: string;
+  icon: ArtifactIconName;
   category: 'app' | 'document' | 'component';
   description: string;
   type: UnifiedArtifactType;
@@ -14,7 +15,7 @@ export const ARTIFACT_TEMPLATES: ArtifactTemplate[] = [
   {
     id: 'tpl-counter',
     name: 'Counter App',
-    icon: '\u2795',
+    icon: 'counter',
     category: 'app',
     description: 'Simple React counter to test the artifact sandbox',
     type: 'app',
@@ -41,7 +42,7 @@ export const ARTIFACT_TEMPLATES: ArtifactTemplate[] = [
   {
     id: 'tpl-dashboard',
     name: 'Dashboard',
-    icon: '\uD83D\uDCCA',
+    icon: 'dashboard',
     category: 'app',
     description: 'Analytics dashboard with KPI cards and chart',
     type: 'app',
@@ -114,7 +115,7 @@ export default function Chart() {
   {
     id: 'tpl-todo',
     name: 'Todo App',
-    icon: '\u2705',
+    icon: 'todo',
     category: 'app',
     description: 'Interactive todo list with add, complete, and delete',
     type: 'app',
@@ -164,7 +165,7 @@ export default function Chart() {
   {
     id: 'tpl-landing',
     name: 'Landing Page',
-    icon: '\uD83C\uDF10',
+    icon: 'web',
     category: 'app',
     description: 'Marketing landing page with hero and features',
     type: 'app',
@@ -210,7 +211,7 @@ export default function Chart() {
   {
     id: 'tpl-form',
     name: 'Form Builder',
-    icon: '\uD83D\uDCDD',
+    icon: 'form',
     category: 'component',
     description: 'Multi-step form with validation',
     type: 'component',

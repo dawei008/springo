@@ -9,7 +9,12 @@ interface Artifact {
 /** Model-generated artifact via <springo-artifact> tags */
 export interface ModelArtifact {
   id: string
+  /** Display/card type — coarse grouping for inline rendering. */
   type: 'markdown' | 'html' | 'svg' | 'code'
+  /** Unified artifact type — routes to the artifact store. */
+  artifactType: 'app' | 'component' | 'document' | 'template'
+  /** Named icon supplied by the model (see ArtifactIcon registry). */
+  icon?: string
   title: string
   content: string
 }
@@ -34,13 +39,27 @@ function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
-/** Map springo-artifact type attr to internal type */
-function mapArtifactType(typeAttr: string): ModelArtifact['type'] {
-  if (typeAttr === 'design/project') return 'html'  // multi-file project treated as html for card display
-  if (typeAttr.includes('html')) return 'html'
-  if (typeAttr.includes('svg')) return 'svg'
-  if (typeAttr.includes('code')) return 'code'
-  return 'markdown'
+/**
+ * Map springo-artifact type attr to:
+ *   - display type: markdown | html | svg | code (for inline card rendering)
+ *   - unified artifact type: app | component | document | template (for the store)
+ *
+ * Accepts both the new unified values ("app", "component", "document", "template")
+ * and the legacy media-type values ("text/html", "design/project", "image/svg+xml",
+ * "application/code", "text/markdown") for backward compat with older sessions.
+ */
+function mapArtifactType(typeAttr: string): { display: ModelArtifact['type']; unified: ModelArtifact['artifactType'] } {
+  const t = typeAttr.toLowerCase()
+  // New unified values (preferred)
+  if (t === 'app') return { display: 'html', unified: 'app' }
+  if (t === 'component') return { display: 'html', unified: 'component' }
+  if (t === 'document') return { display: 'markdown', unified: 'document' }
+  if (t === 'template') return { display: 'html', unified: 'template' }
+  // Legacy values
+  if (t === 'design/project' || t.includes('html')) return { display: 'html', unified: 'app' }
+  if (t.includes('svg')) return { display: 'svg', unified: 'document' }
+  if (t.includes('code')) return { display: 'code', unified: 'document' }
+  return { display: 'markdown', unified: 'document' }
 }
 
 let modelArtifactCounter = 0
@@ -84,15 +103,16 @@ export function extractModelArtifacts(text: string): { cleaned: string; artifact
     (_match, attrs: string, content: string) => {
       const typeMatch = attrs.match(/type="([^"]*)"/)
       const titleMatch = attrs.match(/title="([^"]*)"/)
+      const iconMatch = attrs.match(/icon="([^"]*)"/)
       const idMatch = attrs.match(/id="([^"]*)"/)
-      const rawType = typeMatch?.[1] || 'text/markdown'
-      const type = mapArtifactType(rawType)
+      const rawType = typeMatch?.[1] || 'document'
+      const { display, unified } = mapArtifactType(rawType)
       const title = titleMatch?.[1] || 'Artifact'
+      const icon = iconMatch?.[1]
       const id = idMatch?.[1] || `mart-${++modelArtifactCounter}`
       artifacts.push({
-        id, type, title, content: content.trim(),
-        _isProject: rawType === 'design/project',
-      } as ModelArtifact & { _isProject?: boolean })
+        id, type: display, artifactType: unified, icon, title, content: content.trim(),
+      })
       return '' // Remove from inline text
     }
   )

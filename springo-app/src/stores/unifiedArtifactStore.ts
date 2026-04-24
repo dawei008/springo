@@ -181,7 +181,7 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
     const artifact: Artifact = {
       id,
       name: props.name,
-      icon: props.icon ?? '\uD83D\uDCE6',
+      icon: props.icon ?? (props.type ?? 'app'),
       type: props.type ?? 'app',
       files,
       state,

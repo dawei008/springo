@@ -4,6 +4,7 @@ import type { Artifact } from '@/stores/unifiedArtifactStore';
 import { ARTIFACT_TEMPLATES } from '@/data/artifactTemplates';
 import type { ArtifactTemplate } from '@/data/artifactTemplates';
 import ArtifactIframe from './ArtifactIframe';
+import { ArtifactIcon } from './ArtifactIcon';
 
 function VersionTimeline({ artifact }: { artifact: Artifact }) {
   const selectVersion = useUnifiedArtifactStore((s) => s.selectVersion);
@@ -91,7 +92,7 @@ function TemplateCard({ template }: { template: ArtifactTemplate }) {
 
   return (
     <button className="canvas-template-card" onClick={handleClick}>
-      <span className="canvas-template-icon">{template.icon}</span>
+      <span className="canvas-template-icon"><ArtifactIcon name={template.icon} fallback={template.type} size={22} /></span>
       <span className="canvas-template-name">{template.name}</span>
       <span className="canvas-template-desc">{template.description}</span>
     </button>
@@ -141,7 +142,7 @@ export default function Canvas() {
   return (
     <div className="canvas-panel" ref={canvasRef}>
       <div className="canvas-header">
-        <span className="canvas-header-icon">{activeArtifact.icon}</span>
+        <span className="canvas-header-icon"><ArtifactIcon name={activeArtifact.icon} fallback={activeArtifact.type} size={16} /></span>
         <span className="canvas-header-title">{activeArtifact.name}</span>
         <ActionBar artifact={activeArtifact} containerRef={canvasRef} />
       </div>

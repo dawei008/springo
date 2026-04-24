@@ -612,20 +612,12 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         }
         if (files.length === 0) continue;
 
-        const name = a.title || 'Artifact';
-        const icon = (a as any).icon || '\uD83D\uDCE6';
-        const artifactType = (a as any).artifactType || 'app';
-
         store.createArtifact({
           id: stableId,
-          name,
-          icon,
-          type: artifactType,
-          files: files.map(f => ({
-            path: f.path,
-            type: f.type as 'html' | 'jsx' | 'css' | 'json' | 'text',
-            content: f.content,
-          })),
+          name: a.title || 'Artifact',
+          icon: a.icon || a.artifactType,
+          type: a.artifactType,
+          files,
         });
       }
     }

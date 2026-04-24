@@ -7,6 +7,7 @@ import { useVoiceStore } from '@/stores/voiceStore';
 import { useReplayStore } from '@/stores/replayStore';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
+import { ArtifactIcon } from '@/components/Canvas/ArtifactIcon';
 import type { SessionMode } from '@/types';
 
 // ─── Section Header (collapsible) ───
@@ -273,7 +274,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
           {pinnedArtifacts.map((art) => (
             <NavItem
               key={art.id}
-              icon={<span style={{ fontSize: '14px' }}>{art.icon}</span>}
+              icon={<ArtifactIcon name={art.icon} fallback={art.type} size={14} />}
               label={art.name}
               active={activeArtifactId === art.id}
               onClick={() => openUnifiedArtifact(art.id)}
@@ -282,7 +283,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
           {sessionArtifacts.map((art) => (
             <NavItem
               key={art.id}
-              icon={<span style={{ fontSize: '14px' }}>{art.icon}</span>}
+              icon={<ArtifactIcon name={art.icon} fallback={art.type} size={14} />}
               label={art.name}
               active={activeArtifactId === art.id}
               onClick={() => openUnifiedArtifact(art.id)}
