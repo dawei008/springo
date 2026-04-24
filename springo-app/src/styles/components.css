@@ -12954,3 +12954,45 @@
     border-top: 1px solid var(--border);
     background: var(--bg-secondary);
 }
+
+/* ==== Sidebar: Start new chat button + empty-chat collapse ==== */
+.sidebar-primary-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    width: calc(100% - 20px);
+    margin: 10px 10px 14px;
+    padding: 8px 12px;
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--accent-fg, #fff);
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: filter 120ms ease, transform 80ms ease;
+}
+.sidebar-primary-btn:hover { filter: brightness(1.08); }
+.sidebar-primary-btn:active { transform: scale(0.98); }
+
+.sidebar-show-empty-chats {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: calc(100% - 20px);
+    margin: 6px 10px 4px;
+    padding: 6px 10px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    background: transparent;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+}
+.sidebar-show-empty-chats:hover {
+    color: var(--text-secondary);
+    border-color: var(--text-tertiary);
+    background: var(--bg-secondary);
+}

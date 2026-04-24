@@ -53,6 +53,8 @@ interface SessionState {
   switchSession: (id: string) => void;
   deleteSession: (id: string) => Promise<void>;
   renameSession: (id: string, title: string) => Promise<void>;
+  pinSession: (id: string) => Promise<void>;
+  unpinSession: (id: string) => Promise<void>;
   updateSessionStatus: (id: string, status: ConversationStatus) => void;
   markUnseenCompletion: (id: string) => void;
   clearUnseenCompletion: (id: string) => void;
@@ -114,6 +116,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               workingDir: (meta.workingDir || meta.working_dir || s.workingDir || s.working_dir || '') as string,
               isCustomTitle: (meta.isCustomTitle || false) as boolean,
               mode: ((meta.session_mode || s.session_mode || 'general') as SessionMode),
+              pinned: Boolean(meta.pinned ?? s.pinned),
+              pinnedAt: (() => {
+                const v = meta.pinnedAt ?? meta.pinned_at ?? s.pinnedAt ?? s.pinned_at;
+                return typeof v === 'number' ? v : undefined;
+              })(),
               messages: [],
             };
           })
@@ -313,6 +320,41 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       });
     } catch (e) {
       console.error('SessionAPI.updateMetadata error:', e);
+    }
+  },
+
+  pinSession: async (id: string) => {
+    const now = Date.now();
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, pinned: true, pinnedAt: now } : s,
+      ),
+    }));
+    try {
+      await fetch(`${BASE_URL}/v1/sessions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata: { pinned: true, pinnedAt: now } }),
+      });
+    } catch (e) {
+      console.error('SessionAPI.pin error:', e);
+    }
+  },
+
+  unpinSession: async (id: string) => {
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, pinned: false, pinnedAt: undefined } : s,
+      ),
+    }));
+    try {
+      await fetch(`${BASE_URL}/v1/sessions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata: { pinned: false, pinnedAt: null } }),
+      });
+    } catch (e) {
+      console.error('SessionAPI.unpin error:', e);
     }
   },
 

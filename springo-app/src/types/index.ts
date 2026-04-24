@@ -117,6 +117,10 @@ export interface Conversation {
   workingDir: string;
   isCustomTitle: boolean;
   mode?: SessionMode;
+  /** User pinned this conversation to the top of the sidebar. Persisted via session metadata. */
+  pinned?: boolean;
+  /** Timestamp the conversation was last pinned — used to sort PINNED section. */
+  pinnedAt?: number;
   messages: Message[];
   todos?: TodoItem[];
 }

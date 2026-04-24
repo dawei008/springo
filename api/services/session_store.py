@@ -84,7 +84,9 @@ class SessionStore:
                     "working_dir": metadata.get("working_dir") or metadata.get("workingDir", ""),
                     "title": metadata.get("title", ""),
                     "message_count": metadata.get("message_count", 0),
-                    "session_mode": metadata.get("session_mode", "general")
+                    "session_mode": metadata.get("session_mode", "general"),
+                    "pinned": bool(metadata.get("pinned", False)),
+                    "pinned_at": metadata.get("pinnedAt") or metadata.get("pinned_at"),
                 }
 
                 # 过滤工作目录

@@ -33,6 +33,8 @@ class SessionInfo(BaseModel):
     title: str = ""
     message_count: int = 0
     session_mode: str = "general"
+    pinned: bool = False
+    pinned_at: Optional[float] = None
 
 
 class SessionsListResponse(BaseModel):
