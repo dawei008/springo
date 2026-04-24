@@ -314,6 +314,43 @@
             color: var(--text-primary);
         }
 
+        .nav-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-tertiary);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 6px 14px 2px;
+            user-select: none;
+        }
+
+        .nav-item-pin-toggle {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            border-radius: 4px;
+            padding: 3px;
+            color: var(--accent);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 120ms ease, background 120ms ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .nav-item-with-action:hover .nav-item-pin-toggle {
+            opacity: 1;
+        }
+        .nav-item-pin-toggle:hover {
+            background: color-mix(in srgb, var(--accent) 18%, transparent);
+        }
+        .nav-item-pin-toggle svg {
+            transform: rotate(-20deg);
+        }
+
         /* Session list */
         .session-list {
             padding: 2px 0;
@@ -12662,9 +12699,15 @@
 }
 .canvas-action-btn.pinned {
     color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    font-weight: 600;
 }
 .canvas-action-btn.pinned:hover {
-    color: var(--accent-hover);
+    background: color-mix(in srgb, var(--accent) 22%, transparent);
+    color: var(--accent-hover, var(--accent));
+}
+.canvas-action-btn.pinned svg {
+    transform: rotate(-20deg);
 }
 
 .canvas-version-timeline {

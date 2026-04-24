@@ -266,6 +266,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
   const artifactMap = useUnifiedArtifactStore((s) => s.artifacts);
   const activeArtifactId = useUnifiedArtifactStore((s) => s.activeArtifactId);
   const openUnifiedArtifact = useUnifiedArtifactStore((s) => s.openArtifact);
+  const unpinArtifact = useUnifiedArtifactStore((s) => s.unpinArtifact);
 
   const pinnedArtifacts = useMemo(
     () => pinnedIds.map((id) => artifactMap[id]).filter(Boolean),
@@ -276,30 +277,47 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     [sessionIds, artifactMap],
   );
 
+  const hasPinned = pinnedArtifacts.length > 0;
+  const hasSession = sessionArtifacts.length > 0;
+  const showSubheaders = hasPinned && hasSession;
+
+  const renderArtifactItem = (art: typeof pinnedArtifacts[number], isPinned: boolean) => (
+    <div key={art.id} className="nav-item-with-action">
+      <NavItem
+        icon={<ArtifactIcon name={art.icon} size={14} />}
+        label={art.name}
+        active={activeArtifactId === art.id}
+        onClick={() => openUnifiedArtifact(art.id)}
+      />
+      {isPinned && (
+        <button
+          className="nav-item-pin-toggle"
+          title="Unpin from Apps"
+          onClick={(e) => { e.stopPropagation(); unpinArtifact(art.id); }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 17v5" fill="none" />
+            <path d="M9 10.76a2 2 0 0 1-1.11 1.79L6 13.5V15h12v-1.5l-1.89-.95A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1Z" />
+          </svg>
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <div className="nav-section">
       <SectionHeader title="Apps" collapsed={collapsed} onToggle={onToggle} />
       {!collapsed && (
         <>
-          {pinnedArtifacts.map((art) => (
-            <NavItem
-              key={art.id}
-              icon={<ArtifactIcon name={art.icon} size={14} />}
-              label={art.name}
-              active={activeArtifactId === art.id}
-              onClick={() => openUnifiedArtifact(art.id)}
-            />
-          ))}
-          {sessionArtifacts.map((art) => (
-            <NavItem
-              key={art.id}
-              icon={<ArtifactIcon name={art.icon} size={14} />}
-              label={art.name}
-              active={activeArtifactId === art.id}
-              onClick={() => openUnifiedArtifact(art.id)}
-            />
-          ))}
-          {(pinnedArtifacts.length > 0 || sessionArtifacts.length > 0) && (
+          {showSubheaders && hasPinned && (
+            <div className="nav-subheader">Pinned</div>
+          )}
+          {pinnedArtifacts.map((art) => renderArtifactItem(art, true))}
+          {showSubheaders && hasSession && (
+            <div className="nav-subheader">This session</div>
+          )}
+          {sessionArtifacts.map((art) => renderArtifactItem(art, false))}
+          {(hasPinned || hasSession) && (
             <div style={{ borderTop: '1px solid var(--border)', margin: '4px 12px' }} />
           )}
           <div className="nav-item-with-action">
