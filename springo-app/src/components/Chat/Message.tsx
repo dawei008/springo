@@ -615,7 +615,7 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         store.createArtifact({
           id: stableId,
           name: a.title || 'Artifact',
-          icon: a.icon || a.artifactType,
+          icon: a.icon,
           type: a.artifactType,
           files,
         });

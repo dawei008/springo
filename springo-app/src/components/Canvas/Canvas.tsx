@@ -92,7 +92,7 @@ function TemplateCard({ template }: { template: ArtifactTemplate }) {
 
   return (
     <button className="canvas-template-card" onClick={handleClick}>
-      <span className="canvas-template-icon"><ArtifactIcon name={template.icon} fallback={template.type} size={22} /></span>
+      <ArtifactIcon name={template.icon} size={22} className="canvas-template-icon" />
       <span className="canvas-template-name">{template.name}</span>
       <span className="canvas-template-desc">{template.description}</span>
     </button>
@@ -142,7 +142,7 @@ export default function Canvas() {
   return (
     <div className="canvas-panel" ref={canvasRef}>
       <div className="canvas-header">
-        <span className="canvas-header-icon"><ArtifactIcon name={activeArtifact.icon} fallback={activeArtifact.type} size={16} /></span>
+        <ArtifactIcon name={activeArtifact.icon} size={16} className="canvas-header-icon" />
         <span className="canvas-header-title">{activeArtifact.name}</span>
         <ActionBar artifact={activeArtifact} containerRef={canvasRef} />
       </div>

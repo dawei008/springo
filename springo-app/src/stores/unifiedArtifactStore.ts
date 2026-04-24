@@ -15,6 +15,30 @@ import { create } from 'zustand';
 
 export type UnifiedArtifactType = 'app' | 'component' | 'document' | 'template';
 
+/**
+ * Registered artifact icon names. Runtime icon renderers live in
+ * `components/Canvas/ArtifactIcon.tsx` — this type is the data-layer source of
+ * truth so the store and serialized artifacts can type the `icon` field.
+ */
+export type ArtifactIconName =
+  | 'app' | 'component' | 'document' | 'template'
+  | 'dashboard' | 'chart' | 'todo' | 'web' | 'form' | 'counter'
+  | 'mobile' | 'calendar' | 'chat' | 'image' | 'code' | 'box';
+
+/** Runtime-checkable set, kept in sync with ArtifactIconName. */
+export const ARTIFACT_ICON_NAMES = new Set<ArtifactIconName>([
+  'app', 'component', 'document', 'template',
+  'dashboard', 'chart', 'todo', 'web', 'form', 'counter',
+  'mobile', 'calendar', 'chat', 'image', 'code', 'box',
+]);
+
+/** Coerce an arbitrary string to a valid icon name; fall back to `type` then `'box'`. */
+export function resolveIconName(icon: string | undefined | null, type?: string): ArtifactIconName {
+  if (icon && ARTIFACT_ICON_NAMES.has(icon as ArtifactIconName)) return icon as ArtifactIconName;
+  if (type && ARTIFACT_ICON_NAMES.has(type as ArtifactIconName)) return type as ArtifactIconName;
+  return 'box';
+}
+
 export interface ArtifactFile {
   path: string;
   type: 'html' | 'jsx' | 'css' | 'json' | 'text';
@@ -32,7 +56,7 @@ export interface ArtifactVersion {
 export interface Artifact {
   id: string;
   name: string;
-  icon: string;
+  icon: ArtifactIconName;
   type: UnifiedArtifactType;
   files: ArtifactFile[];
   state: Record<string, unknown>;
@@ -74,6 +98,7 @@ export interface UnifiedArtifactState {
   createArtifact: (props: {
     id?: string;
     name: string;
+    /** Accepts any string (models may emit stale values); coerced to a valid `ArtifactIconName` at insert time. */
     icon?: string;
     type?: UnifiedArtifactType;
     files: ArtifactFile[];
@@ -140,8 +165,14 @@ const loaded = (() => {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return { artifacts: {} as Record<string, Artifact>, pinnedIds: [] as string[] };
     const data = JSON.parse(raw);
+    const artifacts = (data.artifacts || {}) as Record<string, Artifact>;
+    // Migrate pre-named-icon artifacts (emoji or free-form strings) to named icons.
+    for (const id in artifacts) {
+      const a = artifacts[id];
+      a.icon = resolveIconName(a.icon, a.type);
+    }
     return {
-      artifacts: (data.artifacts || {}) as Record<string, Artifact>,
+      artifacts,
       pinnedIds: (data.pinnedArtifactIds || []) as string[],
     };
   } catch {
@@ -178,11 +209,12 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       timestamp: now,
     };
 
+    const type: UnifiedArtifactType = props.type ?? 'app';
     const artifact: Artifact = {
       id,
       name: props.name,
-      icon: props.icon ?? (props.type ?? 'app'),
-      type: props.type ?? 'app',
+      icon: resolveIconName(props.icon, type),
+      type,
       files,
       state,
       versions: [initialVersion],

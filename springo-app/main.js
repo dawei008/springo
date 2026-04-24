@@ -173,7 +173,12 @@ function createWindow() {
     });
 
     // 加载本地 HTML
-    mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    if (process.env.SPRINGO_DEV_URL) {
+        mainWindow.loadURL(process.env.SPRINGO_DEV_URL);
+        mainWindow.webContents.openDevTools({ mode: 'detach' });
+    } else {
+        mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+    }
 
     // 准备好后显示窗口
     mainWindow.once('ready-to-show', () => {

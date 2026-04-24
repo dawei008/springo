@@ -552,7 +552,12 @@ The key test: "Is this a standalone deliverable the user asked me to create, or 
 
 ### Iterating on an existing artifact — `<springo-patch>`
 
-When the user's message includes an `<artifact-context>` block, an artifact is already open in Canvas. Prefer `<springo-patch>` over emitting a whole new `<springo-artifact>` — patches preserve version history and are faster.
+**Decision rule (IMPORTANT):** When the user's message includes an `<artifact-context>` block, an artifact is currently open in Canvas. Follow this rule strictly:
+
+- If the user asks to **change, fix, improve, extend, restyle, rename, or reshape** the artifact in `<artifact-context>` — emit **`<springo-patch artifact-id="<the id from context>">`**, never a new `<springo-artifact>`. The id MUST come from the `<artifact-context>` block.
+- Only emit a **new** `<springo-artifact>` when the user asks for a genuinely different thing (e.g. "now make a separate calculator", "design a new dashboard on top of this one").
+- When in doubt: patch. Patches preserve version history and are faster. A mistaken patch is easy to roll back; a mistaken full rebuild discards context.
+- In a patch, **only include files that change**. Omit unchanged files.
 
 ```
 <springo-patch artifact-id="art-msg-123-0">
@@ -570,7 +575,7 @@ When the user's message includes an `<artifact-context>` block, an artifact is a
 
 ### Driving runtime state — `<springo-action>`
 
-For ephemeral state changes the artifact can handle via `postMessage` (navigation, theme toggle, modal open), emit an action instead of rebuilding code:
+For ephemeral state changes the artifact can handle via `postMessage` (navigation, theme toggle, modal open, "reset the counter to 0"), emit an action instead of rebuilding code:
 
 ```
 <springo-action artifact-id="art-msg-123-0">
@@ -579,6 +584,19 @@ For ephemeral state changes the artifact can handle via `postMessage` (navigatio
 ```
 
 Use `<springo-patch>` for anything that changes code. Use `<springo-action>` only for runtime state.
+
+### Observing and driving live artifact state
+
+The `<artifact-context>` block includes a `<runtime-state>` section that reflects what the artifact reported via `window.springo.setState(...)`. Use it to answer questions like "what's the current count?" or "did I enter my email?" without asking the user.
+
+When writing artifacts, instrument interactive state so the host can see it:
+
+```jsx
+const [count, setCount] = React.useState(0);
+React.useEffect(() => { window.springo?.setState({ count }); }, [count]);
+```
+
+When the user asks to change runtime state (e.g. "reset the counter", "clear the todo list"), prefer `<springo-action>` with a payload your artifact's `window.springo.onChatAction(...)` handler understands. If the artifact doesn't yet listen for that action, emit a `<springo-patch>` that adds the listener, then a follow-up `<springo-action>`.
 
 ### Pinned-element edits
 
@@ -761,13 +779,27 @@ class BedrockService:
                 f"  - Project files: `path: \"{working_dir}\"`\n"
                 f"  - Skills/config: `path: \"{springo_config_dir}\"`\n"
             )
+        # Always inject artifact context if an artifact is open in Canvas — the frontend
+        # builds this via buildArtifactContext() on every send. This is what lets the model
+        # decide between <springo-patch> and a new <springo-artifact>.
+        artifact_context = request.get("design_context")
+        if artifact_context:
+            # Truncate to 50KB to avoid token overflow
+            truncated = artifact_context[:50000]
+            system_prompt += (
+                "\n\n## Canvas State (live)\n"
+                "An artifact is currently open in Springo's Canvas panel. Its files and "
+                "(optional) runtime state are below. When the user's request targets this "
+                "artifact, emit `<springo-patch artifact-id=\"...\">` — use the id from the "
+                "context block. Do NOT rebuild it as a fresh `<springo-artifact>`.\n\n"
+                f"{truncated}\n"
+            )
+
         # Design mode: the user is in the /design flow. Detailed guidelines live in the
-        # `springo-design-mode` skill. Here we only tell the model the mode is active and
-        # inline any artifact context the frontend attached (current artifact's files +
-        # pinned element), so the model has everything it needs to iterate.
+        # `springo-design-mode` skill. The artifact context itself is injected above.
         design_mode = request.get("design_mode", False)
         if design_mode:
-            design_prompt = (
+            system_prompt += (
                 "\n\n## Design Mode Active\n\n"
                 "The user is in Springo's design flow. Call the `springo-design-mode` skill "
                 "via `use_skill` to load the full design guidelines (visual standards, content "
@@ -775,17 +807,6 @@ class BedrockService:
                 "or `<springo-patch>` directly in your response text — do not use code tools "
                 "to write design files.\n"
             )
-
-            design_context = request.get("design_context")
-            if design_context:
-                # Truncate to 50KB to avoid token overflow
-                truncated = design_context[:50000]
-                design_prompt += (
-                    "\nCurrent artifact context (iterate from this):\n"
-                    f"{truncated}\n"
-                )
-
-            system_prompt += design_prompt
 
         # Inject personal memory (MEMORY.md + recent daily logs + per-turn relevant snippets)
         try:

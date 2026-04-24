@@ -261,10 +261,20 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     }
   }, [isRecording]);
 
-  const pinnedArtifacts = useUnifiedArtifactStore((s) => s.pinnedArtifactIds.map(id => s.artifacts[id]).filter(Boolean));
-  const sessionArtifacts = useUnifiedArtifactStore((s) => s.sessionArtifactIds.map(id => s.artifacts[id]).filter(a => a && !a.pinned));
+  const pinnedIds = useUnifiedArtifactStore((s) => s.pinnedArtifactIds);
+  const sessionIds = useUnifiedArtifactStore((s) => s.sessionArtifactIds);
+  const artifactMap = useUnifiedArtifactStore((s) => s.artifacts);
   const activeArtifactId = useUnifiedArtifactStore((s) => s.activeArtifactId);
   const openUnifiedArtifact = useUnifiedArtifactStore((s) => s.openArtifact);
+
+  const pinnedArtifacts = useMemo(
+    () => pinnedIds.map((id) => artifactMap[id]).filter(Boolean),
+    [pinnedIds, artifactMap],
+  );
+  const sessionArtifacts = useMemo(
+    () => sessionIds.map((id) => artifactMap[id]).filter((a) => a && !a.pinned),
+    [sessionIds, artifactMap],
+  );
 
   return (
     <div className="nav-section">
@@ -274,7 +284,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
           {pinnedArtifacts.map((art) => (
             <NavItem
               key={art.id}
-              icon={<ArtifactIcon name={art.icon} fallback={art.type} size={14} />}
+              icon={<ArtifactIcon name={art.icon} size={14} />}
               label={art.name}
               active={activeArtifactId === art.id}
               onClick={() => openUnifiedArtifact(art.id)}
@@ -283,7 +293,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
           {sessionArtifacts.map((art) => (
             <NavItem
               key={art.id}
-              icon={<ArtifactIcon name={art.icon} fallback={art.type} size={14} />}
+              icon={<ArtifactIcon name={art.icon} size={14} />}
               label={art.name}
               active={activeArtifactId === art.id}
               onClick={() => openUnifiedArtifact(art.id)}

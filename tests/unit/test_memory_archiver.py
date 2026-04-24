@@ -17,7 +17,7 @@ from api.services.memory_archiver import (
     _build_messages_text,
     archive_session,
     distill_longterm_memory,
-    DISTILL_COOLDOWN_HOURS,
+    DISTILL_COOLDOWN_MINUTES,
 )
 from api.services.memory_files import MemoryFileManager
 

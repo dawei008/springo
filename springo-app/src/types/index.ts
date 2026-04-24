@@ -189,6 +189,8 @@ export interface Settings {
   thinkingEnabled?: boolean;
   /** Thinking effort level: low | medium | high | xhigh | max */
   thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /** Show the "Skill proposals" banner above the chat input when drafts are pending. */
+  skillProposalsEnabled?: boolean;
   [key: string]: unknown;
 }
 

@@ -292,6 +292,14 @@ async def archive_session(session_id: str, **_kwargs) -> Dict[str, Any]:
             except Exception as e:
                 logger.debug(f"[Distill] Skipped after archive: {e}")
 
+            # Try to distill a reusable pattern into a skill proposal (fire-and-forget).
+            # User approves via UI before it becomes an active skill.
+            try:
+                from .skill_proposer import propose_skill_from_session
+                await propose_skill_from_session(session_id, messages_text)
+            except Exception as e:
+                logger.debug(f"[Proposer] Skipped after archive: {e}")
+
             return {
                 "archived": True,
                 "path": write_result.get("path"),
@@ -313,15 +321,17 @@ async def archive_session(session_id: str, **_kwargs) -> Dict[str, Any]:
 # Longterm Memory Distillation (daily logs → MEMORY.md)
 # ---------------------------------------------------------------------------
 
-# Minimum hours between distillation runs (throttle)
-DISTILL_COOLDOWN_HOURS = 6
+# Minimum minutes between distillation runs (throttle)
+# Short cooldown so new insights land in MEMORY.md within a session or two
+# instead of waiting hours. Distillation uses Haiku, so cost is negligible.
+DISTILL_COOLDOWN_MINUTES = 30
 
 _DISTILL_PROMPT = """You are a memory curator. Below are daily memory logs from recent sessions and the current long-term memory file.
 
-Your job: produce an updated MEMORY.md organized by **memory type** that captures all durable facts worth remembering across sessions.
+Your job: produce an updated MEMORY.md organized by **memory type** that captures durable facts AND recurring technical gotchas worth remembering across sessions.
 
 Rules:
-- Organize into exactly these 4 sections (omit empty sections):
+- Organize into exactly these 5 sections (omit empty sections):
 
   ## User
   User's role, expertise, goals, preferences, communication style.
@@ -335,15 +345,21 @@ Rules:
   ## Reference
   External resources: URLs, dashboards, ticket trackers, API endpoints, credentials (API keys, app IDs, secrets, tokens), account names/usernames on platforms.
 
+  ## Gotchas
+  Concrete technical pitfalls the user hit before and doesn't want to hit again. Include the **symptom**, the **root cause**, and the **fix** (with the exact command / config / identifier when relevant). Examples: model-ID prefix differences that cause silent failures, vendor-specific parameter quirks, environment-variable precedence, platform API versioning traps, CSS specificity traps, CLI flags that changed meaning across versions. KEEP these — they are the highest-signal entries for preventing repeat mistakes.
+
 - Keep: user preferences, corrections/confirmations, project decisions, external references
 - Keep: account credentials, API keys, app IDs/secrets, service configurations, platform usernames
-- Remove: ephemeral task details, timestamps, session-specific debugging notes, one-off fixes
-- Remove: code patterns, file paths, git history (derivable from current code)
+- Keep: concrete gotchas — model-ID conventions, vendor parameter limits, file-format constraints, OS-specific flags, version-specific behavior, identifiers that look similar but aren't interchangeable
+- Keep: patterns that appear in **multiple** daily logs (signal of repeat confusion)
+- Remove: a single session's step-by-step narrative (keep the *lesson*, drop the *journey*)
+- Remove: transient timestamps, task IDs, "we talked about X today"
+- Remove: refactors internal to the codebase that are now visible in git history
 - Merge new insights from daily logs into existing long-term memory
 - Don't lose existing facts unless outdated or explicitly contradicted
-- Feedback items have highest retention priority — never silently drop them
-- Keep total output under 5000 characters — be concise but thorough
-- Use Markdown bullet lists
+- Feedback items and Gotchas have highest retention priority — never silently drop them
+- Keep total output under 6000 characters — concise but thorough
+- Use Markdown bullet lists; include code snippets inline with backticks where they save the reader a lookup
 - If daily logs contain nothing new worth adding, return the existing MEMORY.md unchanged
 - Output ONLY the MEMORY.md content, no explanations
 
@@ -360,7 +376,7 @@ async def distill_longterm_memory() -> Dict[str, Any]:
     Reads daily logs from the retention window, calls a fast model to
     produce a curated MEMORY.md, and overwrites it.
 
-    Throttled: skips if MEMORY.md was updated less than DISTILL_COOLDOWN_HOURS ago.
+    Throttled: skips if MEMORY.md was updated less than DISTILL_COOLDOWN_MINUTES ago.
 
     Returns:
         Dict with distillation result: {distilled: bool, reason?: str, chars?: int}
@@ -374,8 +390,8 @@ async def distill_longterm_memory() -> Dict[str, Any]:
     # Throttle: check MEMORY.md mtime
     if os.path.isfile(mgr.memory_md_path):
         mtime = datetime.fromtimestamp(os.path.getmtime(mgr.memory_md_path))
-        if datetime.now() - mtime < timedelta(hours=DISTILL_COOLDOWN_HOURS):
-            logger.debug(f"[Distill] Skipped: MEMORY.md updated {mtime.isoformat()}, cooldown {DISTILL_COOLDOWN_HOURS}h")
+        if datetime.now() - mtime < timedelta(minutes=DISTILL_COOLDOWN_MINUTES):
+            logger.debug(f"[Distill] Skipped: MEMORY.md updated {mtime.isoformat()}, cooldown {DISTILL_COOLDOWN_MINUTES}m")
             return {"distilled": False, "reason": "cooldown"}
 
     # Read existing MEMORY.md

@@ -16,6 +16,21 @@ function escXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+function formatRuntimeState(state: Record<string, unknown>): string {
+  if (!state || Object.keys(state).length === 0) return '(empty — artifact has not reported any state yet)';
+  // Pretty-print JSON so the model can see structure, but keep it compact.
+  try {
+    const pretty = JSON.stringify(state, null, 2);
+    // Cap to 2KB so long lists don't blow the context.
+    if (pretty.length > 2000) {
+      return pretty.slice(0, 2000) + '\n... (truncated)';
+    }
+    return pretty;
+  } catch {
+    return '(state not serializable)';
+  }
+}
+
 function buildArtifactContext(): string | undefined {
   const store = useUnifiedArtifactStore.getState();
   const artifact = store.activeArtifactId ? store.artifacts[store.activeArtifactId] : null;
@@ -25,8 +40,9 @@ function buildArtifactContext(): string | undefined {
   const includeFullContent = totalLines < 500;
 
   let ctx = `<artifact-context>\n`;
-  ctx += `  <artifact name="${escXml(artifact.name)}" type="${escXml(artifact.type)}" id="${escXml(artifact.id)}">\n`;
-  ctx += `    <state>\n      ${JSON.stringify(artifact.state)}\n    </state>\n`;
+  ctx += `  <!-- To edit this artifact, emit <springo-patch artifact-id="${escXml(artifact.id)}">. Do NOT rebuild it as a new <springo-artifact>. -->\n`;
+  ctx += `  <artifact id="${escXml(artifact.id)}" name="${escXml(artifact.name)}" type="${escXml(artifact.type)}" version="${artifact.versions.length}">\n`;
+  ctx += `    <runtime-state>\n${formatRuntimeState(artifact.state)}\n    </runtime-state>\n`;
 
   if (includeFullContent) {
     ctx += `    <files count="${artifact.files.length}">\n`;

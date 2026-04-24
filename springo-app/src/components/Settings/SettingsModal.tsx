@@ -77,6 +77,9 @@ export default function SettingsModal() {
   const [localThinkingEffort, setLocalThinkingEffort] = useState<'low' | 'medium' | 'high' | 'xhigh' | 'max'>(
     (settings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh'
   )
+  const [localSkillProposalsEnabled, setLocalSkillProposalsEnabled] = useState(
+    settings.skillProposalsEnabled !== false,
+  )
 
   // Tools tab state
   const [plugins, setPlugins] = useState<Array<{
@@ -232,6 +235,7 @@ export default function SettingsModal() {
         enable1mContext: localEnable1mContext,
         thinkingEnabled: localThinkingEnabled,
         thinkingEffort: localThinkingEffort,
+        skillProposalsEnabled: localSkillProposalsEnabled,
       })
       // Persist default working dir to backend (~/.springo/config.json)
       if (localDefaultWorkdir.trim()) {
@@ -1162,6 +1166,21 @@ export default function SettingsModal() {
                     <option value="max">Max — no depth limit</option>
                   </select>
                   <div className="hint">Higher effort = deeper reasoning but slower and more tokens.</div>
+                </div>
+                <div className="setting-group">
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: 'auto' }}
+                      checked={localSkillProposalsEnabled}
+                      onChange={(e) => setLocalSkillProposalsEnabled(e.target.checked)}
+                    />
+                    Show Skill Proposals
+                  </label>
+                  <div className="hint">
+                    After each session, Springo may suggest new skills based on recurring patterns.
+                    Approve to add them to <code>~/.springo/skills/</code>. Turn off to hide the banner.
+                  </div>
                 </div>
                 <div className="setting-group">
                   <label>Max Tokens</label>

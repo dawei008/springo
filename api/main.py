@@ -311,7 +311,7 @@ async def root():
 
 # Import and include routers
 from .routers import messages, tools, sessions, context, images, health
-from .routers import config, memory, skills, tool_results
+from .routers import config, memory, skills, skill_proposals, tool_results
 from .routers import models, mcp, terminal, teams, schedules, plugins, acp, transcribe, plans
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
@@ -324,6 +324,7 @@ app.include_router(health.router, tags=["health"])
 app.include_router(config.router, prefix="/v1", tags=["config"])
 app.include_router(memory.router, prefix="/v1", tags=["memory"])
 app.include_router(skills.router, prefix="/v1", tags=["skills"])
+app.include_router(skill_proposals.router, prefix="/v1", tags=["skill-proposals"])
 app.include_router(tool_results.router, prefix="/v1", tags=["tool-results"])
 # 新增路由
 app.include_router(models.router, prefix="/v1", tags=["models"])

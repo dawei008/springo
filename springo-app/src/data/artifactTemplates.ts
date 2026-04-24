@@ -25,6 +25,8 @@ export const ARTIFACT_TEMPLATES: ArtifactTemplate[] = [
         type: 'jsx',
         content: `export default function App() {
   const [count, setCount] = React.useState(0);
+  // Report count to the host so the chat model sees live state in <artifact-context>
+  React.useEffect(() => { window.springo?.setState({ count }); }, [count]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', fontFamily: 'system-ui', gap: 16 }}>
       <h1 style={{ fontSize: 48, margin: 0 }}>{count}</h1>
@@ -131,6 +133,11 @@ export default function Chart() {
   ]);
   const [input, setInput] = React.useState('');
 
+  // Report to host so chat can see current todos
+  React.useEffect(() => {
+    window.springo?.setState({ todos, remaining: todos.filter(t => !t.done).length });
+  }, [todos]);
+
   const addTodo = () => {
     if (!input.trim()) return;
     setTodos(prev => [...prev, { id: Date.now(), text: input.trim(), done: false }]);
@@ -223,6 +230,9 @@ export default function Chart() {
   const [step, setStep] = React.useState(0);
   const [data, setData] = React.useState({ name: '', email: '', message: '' });
   const [errors, setErrors] = React.useState({});
+
+  // Report to host so chat can see which step the user is on and what they've entered
+  React.useEffect(() => { window.springo?.setState({ step, data }); }, [step, data]);
 
   const validate = () => {
     const e = {};
