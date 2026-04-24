@@ -400,6 +400,33 @@ function FileArtifactCard({ filePath, timestamp }: { filePath: string; timestamp
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       const content = new TextDecoder('utf-8').decode(bytes);
+
+      // HTML files get first-class treatment: route them through the unified
+      // artifact store so Canvas renders them with Pin/Version/Open controls.
+      // One shared artifact id per file path means re-opening the same file
+      // reuses the existing Canvas artifact (and its version history) instead
+      // of creating a duplicate.
+      if (type === 'html') {
+        const stableId = 'file-' + filePath.replace(/[^a-zA-Z0-9]+/g, '-').slice(-48);
+        const store = useUnifiedArtifactStore.getState();
+        const existing = store.artifacts[stableId];
+        if (existing) {
+          store.openArtifact(stableId);
+          store.applyPatch(stableId, [
+            { path: 'index.html', action: 'replace', fileType: 'html', content },
+          ]);
+        } else {
+          store.createArtifact({
+            id: stableId,
+            name: fileName,
+            icon: 'web',
+            type: 'app',
+            files: [{ path: 'index.html', type: 'html', content }],
+          });
+        }
+        return;
+      }
+
       let finalContent = content;
       if (type === 'markdown' && ext !== '.md' && ext !== '.markdown' && ext !== '.mdx' && ext !== '.txt') {
         finalContent = '```' + ext.replace('.', '') + '\n' + content + '\n```';
