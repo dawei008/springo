@@ -12569,12 +12569,35 @@
    ═══════════════════════════════════════════ */
 
 .canvas-panel {
+    flex: 1 1 520px;
+    min-width: 320px;
+    max-width: 75%;
     display: flex;
     flex-direction: column;
     height: 100%;
     background: var(--bg-primary);
     border-left: 1px solid var(--border);
-    min-width: 0;
+    position: relative;
+}
+
+.canvas-panel.resizing iframe,
+.canvas-panel.resizing .canvas-body {
+    pointer-events: none;
+}
+
+.canvas-resize {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    cursor: ew-resize;
+    background: transparent;
+    z-index: 10;
+}
+.canvas-resize:hover,
+.canvas-resize.dragging {
+    background: var(--accent);
 }
 
 .canvas-header {

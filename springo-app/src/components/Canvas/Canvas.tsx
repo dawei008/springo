@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { Artifact } from '@/stores/unifiedArtifactStore';
 import { ARTIFACT_TEMPLATES } from '@/data/artifactTemplates';
@@ -125,16 +125,89 @@ function EmptyCanvas() {
   );
 }
 
+function useCanvasResize(panelRef: React.RefObject<HTMLDivElement | null>) {
+  const handleRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handle = handleRef.current;
+    const panel = panelRef.current;
+    if (!handle || !panel) return;
+
+    let dragging = false;
+    let startX = 0;
+    let startW = 0;
+
+    const onDown = (e: MouseEvent) => {
+      dragging = true;
+      startX = e.clientX;
+      startW = panel.offsetWidth;
+      handle.classList.add('dragging');
+      panel.classList.add('resizing');
+      document.body.style.cursor = 'ew-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    };
+    const onMove = (e: MouseEvent) => {
+      if (!dragging) return;
+      const diff = startX - e.clientX;
+      const maxW = Math.floor(window.innerWidth * 0.75);
+      const w = Math.min(maxW, Math.max(320, startW + diff));
+      panel.style.width = w + 'px';
+      panel.style.flex = '0 0 auto';
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      handle.classList.remove('dragging');
+      panel.classList.remove('resizing');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      try {
+        localStorage.setItem('springo-canvas-width', String(panel.offsetWidth));
+      } catch { /* ignore quota */ }
+    };
+
+    handle.addEventListener('mousedown', onDown);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    return () => {
+      handle.removeEventListener('mousedown', onDown);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+    };
+  }, [panelRef]);
+
+  // Restore persisted width on mount.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    try {
+      const saved = localStorage.getItem('springo-canvas-width');
+      if (saved) {
+        const w = parseInt(saved, 10);
+        if (w > 0) {
+          panel.style.width = w + 'px';
+          panel.style.flex = '0 0 auto';
+        }
+      }
+    } catch { /* ignore */ }
+  }, [panelRef]);
+
+  return handleRef;
+}
+
 export default function Canvas() {
   const activeArtifactId = useUnifiedArtifactStore((s) => s.activeArtifactId);
   const activeArtifact = useUnifiedArtifactStore((s) =>
     s.activeArtifactId ? s.artifacts[s.activeArtifactId] ?? null : null,
   );
   const canvasRef = useRef<HTMLDivElement>(null);
+  const resizeHandleRef = useCanvasResize(canvasRef);
 
   if (!activeArtifact || !activeArtifactId) {
     return (
-      <div className="canvas-panel">
+      <div className="canvas-panel" ref={canvasRef}>
+        <div className="canvas-resize" ref={resizeHandleRef} />
         <EmptyCanvas />
       </div>
     );
@@ -142,6 +215,7 @@ export default function Canvas() {
 
   return (
     <div className="canvas-panel" ref={canvasRef}>
+      <div className="canvas-resize" ref={resizeHandleRef} />
       <div className="canvas-header">
         <ArtifactIcon name={activeArtifact.icon} size={16} className="canvas-header-icon" />
         <span className="canvas-header-title">{activeArtifact.name}</span>

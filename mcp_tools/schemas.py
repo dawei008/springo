@@ -777,4 +777,64 @@ Use this when you need the agent to remember previous conversation turns.""",
             "required": ["agent"]
         }
     },
+    {
+        "name": "canvas",
+        "description": (
+            "Operate on Springo's Canvas panel — list, read, patch, query, dispatch, or read runtime state "
+            "of interactive artifacts. Use this INSTEAD of writing Python to read/modify Canvas artifact files. "
+            "Every call is forwarded to the Electron renderer and returns synchronously.\n\n"
+            "Actions:\n"
+            "- list: list all open/pinned artifacts → [{id, name, type, pinned, fileCount, isActive}]\n"
+            "- read: read the source of an artifact. If `path` is given, returns that file's content; otherwise returns all files.\n"
+            "- state: return the latest runtime state the artifact reported via window.springo.setState(...).\n"
+            "- query: evaluate a CSS selector against the live iframe and return {exists, text, tagName, classes}.\n"
+            "- patch: apply file-level changes (same semantics as <springo-patch>). `files` is an array of {path, action: replace|create|delete, content, file_type}.\n"
+            "- dispatch: synthesize a click on a DOM element in the iframe. Best-effort — prefer <springo-action> for reliable state changes.\n\n"
+            "IMPORTANT: for the *final* visible output (create new artifact / modify source that the user should see right away), "
+            "prefer emitting <springo-artifact> / <springo-patch> / <springo-action> tags directly in your response text. "
+            "Use this tool when you need to OBSERVE or when you need to chain multiple operations programmatically."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "read", "state", "query", "patch", "dispatch"],
+                    "description": "What to do against Canvas",
+                },
+                "artifact_id": {
+                    "type": "string",
+                    "description": "Target artifact id (read from <artifact-context> or canvas(action='list')). Required for all actions except 'list'.",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "For action='read': which file to read. Omit to read all files.",
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "CSS selector inside the iframe. Required for 'query' and 'dispatch'.",
+                },
+                "files": {
+                    "type": "array",
+                    "description": "For action='patch': file operations.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "action": {"type": "string", "enum": ["replace", "create", "delete"]},
+                            "content": {"type": "string"},
+                            "file_type": {"type": "string", "enum": ["html", "jsx", "css", "json", "text"]},
+                        },
+                        "required": ["path", "action"],
+                    },
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Max seconds to wait for the renderer. Default 15.",
+                    "default": 15,
+                },
+            },
+            "required": ["action"],
+        },
+    },
 ]

@@ -41,6 +41,8 @@ from .handlers import (
     acp_prompt, acp_list_agents, acp_new_session,
     # Computer use
     computer,
+    # Canvas operations (list/read/patch/query/dispatch artifacts)
+    canvas,
 )
 
 # Skill loader import
@@ -131,6 +133,7 @@ TOOL_HANDLERS = {
     "acp_new_session": acp_new_session,
     # Computer use
     "computer": computer,
+    "canvas": canvas,
 }
 
 

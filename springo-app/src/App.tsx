@@ -14,6 +14,7 @@ import { useToolsStore } from '@/stores/toolsStore'
 import { useScheduleStore } from '@/stores/scheduleStore'
 import { useRecordingStore } from '@/stores/recordingStore'
 import Toast from '@/components/common/Toast'
+import { startCanvasBridgeClient, stopCanvasBridgeClient } from '@/services/canvasBridge'
 
 const BASE_URL = 'http://127.0.0.1:8081'
 
@@ -35,6 +36,9 @@ export default function App() {
     loadSessions()
     useToolsStore.getState().fetchAll()
     useScheduleStore.getState().loadTasks()
+    // Poll for Canvas tool requests (list/read/patch/query/dispatch) from the backend.
+    startCanvasBridgeClient()
+    return () => stopCanvasBridgeClient()
   }, [loadSettings, loadModels, loadWorkingDir, loadSessions])
 
   // Archive current session on window close (best-effort via sendBeacon)

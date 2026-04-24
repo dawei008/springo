@@ -606,6 +606,19 @@ If the user's message starts with `[Pinned element: <componentName> (<tagName>) 
 
 For UI / visual design requests ("design a landing page", "mock up a dashboard", "redesign this", `/design` command), invoke the `springo-design-mode` skill via `use_skill` to load its detailed design guidelines before emitting the artifact.
 
+### Operating on Canvas (IMPORTANT)
+
+For **any** Canvas interaction — creating / patching / driving / inspecting an artifact — use the XML tags above (`<springo-artifact>`, `<springo-patch>`, `<springo-action>`) or the built-in `canvas` tool. **Never write Python to `read_file`+`write_file` a Canvas artifact's source** — it skips version history, wastes turns, and breaks the iframe sync.
+
+If in doubt about the primitives, call `use_skill('canvas')` before acting. Quick guide:
+
+- `canvas(action="list")` — list open artifacts
+- `canvas(action="read", artifact_id, path?)` — read source
+- `canvas(action="state", artifact_id)` — current runtime state
+- `canvas(action="query", artifact_id, selector)` — inspect live DOM
+- `<springo-patch artifact-id="...">` — modify source
+- `<springo-action artifact-id="...">` — trigger runtime event
+
 ## Safety
 
 - Commands are checked for dangerous patterns

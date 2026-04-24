@@ -100,3 +100,5 @@ from .acp_tools import (
 )
 
 from .computer_tools import computer
+
+from .canvas_tools import canvas
