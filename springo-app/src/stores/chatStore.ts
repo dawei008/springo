@@ -736,6 +736,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const maxTokens = options.maxTokens || 16384;
       const temperature = options.temperature ?? 0.7;
 
+      // Resolve the working directory per-request so concurrent sessions don't
+      // race on the backend's global _working_dir. Prefer the session's own
+      // pinned workdir, fall back to the global UI selection.
+      const targetSession = useSessionStore.getState().sessions.find((s) => s.id === convId);
+      const effectiveWorkingDir =
+        targetSession?.workingDir?.trim() ||
+        settingsState.workingDir?.trim() ||
+        undefined;
+
       const requestBody = {
         model,
         max_tokens: maxTokens,
@@ -745,6 +754,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         session_id: options.sessionId || convId,
         compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
         extended_context: options.enable1mContext === true,
+        ...(effectiveWorkingDir ? { working_directory: effectiveWorkingDir } : {}),
         ...(options.thinkingEnabled !== false && model === 'claude-opus-4-7' ? {
           thinking_enabled: true,
           thinking_effort: options.thinkingEffort || 'xhigh',

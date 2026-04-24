@@ -455,6 +455,19 @@ export default function MainContent() {
     usePlanStore.getState().switchSession(currentSessionId ?? null);
   }, [currentSessionId]);
 
+  // Restore the session's pinned working directory so the UI chip + tool calls
+  // match this session's context, not whatever the previously-active session
+  // happened to leave in the global setting.
+  useEffect(() => {
+    if (!currentSessionId) return;
+    const session = useSessionStore.getState().sessions.find((s) => s.id === currentSessionId);
+    const wd = session?.workingDir?.trim();
+    if (!wd) return;
+    if (useSettingsStore.getState().workingDir !== wd) {
+      useSettingsStore.getState().setWorkingDir(wd);
+    }
+  }, [currentSessionId]);
+
   const hasActiveArtifact = useUnifiedArtifactStore((s) => s.activeArtifactId !== null);
 
   return (
