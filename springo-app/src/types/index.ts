@@ -658,9 +658,7 @@ export interface Model {
   supports_vision: boolean;
   supports_thinking: boolean;
   api_format: string;
-  supports_extended_context: boolean;
   context: ModelContextLimits;
-  context_standard: ModelContextLimits | null;
 }
 
 /** Simpler model info shape (subset used in some API responses) */

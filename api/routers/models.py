@@ -49,7 +49,6 @@ async def list_models() -> Dict[str, Any]:
             "supports_vision": info.get("supports_vision", False),
             "supports_thinking": info.get("supports_thinking", False),
             "api_format": info.get("api_format", "anthropic"),
-            "supports_extended_context": False,
             "context": {
                 "max_context_tokens": limits["max_context_tokens"],
                 "compact_threshold": limits["compact_threshold"],
@@ -57,7 +56,6 @@ async def list_models() -> Dict[str, Any]:
                 "target_after_summary": limits["target_after_summary"],
                 "max_output_tokens": limits["max_output_tokens"],
             },
-            "context_standard": None,
         }
         models.append(entry)
 

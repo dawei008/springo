@@ -179,7 +179,6 @@ export default function MessageInput() {
   const currentModelDisplayName = useMemo(() => {
     const m = models.find((x) => x.id === currentModel);
     if (m) return (m as unknown as Record<string, string>).display_name || m.name || m.id;
-    // Shorten the model ID for display
     const short = currentModel.replace(/^(claude|anthropic|deepseek|minimax|kimi|qwen|glm)[.-]?/i, '');
     return short || currentModel;
   }, [models, currentModel]);
@@ -330,7 +329,6 @@ export default function MessageInput() {
         temperature: currentSettings.temperature,
         systemPrompt: currentSettings.systemPrompt,
         compactModel: currentSettings.compactModel,
-        enable1mContext: currentSettings.enable1mContext === true,
         thinkingEnabled: currentSettings.thinkingEnabled !== false,
         thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
         sessionId: convId,
@@ -398,7 +396,6 @@ export default function MessageInput() {
       temperature: currentSettings.temperature,
       systemPrompt: currentSettings.systemPrompt,
       compactModel: currentSettings.compactModel,
-      enable1mContext: currentSettings.enable1mContext === true,
       thinkingEnabled: currentSettings.thinkingEnabled !== false,
       thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
       sessionId: convId,
@@ -661,7 +658,6 @@ export default function MessageInput() {
             temperature: currentSettings.temperature,
             systemPrompt: currentSettings.systemPrompt,
             compactModel: currentSettings.compactModel,
-            enable1mContext: currentSettings.enable1mContext === true,
             thinkingEnabled: currentSettings.thinkingEnabled !== false,
             thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
             sessionId: currentSessionId,

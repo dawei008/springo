@@ -197,7 +197,6 @@ function StatusBar() {
           body: JSON.stringify({
             session_id: currentSessionId,
             model: currentModel,
-            extended_context: settings.enable1mContext === true,
           }),
         });
 
@@ -218,7 +217,7 @@ function StatusBar() {
     };
 
     refreshContextStats();
-  }, [currentSessionId, isStreaming, settings.enable1mContext, currentModel]);
+  }, [currentSessionId, isStreaming, currentModel]);
 
   // Render context breakdown data into HTML
   const renderContextBreakdown = useCallback((data: Record<string, unknown>) => {
@@ -307,7 +306,6 @@ function StatusBar() {
             skills: [],
             memory_files: [],
             model: settings.model || '',
-            extended_context: settings.enable1mContext === true,
           }),
         })
           .then((r) => r.json())
@@ -319,7 +317,7 @@ function StatusBar() {
           });
       }
     },
-    [showContextBreakdown, currentSessionId, settings.model, settings.enable1mContext, renderContextBreakdown],
+    [showContextBreakdown, currentSessionId, settings.model, renderContextBreakdown],
   );
 
   // Close context breakdown when clicking outside

@@ -358,7 +358,6 @@ interface ChatState {
       temperature?: number;
       systemPrompt?: string;
       compactModel?: string;
-      enable1mContext?: boolean;
       thinkingEnabled?: boolean;
       thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
       sessionId?: string;
@@ -753,7 +752,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: apiMessages,
         session_id: options.sessionId || convId,
         compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
-        extended_context: options.enable1mContext === true,
         ...(effectiveWorkingDir ? { working_directory: effectiveWorkingDir } : {}),
         ...(options.thinkingEnabled !== false && model === 'claude-opus-4-7' ? {
           thinking_enabled: true,

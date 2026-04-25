@@ -59,7 +59,6 @@ class ContextStatsRequest(BaseModel):
     skills: Optional[List[Dict]] = None
     memory_files: Optional[List[Dict]] = None
     model: Optional[str] = None
-    extended_context: Optional[bool] = Field(default=None, description="Deprecated, no longer needed")
 
 
 class ContextSummarizeRequest(BaseModel):
@@ -162,13 +161,11 @@ async def context_stats(request: ContextStatsRequest) -> Dict[str, Any]:
             except Exception:
                 pass
 
-        extended_ctx = request.extended_context if request.extended_context is not None else False
         return get_context_stats(
             messages=messages,
             system_prompt=request.system_prompt,
             tools=request.tools,
             model=request.model,
-            extended_context=extended_ctx,
         )
     except Exception as e:
         logger.error(f"Context stats error: {e}")
@@ -182,7 +179,6 @@ async def context_breakdown(request: ContextStatsRequest) -> Dict[str, Any]:
         from ..services.context_manager import get_context_breakdown
 
         system = request.system or request.system_prompt or ""
-        extended_ctx = request.extended_context if request.extended_context is not None else False
         return get_context_breakdown(
             messages=request.messages,
             system_prompt=system,
@@ -190,7 +186,6 @@ async def context_breakdown(request: ContextStatsRequest) -> Dict[str, Any]:
             skills=request.skills,
             memory_files=request.memory_files,
             model=request.model,
-            extended_context=extended_ctx,
         )
     except Exception as e:
         logger.error(f"Context breakdown error: {e}")

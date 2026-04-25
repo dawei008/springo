@@ -69,7 +69,6 @@ export default function SettingsModal() {
   const [minimaxTesting, setMinimaxTesting] = useState(false)
   const [minimaxStatus, setMinimaxStatus] = useState('')
   const [localModel, setLocalModel] = useState(settings.model || defaultModel)
-  const [localEnable1mContext, setLocalEnable1mContext] = useState(settings.enable1mContext === true)
   const [localMaxTokens, setLocalMaxTokens] = useState(settings.maxTokens || 16384)
   const [localTemperature, setLocalTemperature] = useState(settings.temperature || 0.7)
   const [localCompactModel, setLocalCompactModel] = useState(settings.compactModel || defaultCompactModel)
@@ -136,9 +135,6 @@ export default function SettingsModal() {
   const maxOutputTokens = selectedModel
     ? (selectedModel as unknown as { max_output?: number }).max_output || 64000
     : 64000
-  const supportsExtended = selectedModel
-    ? (selectedModel as unknown as { supports_extended_context?: boolean }).supports_extended_context
-    : false
 
   // --- Tab switching ---
   const switchTab = useCallback((tab: SettingsTab) => {
@@ -232,7 +228,6 @@ export default function SettingsModal() {
         maxTokens: localMaxTokens,
         temperature: localTemperature,
         compactModel: localCompactModel,
-        enable1mContext: localEnable1mContext,
         thinkingEnabled: localThinkingEnabled,
         thinkingEffort: localThinkingEffort,
         skillProposalsEnabled: localSkillProposalsEnabled,
@@ -1118,22 +1113,6 @@ export default function SettingsModal() {
                   <select value={localModel} onChange={(e) => setLocalModel(e.target.value)}>
                     {renderModelOptions()}
                   </select>
-                </div>
-                <div
-                  className="setting-group"
-                  id="extended-context-group"
-                  style={{ display: supportsExtended ? undefined : 'none' }}
-                >
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      style={{ width: 'auto' }}
-                      checked={localEnable1mContext}
-                      onChange={(e) => setLocalEnable1mContext(e.target.checked)}
-                    />
-                    Enable 1M Context Window (Beta)
-                  </label>
-                  <div className="hint">Uses full 1,000,000 token context (vs standard 200,000). Requires Bedrock beta access.</div>
                 </div>
                 <div
                   className="setting-group"

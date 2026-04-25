@@ -85,9 +85,6 @@ class MessageRequest(BaseModel):
     # Tools
     tools: Optional[List[ToolDefinition]] = Field(default=None, description="Available tools")
     tool_choice: Optional[ToolChoice] = Field(default=None, description="Tool selection mode")
-    
-    # Extended context (1M beta)
-    extended_context: Optional[bool] = Field(default=None, description="Enable 1M context for supported models")
 
     # Adaptive thinking (Opus 4.7)
     thinking_enabled: Optional[bool] = Field(default=None, description="Enable adaptive thinking (Opus 4.7)")

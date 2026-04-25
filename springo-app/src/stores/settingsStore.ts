@@ -58,7 +58,6 @@ const DEFAULT_SETTINGS: Settings = {
   maxTokens: 16384,
   temperature: 0.7,
   compactModel: 'claude-haiku-4-5-20251001',
-  enable1mContext: false,
   thinkingEnabled: true,
   thinkingEffort: 'xhigh',
 };
@@ -184,11 +183,10 @@ export const useSettingsStore = create<SettingsState>()(
           );
         }
 
-        // Migrate: 1M context should be opt-in, not default-on
-        if (updated.enable1mContext === true) {
-          updated.enable1mContext = false;
+        // Remove legacy enable1mContext field (1M is now default on Bedrock for Claude 4.x)
+        if ('enable1mContext' in updated) {
+          delete (updated as Record<string, unknown>).enable1mContext;
           needsUpdate = true;
-          console.log('[Settings Migration] enable1mContext reset to false (opt-in only)');
         }
 
         if (needsUpdate) {

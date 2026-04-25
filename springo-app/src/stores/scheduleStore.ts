@@ -195,7 +195,6 @@ async function executeTask(taskId: string) {
         temperature: settings.settings.temperature || 0.7,
         stream: false,
         compact_model: settings.getEffectiveCompactModel(),
-        extended_context: settings.settings.enable1mContext === true,
         working_directory: task.workingDirectory || undefined,
       }),
     });

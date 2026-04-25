@@ -754,12 +754,16 @@ class BedrockService:
 
             # Adaptive thinking for Opus 4.7 (only supported mode; Bedrock accepts
             # the same shape as Anthropic API).  Default: xhigh effort, summarized display.
-            if model == "claude-opus-4-7" and request.get("thinking_enabled"):
-                effort = request.get("thinking_effort") or "xhigh"
-                if effort not in ("low", "medium", "high", "xhigh", "max"):
-                    effort = "xhigh"
-                bedrock_body["thinking"] = {"type": "adaptive", "display": "summarized"}
-                bedrock_body["output_config"] = {"effort": effort}
+            if model == "claude-opus-4-7":
+                if request.get("thinking_enabled"):
+                    effort = request.get("thinking_effort") or "xhigh"
+                    if effort not in ("low", "medium", "high", "xhigh", "max"):
+                        effort = "xhigh"
+                    bedrock_body["thinking"] = {"type": "adaptive", "display": "summarized"}
+                    bedrock_body["output_config"] = {"effort": effort}
+                    logger.info(f"[Thinking] Opus 4.7 adaptive thinking enabled, effort={effort}")
+                else:
+                    logger.info(f"[Thinking] Opus 4.7 thinking DISABLED (thinking_enabled={request.get('thinking_enabled')!r})")
 
         # Copy optional parameters
         # Opus 4.7 does not accept temperature/top_p/top_k
