@@ -351,6 +351,35 @@
             transform: rotate(-20deg);
         }
 
+        .nav-item-delete {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: transparent;
+            border: none;
+            border-radius: 4px;
+            padding: 3px;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            opacity: 0;
+            transition: opacity 120ms ease, background 120ms ease, color 120ms ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .nav-item-with-action:hover .nav-item-delete {
+            opacity: 1;
+        }
+        .nav-item-delete:hover {
+            color: var(--error);
+            background: color-mix(in srgb, var(--error) 14%, transparent);
+        }
+        /* When both unpin + delete exist (PINNED section), push delete to the left */
+        .nav-item-with-action:has(.nav-item-pin-toggle) .nav-item-delete {
+            right: 32px;
+        }
+
         /* Session list */
         .session-list {
             padding: 2px 0;

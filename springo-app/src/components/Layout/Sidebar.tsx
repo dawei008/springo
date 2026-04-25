@@ -244,8 +244,10 @@ function PinnedSection({
   items,
   onOpenChat,
   onUnpinChat,
+  onDeleteChat,
   onOpenArtifact,
   onUnpinArtifact,
+  onDeleteArtifact,
   activeChatId,
   activeArtifactId,
 }: {
@@ -254,8 +256,10 @@ function PinnedSection({
   items: PinnedItem[];
   onOpenChat: (id: string) => void;
   onUnpinChat: (id: string) => void;
+  onDeleteChat: (id: string, title: string) => void;
   onOpenArtifact: (id: string) => void;
   onUnpinArtifact: (id: string) => void;
+  onDeleteArtifact: (id: string, name: string) => void;
   activeChatId: string | null;
   activeArtifactId: string | null;
 }) {
@@ -274,6 +278,9 @@ function PinnedSection({
         const onUnpin = item.kind === 'chat'
           ? () => onUnpinChat(item.id)
           : () => onUnpinArtifact(item.id);
+        const onDelete = item.kind === 'chat'
+          ? () => onDeleteChat(item.id, item.title)
+          : () => onDeleteArtifact(item.id, item.title);
         return (
           <div key={`${item.kind}-${item.id}`} className="nav-item-with-action">
             <NavItem
@@ -296,6 +303,15 @@ function PinnedSection({
                 <path d="M9 10.76a2 2 0 0 1-1.11 1.79L6 13.5V15h12v-1.5l-1.89-.95A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1Z" />
               </svg>
             </button>
+            <button
+              className="nav-item-delete"
+              title={item.kind === 'chat' ? 'Delete chat' : 'Delete artifact'}
+              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
           </div>
         );
       })}
@@ -310,6 +326,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
   const artifactMap = useUnifiedArtifactStore((s) => s.artifacts);
   const activeArtifactId = useUnifiedArtifactStore((s) => s.activeArtifactId);
   const openUnifiedArtifact = useUnifiedArtifactStore((s) => s.openArtifact);
+  const deleteArtifact = useUnifiedArtifactStore((s) => s.deleteArtifact);
 
   // Artifacts belonging to the current session that the user hasn't pinned yet.
   // Pinned artifacts live in the dedicated PINNED section at the top of the sidebar.
@@ -317,6 +334,12 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     () => sessionIds.map((id) => artifactMap[id]).filter((a) => a && !a.pinned),
     [sessionIds, artifactMap],
   );
+
+  const handleDelete = useCallback((id: string, name: string) => {
+    if (window.confirm(`Delete artifact "${name}"? Source and version history will be lost.`)) {
+      deleteArtifact(id);
+    }
+  }, [deleteArtifact]);
 
   if (sessionArtifacts.length === 0) return null;
 
@@ -326,13 +349,23 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
       {!collapsed && (
         <>
           {sessionArtifacts.map((art) => (
-            <NavItem
-              key={art.id}
-              icon={<ArtifactIcon name={art.icon} size={14} />}
-              label={art.name}
-              active={activeArtifactId === art.id}
-              onClick={() => openUnifiedArtifact(art.id)}
-            />
+            <div key={art.id} className="nav-item-with-action">
+              <NavItem
+                icon={<ArtifactIcon name={art.icon} size={14} />}
+                label={art.name}
+                active={activeArtifactId === art.id}
+                onClick={() => openUnifiedArtifact(art.id)}
+              />
+              <button
+                className="nav-item-delete"
+                title="Delete artifact"
+                onClick={(e) => { e.stopPropagation(); handleDelete(art.id, art.name); }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
           ))}
         </>
       )}
@@ -505,6 +538,7 @@ export default function Sidebar() {
   const unifiedActiveArtifactId = useUnifiedArtifactStore((s) => s.activeArtifactId);
   const openUnifiedArtifact = useUnifiedArtifactStore((s) => s.openArtifact);
   const unpinUnifiedArtifact = useUnifiedArtifactStore((s) => s.unpinArtifact);
+  const deleteUnifiedArtifact = useUnifiedArtifactStore((s) => s.deleteArtifact);
 
   // ─── UI store ───
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
@@ -633,6 +667,24 @@ export default function Sidebar() {
       deleteSession(id);
     },
     [deleteSession],
+  );
+
+  const handlePinnedChatDelete = useCallback(
+    (id: string, title: string) => {
+      if (window.confirm(`Delete chat "${title}"? This removes all messages.`)) {
+        deleteSession(id);
+      }
+    },
+    [deleteSession],
+  );
+
+  const handlePinnedArtifactDelete = useCallback(
+    (id: string, name: string) => {
+      if (window.confirm(`Delete artifact "${name}"? Source and version history will be lost.`)) {
+        deleteUnifiedArtifact(id);
+      }
+    },
+    [deleteUnifiedArtifact],
   );
 
   const startRename = useCallback(
@@ -871,8 +923,10 @@ export default function Sidebar() {
           items={pinnedItems}
           onOpenChat={handleSwitch}
           onUnpinChat={unpinSession}
+          onDeleteChat={handlePinnedChatDelete}
           onOpenArtifact={openUnifiedArtifact}
           onUnpinArtifact={unpinUnifiedArtifact}
+          onDeleteArtifact={handlePinnedArtifactDelete}
           activeChatId={currentSessionId}
           activeArtifactId={unifiedActiveArtifactId}
         />
