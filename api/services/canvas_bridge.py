@@ -73,13 +73,19 @@ async def await_result(req_id: str, timeout: float = 15.0) -> Dict[str, Any]:
                     break
 
 
+_poll_count = 0
+
 async def drain_queue() -> List[Dict[str, Any]]:
     """Return and clear all pending requests for the renderer."""
+    global _poll_count
     async with _lock:
         items = list(_queue)
         _queue.clear()
+    _poll_count += 1
     if items:
         logger.info(f"[canvas-bridge] Drained {len(items)} request(s): {[i['id'] for i in items]}")
+    elif _poll_count % 20 == 1:  # Log every 10 seconds of empty polls
+        logger.debug(f"[canvas-bridge] Poll #{_poll_count}: queue empty, pending={len(_pending)}")
     return items
 
 

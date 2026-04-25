@@ -839,7 +839,7 @@ async def messages_auto_api(
                                     mgr.execute_tool(t["name"], t.get("input", {}), session_id=session_id),
                                     timeout=timeout
                                 )
-                                err = "error" in r
+                                err = bool(r.get("error"))
                             except asyncio.TimeoutError:
                                 r = {"error": f"Tool execution timed out after {timeout}s"}
                                 err = True
@@ -960,7 +960,7 @@ async def messages_auto_api(
                                     _seq_cancelled = True
                                 else:
                                     result = _tool_task.result()
-                                    is_error = "error" in result
+                                    is_error = bool(result.get("error"))
                             except asyncio.CancelledError:
                                 result = {"error": "Tool execution cancelled by user"}
                                 is_error = True
@@ -1200,7 +1200,7 @@ async def messages_auto_api(
                             tool_manager.execute_tool(t["name"], t.get("input", {}), session_id=session_id),
                             timeout=settings.tool_execution_timeout
                         )
-                        err = "error" in r
+                        err = bool(r.get("error"))
                     except asyncio.TimeoutError:
                         r = {"error": f"Tool execution timed out after {settings.tool_execution_timeout}s"}
                         err = True

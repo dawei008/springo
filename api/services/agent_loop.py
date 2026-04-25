@@ -554,14 +554,14 @@ async def _run_tool_loop(
                     team=team,
                     loop_state=loop_state,
                 )
-                is_error = "error" in result
+                is_error = bool(result.get("error"))
             else:
                 try:
                     result = await asyncio.wait_for(
                         tool_manager.execute_tool(tool_name, tool_input),
                         timeout=settings.tool_execution_timeout,
                     )
-                    is_error = "error" in result
+                    is_error = bool(result.get("error"))
                 except asyncio.TimeoutError:
                     result = {"error": f"Tool timed out after {settings.tool_execution_timeout}s"}
                     is_error = True
