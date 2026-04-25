@@ -144,6 +144,39 @@ def _estimate_tools_tokens(tools: list) -> int:
     return sum(len(_json.dumps(t)) for t in tools) // 4
 
 
+def _strip_messages_cache_control(messages: list) -> None:
+    """Remove any existing cache_control markers from message content blocks.
+
+    We re-apply a single checkpoint per request; stale markers left over from
+    earlier turns would push us past Bedrock's 4-checkpoint limit.
+    """
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block.pop("cache_control", None)
+
+
+def _set_message_cache_checkpoint(msg: Dict[str, Any]) -> None:
+    """Tag the last content block of `msg` with cache_control: ephemeral.
+
+    Anthropic's API accepts cache_control only on *content blocks*, not on the
+    message object itself. If the message content is a plain string, we
+    normalize it to a single-element text block first.
+    """
+    content = msg.get("content")
+    if isinstance(content, str):
+        msg["content"] = [
+            {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+        ]
+        return
+    if isinstance(content, list) and content:
+        last = content[-1]
+        if isinstance(last, dict):
+            last["cache_control"] = {"type": "ephemeral"}
+
+
 def _get_tool_budget(model: str) -> int:
     """Calculate the tool token budget for a model.
 
@@ -796,24 +829,9 @@ class BedrockService:
                 f"  - Project files: `path: \"{working_dir}\"`\n"
                 f"  - Skills/config: `path: \"{springo_config_dir}\"`\n"
             )
-        # Always inject artifact context if an artifact is open in Canvas — the frontend
-        # builds this via buildArtifactContext() on every send. This is what lets the model
-        # decide between <springo-patch> and a new <springo-artifact>.
-        artifact_context = request.get("design_context")
-        if artifact_context:
-            # Truncate to 50KB to avoid token overflow
-            truncated = artifact_context[:50000]
-            system_prompt += (
-                "\n\n## Canvas State (live)\n"
-                "An artifact is currently open in Springo's Canvas panel. Its files and "
-                "(optional) runtime state are below. When the user's request targets this "
-                "artifact, emit `<springo-patch artifact-id=\"...\">` — use the id from the "
-                "context block. Do NOT rebuild it as a fresh `<springo-artifact>`.\n\n"
-                f"{truncated}\n"
-            )
-
         # Design mode: the user is in the /design flow. Detailed guidelines live in the
-        # `artifacts-design` skill. The artifact context itself is injected above.
+        # `artifacts-design` skill. Artifact context is injected below as a separate
+        # system block so it can be cached independently.
         design_mode = request.get("design_mode", False)
         if design_mode:
             system_prompt += (
@@ -825,7 +843,11 @@ class BedrockService:
                 "do not use code tools to write design files.\n"
             )
 
-        # Inject personal memory (MEMORY.md + recent daily logs + per-turn relevant snippets)
+        # Inject long-term memory (MEMORY.md + recent daily logs) into the static block
+        # so it's cached alongside the base system prompt. Per-turn dynamic memory
+        # snippets (which change with the user's latest message) go into the separate
+        # dynamic block below.
+        relevant_snippets: str = ""
         try:
             from .memory_files import get_memory_file_manager, find_relevant_memory_snippets
             mem_mgr = get_memory_file_manager()
@@ -858,7 +880,7 @@ class BedrockService:
                             days=mem_mgr.retention_days,
                         )
                         if relevant:
-                            system_prompt += (
+                            relevant_snippets = (
                                 "\n\n## Relevant Past Context\n"
                                 "The following memory snippets were matched to the current message. "
                                 "Use them if relevant, but verify before acting on older entries.\n\n"
@@ -866,16 +888,53 @@ class BedrockService:
                             )
         except Exception as e:
             logger.debug(f"Memory injection skipped: {e}")
+
+        # Build the dynamic system block (artifact context + matched memory snippets).
+        # These change per-request but are independent of the stable base block — splitting
+        # them lets the base block stay cached while only this small tail gets rebuilt.
+        # Also used by the non-Anthropic (converse) path which doesn't support multi-block
+        # system prompts — for those, we concatenate at the end.
+        artifact_context = request.get("design_context")
+        dynamic_system_parts: list[str] = []
+        if artifact_context:
+            truncated = artifact_context[:50000]
+            dynamic_system_parts.append(
+                "\n\n## Canvas State (live)\n"
+                "An artifact is currently open in Springo's Canvas panel. Its files and "
+                "(optional) runtime state are below. When the user's request targets this "
+                "artifact, emit `<springo-patch artifact-id=\"...\">` — use the id from the "
+                "context block. Do NOT rebuild it as a fresh `<springo-artifact>`.\n\n"
+                f"{truncated}\n"
+            )
+        if relevant_snippets:
+            dynamic_system_parts.append(relevant_snippets)
+        dynamic_system = "".join(dynamic_system_parts)
+
         if api_format == "anthropic":
-            bedrock_body["system"] = [
+            # Block #1: stable — instructions + SPRINGO.md + MEMORY.md + design-mode note.
+            # This is the hot cache: changes rarely (new session, new skill, distill).
+            system_blocks: list[Dict[str, Any]] = [
                 {
                     "type": "text",
                     "text": system_prompt,
                     "cache_control": {"type": "ephemeral"},
                 }
             ]
+            # Block #2 (optional): dynamic — Canvas artifact context + per-turn memory
+            # snippets. Separate checkpoint so that opening/closing artifacts and swapping
+            # between sessions with different artifacts does NOT bust block #1's cache.
+            if dynamic_system:
+                system_blocks.append(
+                    {
+                        "type": "text",
+                        "text": dynamic_system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                )
+            bedrock_body["system"] = system_blocks
         else:
-            bedrock_body["system"] = system_prompt
+            # Converse API: no multi-block support, collapse to a single string.
+            bedrock_body["system"] = system_prompt + dynamic_system
         
         # Handle tools (skip for models that don't support tool use)
         if include_tools and model_supports_tools(model):
@@ -913,7 +972,7 @@ class BedrockService:
             weekday = weekday_names[now.weekday()]
             time_str = now.strftime('%Y-%m-%d %H:%M')
             time_prefix = f"[Current time: {time_str} ({weekday})]\n\n"
-            
+
             # Find last user message
             for i in range(len(bedrock_body["messages"]) - 1, -1, -1):
                 msg = bedrock_body["messages"][i]
@@ -925,7 +984,21 @@ class BedrockService:
                         if content[0].get("type") == "text":
                             content[0]["text"] = time_prefix + content[0].get("text", "")
                     break
-        
+
+        # Mark the end of the stable conversation history as a cache checkpoint.
+        # When a new user message is appended on the next turn, everything up to
+        # this point stays cached and only the new tail is recomputed. We put the
+        # checkpoint on the last block of the second-to-last message (typically an
+        # assistant turn) — the last message is almost always the fresh user query
+        # (possibly prepended with the time_prefix above), which is never cacheable.
+        if api_format == "anthropic" and bedrock_body.get("messages") and len(bedrock_body["messages"]) >= 2:
+            try:
+                _strip_messages_cache_control(bedrock_body["messages"])
+                _set_message_cache_checkpoint(bedrock_body["messages"][-2])
+            except Exception as e:
+                # Non-fatal: cache is an optimization, not a correctness requirement.
+                logger.debug(f"Failed to apply messages cache checkpoint: {e}")
+
         return bedrock_model_id, bedrock_body
     
     async def invoke_model(
@@ -1086,7 +1159,11 @@ class BedrockService:
                     return  # Success — complete response received
 
                 _msg_count = len(body.get("messages", []))
-                _sys_len = len(body.get("system", ""))
+                _sys = body.get("system", "")
+                if isinstance(_sys, list):
+                    _sys_len = sum(len(b.get("text", "")) for b in _sys if isinstance(b, dict))
+                else:
+                    _sys_len = len(_sys)
                 _max_tok = body.get("max_tokens", "?")
                 _tools_count = len(body.get("tools", []))
 
