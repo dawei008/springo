@@ -122,6 +122,12 @@ export default function ArtifactIframe({ artifactId, files, state }: ArtifactIfr
     return () => window.removeEventListener('message', handleMessage);
   }, [handleMessage]);
 
+  // Rebuild the iframe srcdoc only when files change. State changes are
+  // propagated *from* the iframe (artifact calls window.springo.setState
+  // → host store). If we re-inject state into srcdoc on every state update
+  // we destroy the iframe's working DOM and cause visible flicker. The
+  // artifact itself owns its runtime state (e.g. localStorage); on first
+  // mount we still pass in `state` so restored sessions can resume.
   useEffect(() => {
     const iframe = iframeRef.current;
     if (!iframe || files.length === 0) return;
@@ -130,7 +136,9 @@ export default function ArtifactIframe({ artifactId, files, state }: ArtifactIfr
     if (srcdoc === lastSrcdocRef.current) return;
     lastSrcdocRef.current = srcdoc;
     iframe.srcdoc = srcdoc;
-  }, [files, state]);
+    // state intentionally omitted from deps — see comment above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files]);
 
   return (
     <iframe

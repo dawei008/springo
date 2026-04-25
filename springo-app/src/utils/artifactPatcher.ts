@@ -47,9 +47,10 @@ function isValidAction(value: string): value is PatchAction {
 
 /**
  * Quick check whether the raw string contains a `<springo-patch>` block.
+ * Matches both `<springo-patch>` and `<springo-patch artifact-id="...">`.
  */
 export function hasPatch(raw: string): boolean {
-  return raw.includes('<springo-patch>');
+  return /<springo-patch(\s|>)/.test(raw);
 }
 
 /**
@@ -61,7 +62,11 @@ export function parsePatch(raw: string): DesignPatch | null {
   if (!patchMatch) return null;
 
   const attrsStr = patchMatch[1] || '';
-  const artifactIdMatch = attrsStr.match(/artifact="([^"]*)"/);
+  // SKILL.md documents `artifact-id="..."`, but legacy callers also use `artifact="..."`.
+  // Accept either.
+  const artifactIdMatch =
+    attrsStr.match(/artifact-id="([^"]*)"/) ||
+    attrsStr.match(/artifact="([^"]*)"/);
   const artifactId = artifactIdMatch?.[1] || undefined;
 
   const patchBody = patchMatch[2];
@@ -114,7 +119,9 @@ export function parseAction(raw: string): ArtifactAction | null {
   if (!match) return null;
 
   const attrsStr = match[1] || '';
-  const artifactIdMatch = attrsStr.match(/artifact="([^"]*)"/);
+  const artifactIdMatch =
+    attrsStr.match(/artifact-id="([^"]*)"/) ||
+    attrsStr.match(/artifact="([^"]*)"/);
   const artifactId = artifactIdMatch?.[1] || undefined;
 
   const body = match[2].trim();
