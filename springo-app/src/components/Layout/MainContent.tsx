@@ -3,7 +3,6 @@ import Header from './Header';
 import ChatArea from '@/components/Chat/ChatArea';
 import MessageInput from '@/components/Chat/MessageInput';
 import SkillProposalBanner from '@/components/Chat/SkillProposalBanner';
-import ArtifactPanel from '@/components/ArtifactPanel/ArtifactPanel';
 import PlanPanel from '@/components/PlanPanel/PlanPanel';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
@@ -479,7 +478,6 @@ export default function MainContent() {
           <StatusBar />
         </div>
         {hasActiveArtifact && <Canvas />}
-        <ArtifactPanel />
         <PlanPanel />
       </div>
     </div>
