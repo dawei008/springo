@@ -80,8 +80,10 @@ async def execute_tool(
         # Truncate large results
         result = _truncate_result(result)
 
-        # 检查是否有错误
-        has_error = "error" in result
+        # 检查是否有错误 —— only treat "error" field as an error if it has a truthy value.
+        # Tools like `canvas` return {"success": true, "error": "", "data": {...}} and
+        # that empty "error" string must not be misread as a failure.
+        has_error = bool(result.get("error"))
 
         return ToolExecuteResponse(
             success=not has_error,
