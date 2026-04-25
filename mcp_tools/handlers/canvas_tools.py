@@ -17,6 +17,18 @@ logger = logging.getLogger(__name__)
 
 VALID_ACTIONS = {"list", "read", "state", "query", "patch", "dispatch"}
 
+# Reference to the main event loop — the Canvas bridge's _pending dict and
+# asyncio.Event objects are created on this loop.  We MUST schedule
+# enqueue+await on this same loop, otherwise the event.set() from submit_result
+# (HTTP handler on main loop) never wakes up our wait() on a different loop.
+_main_loop: asyncio.AbstractEventLoop | None = None
+
+
+def set_main_loop(loop: asyncio.AbstractEventLoop) -> None:
+    """Called during app startup to capture the main event loop reference."""
+    global _main_loop
+    _main_loop = loop
+
 
 def _error(msg: str) -> Dict[str, Any]:
     return {"success": False, "error": msg}
@@ -76,15 +88,17 @@ def canvas(
     if payload is not None:
         request_payload["payload"] = payload
 
-    try:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're inside an already-running loop — the tool dispatcher
-            # runs us in a thread executor, so just await the coroutine on
-            # a fresh loop.
-            return asyncio.run_coroutine_threadsafe(
-                _call_bridge(request_payload, timeout=timeout), loop
-            ).result(timeout=timeout + 2)
-    except RuntimeError:
-        pass
+    # Canvas bridge's Event objects live on the main loop — schedule there.
+    if _main_loop is not None and _main_loop.is_running():
+        future = asyncio.run_coroutine_threadsafe(
+            _call_bridge(request_payload, timeout=timeout), _main_loop
+        )
+        try:
+            return future.result(timeout=timeout + 2)
+        except Exception as e:
+            return _error(f"canvas bridge failed: {e}")
+
+    # Fallback for tests or no-main-loop contexts — won't receive renderer
+    # results because submit_result runs on a different loop.
+    logger.warning("[canvas] _main_loop unavailable; falling back to fresh loop (renderer results won't arrive)")
     return asyncio.run(_call_bridge(request_payload, timeout=timeout))

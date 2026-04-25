@@ -190,6 +190,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to initialize LSP Manager: {e}")
 
+    # Canvas tool also needs main-loop access (same thread-executor + cross-loop
+    # asyncio.Event issue as LSP)
+    try:
+        import asyncio
+        from mcp_tools.handlers.canvas_tools import set_main_loop as set_canvas_main_loop
+        set_canvas_main_loop(asyncio.get_running_loop())
+        logger.info("Canvas bridge main-loop captured")
+    except Exception as e:
+        logger.warning(f"Failed to register canvas main loop: {e}")
+
     yield
 
     # Shutdown

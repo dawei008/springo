@@ -43,6 +43,7 @@ async def enqueue_request(payload: Dict[str, Any]) -> str:
     async with _lock:
         _pending[req_id] = _Pending(payload)
         _queue.append({"id": req_id, "payload": payload})
+    logger.info(f"[canvas-bridge] Enqueued {req_id} action={payload.get('action')} queue_size={len(_queue)} pending={len(_pending)}")
     return req_id
 
 
@@ -77,7 +78,9 @@ async def drain_queue() -> List[Dict[str, Any]]:
     async with _lock:
         items = list(_queue)
         _queue.clear()
-        return items
+    if items:
+        logger.info(f"[canvas-bridge] Drained {len(items)} request(s): {[i['id'] for i in items]}")
+    return items
 
 
 async def submit_result(req_id: str, result: Dict[str, Any]) -> bool:
@@ -85,8 +88,9 @@ async def submit_result(req_id: str, result: Dict[str, Any]) -> bool:
     async with _lock:
         pending = _pending.get(req_id)
     if pending is None:
-        logger.debug(f"[canvas-bridge] Result for unknown id {req_id} — dropped")
+        logger.warning(f"[canvas-bridge] Result for unknown id {req_id} — dropped (success={result.get('success')})")
         return False
+    logger.info(f"[canvas-bridge] Result received for {req_id} (success={result.get('success')})")
     pending.result = result
     pending.event.set()
     return True
