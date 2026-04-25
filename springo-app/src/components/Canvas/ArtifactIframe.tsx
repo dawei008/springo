@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from 'react';
-import { buildMultiFileRuntime } from '@/utils/multiFileRuntime';
+import { buildMultiFileRuntime, SPRINGO_TOKENS_STYLE_TAG } from '@/utils/multiFileRuntime';
 import { generateBridgeSdk, BRIDGE_MESSAGE_TYPES } from '@/utils/bridgeSdk';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { ArtifactFile } from '@/stores/unifiedArtifactStore';
@@ -22,7 +22,14 @@ function buildArtifactHtml(files: ArtifactFile[], state: Record<string, unknown>
   const htmlFile = files.find(f => f.path === 'index.html');
 
   if (!hasJsx && htmlFile) {
-    return htmlFile.content.replace('</head>', bridgeScript + '</head>');
+    // Raw-HTML artifact: inject Springo design tokens FIRST so any <style> blocks
+    // already in the file can override if they need to, then the bridge SDK LAST
+    // so it runs after everything else is parsed.
+    const withTokens = htmlFile.content.includes('</head>')
+      ? htmlFile.content.replace('</head>', SPRINGO_TOKENS_STYLE_TAG + bridgeScript + '</head>')
+      // No <head> — prepend one.
+      : `<!DOCTYPE html><html><head>${SPRINGO_TOKENS_STYLE_TAG}${bridgeScript}</head><body>${htmlFile.content}</body></html>`;
+    return withTokens;
   }
 
   const runtime = buildMultiFileRuntime(

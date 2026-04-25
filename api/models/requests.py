@@ -104,9 +104,9 @@ class MessageAutoRequest(MessageRequest):
     parallel_tool_execution: bool = Field(default=True, description="Enable parallel tool execution")
     working_directory: Optional[str] = Field(default=None, description="Override working directory for tool execution")
 
-    # Design mode — invokes the springo-design-mode skill; design_context carries the
+    # Design mode — invokes the artifacts-design skill; design_context carries the
     # current artifact's files + pinned element (built by the frontend).
-    design_mode: bool = Field(default=False, description="Enable design mode — loads springo-design-mode skill guidelines")
+    design_mode: bool = Field(default=False, description="Enable design mode — loads artifacts-design skill guidelines")
     design_context: Optional[str] = Field(default=None, description="Current artifact context (files + pinned element) for iteration")
 
 

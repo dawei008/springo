@@ -537,7 +537,7 @@ If omitted, the icon falls back to the `type`.
 
 **When to create an artifact:**
 - Complete documents, reports, or articles the user asked you to write
-- Full interactive UI designs (use the `springo-design-mode` skill for design guidelines)
+- Full interactive UI designs (use the `artifacts-design` skill for design guidelines + Springo design tokens)
 - Substantial code projects meant to be saved
 - SVG diagrams generated inline (wrap in a `document` artifact)
 
@@ -604,7 +604,7 @@ If the user's message starts with `[Pinned element: <componentName> (<tagName>) 
 
 ### Design work
 
-For UI / visual design requests ("design a landing page", "mock up a dashboard", "redesign this", `/design` command), invoke the `springo-design-mode` skill via `use_skill` to load its detailed design guidelines before emitting the artifact.
+For any artifact that has a UI — landing pages, dashboards, mini-apps, writing tools, prototypes, designs, or any `<springo-artifact>` whose `type` is `app`/`component`/`template` — invoke the `artifacts-design` skill via `use_skill` first. It loads the visual guidelines AND the Springo design tokens (CSS variables already injected into the iframe) so the artifact matches the host app instead of looking like a stranger pasted into Canvas.
 
 ### Operating on Canvas (IMPORTANT)
 
@@ -809,16 +809,16 @@ class BedrockService:
             )
 
         # Design mode: the user is in the /design flow. Detailed guidelines live in the
-        # `springo-design-mode` skill. The artifact context itself is injected above.
+        # `artifacts-design` skill. The artifact context itself is injected above.
         design_mode = request.get("design_mode", False)
         if design_mode:
             system_prompt += (
                 "\n\n## Design Mode Active\n\n"
-                "The user is in Springo's design flow. Call the `springo-design-mode` skill "
-                "via `use_skill` to load the full design guidelines (visual standards, content "
-                "rules, artifact format, iteration patterns). Then emit a `<springo-artifact>` "
-                "or `<springo-patch>` directly in your response text — do not use code tools "
-                "to write design files.\n"
+                "The user is in Springo's design flow. Call the `artifacts-design` skill "
+                "via `use_skill` to load the visual guidelines AND the Springo design tokens "
+                "(CSS variables already injected into the Canvas iframe). Then emit a "
+                "`<springo-artifact>` or `<springo-patch>` directly in your response text — "
+                "do not use code tools to write design files.\n"
             )
 
         # Inject personal memory (MEMORY.md + recent daily logs + per-turn relevant snippets)

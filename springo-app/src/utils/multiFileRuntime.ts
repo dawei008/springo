@@ -1,5 +1,106 @@
 import type { ArtifactFile } from '@/stores/unifiedArtifactStore';
 
+/**
+ * Springo design tokens injected into every Canvas iframe's <head>.
+ * Keep in sync with springo-app/src/styles/variables.css — this is a copy
+ * because iframes are sandboxed and can't reach the host stylesheet.
+ *
+ * The `artifacts-design` skill documents the same names so the model
+ * knows what's available to reference via var(--*).
+ */
+const SPRINGO_TOKENS_CSS = `
+:root {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f7f7f8;
+  --bg-tertiary: #ededef;
+  --bg-elevated: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-active: rgba(99, 91, 255, 0.08);
+  --text-primary: #1a1a1a;
+  --text-secondary: #6b6b6b;
+  --text-tertiary: #999999;
+  --text-inverse: #ffffff;
+  --accent: #6b5bff;
+  --accent-hover: #5a4ae6;
+  --accent-light: rgba(99, 91, 255, 0.08);
+  --accent-soft: #d4d0ff;
+  --accent-glow: rgba(99, 91, 255, 0.12);
+  --border: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.10);
+  --border-strong: rgba(0, 0, 0, 0.18);
+  --success: #34a853;
+  --success-bg: rgba(52, 168, 83, 0.10);
+  --success-text: #1e7e34;
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.10);
+  --warning-text: #b45309;
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.10);
+  --error-text: #dc2626;
+  --info: #3b82f6;
+  --info-bg: rgba(59, 130, 246, 0.10);
+  --info-text: #2563eb;
+  --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Monaco, monospace;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-base: 13px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 32px;
+  --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 8px;
+  --space-5: 10px; --space-6: 12px; --space-7: 14px; --space-8: 16px;
+  --space-9: 20px; --space-10: 24px; --space-12: 32px; --space-16: 40px;
+  --radius-sm: 6px; --radius-md: 10px; --radius-lg: 14px; --radius-xl: 20px;
+  --radius-full: 50%;
+  --transition-fast: 0.12s ease;
+  --transition-base: 0.15s ease;
+  --transition-slow: 0.3s ease;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 1px 3px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 2px 4px rgba(0, 0, 0, 0.06), 0 12px 32px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 4px 8px rgba(0, 0, 0, 0.08), 0 20px 40px rgba(0, 0, 0, 0.12);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #111111;
+    --bg-secondary: #1a1a1a;
+    --bg-tertiary: #252525;
+    --bg-elevated: #1e1e1e;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --bg-active: rgba(99, 91, 255, 0.15);
+    --text-primary: #e5e5e5;
+    --text-secondary: #a0a0a0;
+    --text-tertiary: #666666;
+    --text-inverse: #111111;
+    --accent-light: rgba(99, 91, 255, 0.15);
+    --accent-soft: #3d3580;
+    --accent-glow: rgba(99, 91, 255, 0.20);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-default: rgba(255, 255, 255, 0.12);
+    --border-strong: rgba(255, 255, 255, 0.20);
+    --success-bg: rgba(52, 168, 83, 0.15);
+    --success-text: #6dd58c;
+    --warning-bg: rgba(245, 158, 11, 0.15);
+    --warning-text: #fbbf24;
+    --error-bg: rgba(239, 68, 68, 0.15);
+    --error-text: #f87171;
+  }
+}
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-base);
+}
+button, input, textarea, select { font-family: inherit; }
+`;
+
+/** Ready-to-inject <style> tag wrapping SPRINGO_TOKENS_CSS. */
+export const SPRINGO_TOKENS_STYLE_TAG = `<style id="springo-tokens">${SPRINGO_TOKENS_CSS}</style>`;
+
 interface CdnLib {
   scripts: string[];
   global: string;
@@ -190,7 +291,8 @@ export function buildMultiFileRuntime(files: ArtifactFile[], entryFile?: string)
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 ${cdnScriptTags}
-  <style>* { margin: 0; padding: 0; box-sizing: border-box; } body { font-family: system-ui, -apple-system, 'SF Pro Display', sans-serif; }</style>
+  <style>* { margin: 0; padding: 0; box-sizing: border-box; }</style>
+  <style id="springo-tokens">${SPRINGO_TOKENS_CSS}</style>
 ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')}
 </head>
 <body>
