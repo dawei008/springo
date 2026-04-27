@@ -55,7 +55,7 @@ interface DevHook {
      * iframe) frequently fails to commit the resulting state update when
      * the click is synthesized from outside. Use this for sanity checks;
      * if you need guaranteed round-trips, ask the model to emit a
-     * `<springo-action>` instead, or click the button manually.
+     * `<springo-artifact op="action">` instead, or click the button manually.
      */
     click(label: string): boolean;
     /** `querySelector` inside the iframe document. */
