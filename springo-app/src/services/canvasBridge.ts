@@ -1,12 +1,11 @@
 /**
  * Canvas bridge client.
  *
- * Short-polls `/v1/canvas/pending` and executes incoming requests against
- * the live Canvas iframe + unified artifact store, then posts the result
- * back to `/v1/canvas/result/{id}`.
- *
- * The backend's `canvas_bridge.py` queues requests from the `canvas` tool
- * and waits for results keyed by request id.
+ * After the fs-backed artifact store rewrite, the only canvas tool action
+ * that still needs the renderer is `query` — it evaluates a CSS selector
+ * against the live iframe DOM, which only exists here. `list`, `read`,
+ * and `state` are served directly by the backend from
+ * ~/.springo/artifacts/ and never hit this bridge.
  */
 
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
@@ -14,18 +13,11 @@ import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 const BASE_URL = 'http://127.0.0.1:8081';
 const POLL_INTERVAL_MS = 500;
 
-type CanvasAction =
-  | 'list'
-  | 'read'
-  | 'state'
-  | 'query';
-
 interface CanvasRequest {
   id: string;
   payload: {
-    action: CanvasAction;
+    action: 'query';
     artifactId?: string;
-    path?: string;
     selector?: string;
   };
 }
@@ -36,52 +28,8 @@ interface CanvasResult {
   data?: Record<string, unknown>;
 }
 
-// -----------------------------------------------------------------------------
-// Action handlers — each reads the live store / iframe and returns a plain JSON
-// payload the tool will surface to the assistant.
-// -----------------------------------------------------------------------------
-
 function activeIframe(): HTMLIFrameElement | null {
   return document.querySelector<HTMLIFrameElement>('.artifact-iframe');
-}
-
-function handleList(): CanvasResult {
-  const s = useUnifiedArtifactStore.getState();
-  const artifacts = Object.values(s.artifacts).map((a) => ({
-    id: a.id,
-    name: a.name,
-    type: a.type,
-    icon: a.icon,
-    pinned: a.pinned,
-    fileCount: a.files.length,
-    version: a.versions.length,
-    isActive: a.id === s.activeArtifactId,
-  }));
-  return { success: true, data: { artifacts, activeArtifactId: s.activeArtifactId } };
-}
-
-function handleRead(artifactId: string, path: string | undefined): CanvasResult {
-  const s = useUnifiedArtifactStore.getState();
-  const a = s.artifacts[artifactId];
-  if (!a) return { success: false, error: `Artifact not found: ${artifactId}` };
-  if (path) {
-    const f = a.files.find((x) => x.path === path);
-    if (!f) return { success: false, error: `File not found in artifact ${artifactId}: ${path}` };
-    return { success: true, data: { path: f.path, type: f.type, content: f.content } };
-  }
-  return {
-    success: true,
-    data: {
-      files: a.files.map((f) => ({ path: f.path, type: f.type, content: f.content })),
-    },
-  };
-}
-
-function handleState(artifactId: string): CanvasResult {
-  const s = useUnifiedArtifactStore.getState();
-  const a = s.artifacts[artifactId];
-  if (!a) return { success: false, error: `Artifact not found: ${artifactId}` };
-  return { success: true, data: { state: a.state ?? {} } };
 }
 
 function handleQuery(artifactId: string, selector: string | undefined): CanvasResult {
@@ -116,14 +64,8 @@ function handleQuery(artifactId: string, selector: string | undefined): CanvasRe
 function execute(req: CanvasRequest): CanvasResult {
   const p = req.payload;
   const id = p.artifactId || '';
-  switch (p.action) {
-    case 'list':  return handleList();
-    case 'read':  return handleRead(id, p.path);
-    case 'state': return handleState(id);
-    case 'query': return handleQuery(id, p.selector);
-    default:
-      return { success: false, error: `Unknown action: ${(p as { action: string }).action}` };
-  }
+  if (p.action === 'query') return handleQuery(id, p.selector);
+  return { success: false, error: `Unknown action: ${(p as { action: string }).action}` };
 }
 
 async function postResult(reqId: string, result: CanvasResult): Promise<void> {
@@ -134,7 +76,7 @@ async function postResult(reqId: string, result: CanvasResult): Promise<void> {
       body: JSON.stringify(result),
     });
   } catch {
-    // If the result can't be posted, the backend-side tool will time out.
+    /* timeout on backend is the surfaced error */
   }
 }
 
@@ -153,7 +95,7 @@ async function pollOnce(): Promise<void> {
       await postResult(req.id, result);
     }
   } catch {
-    // Network blip — try again next tick.
+    /* retry next tick */
   }
 }
 

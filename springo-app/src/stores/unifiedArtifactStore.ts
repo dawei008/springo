@@ -1,11 +1,10 @@
 /**
  * Unified Artifact Store
  *
- * Manages all artifacts (apps, components, documents, templates)
- * with per-session state, version history, and pinning.
- *
- * This will eventually replace designStore, novelStore, modeStore,
- * and the old artifactStore. For now it lives alongside them.
+ * Thin client over the backend's /v1/artifacts REST API.  The source of
+ * truth lives on disk under ~/.springo/artifacts/; this store is an
+ * in-memory mirror so React renders stay fast. Every mutation is echoed
+ * to the backend; background reads keep the mirror fresh.
  */
 import { create } from 'zustand';
 
@@ -136,9 +135,9 @@ export interface UnifiedArtifactState {
   // Session management
   switchSession: (sessionId: string | null) => void;
 
-  // Persistence
-  persistToStorage: () => void;
-  loadFromStorage: () => void;
+  // Persistence / sync
+  loadFromBackend: () => Promise<void>;
+  refreshArtifact: (id: string) => Promise<void>;
 
   // Selectors
   activeArtifact: () => Artifact | null;
@@ -147,48 +146,104 @@ export interface UnifiedArtifactState {
 }
 
 // ---------------------------------------------------------------------------
-// localStorage bootstrap
+// Backend client
 // ---------------------------------------------------------------------------
 
-const STORAGE_KEY = 'springo-unified-artifacts';
+const BASE_URL = 'http://127.0.0.1:8081';
 
-let _persistTimer: ReturnType<typeof setTimeout> | null = null;
-function debouncedPersist() {
-  if (_persistTimer) clearTimeout(_persistTimer);
-  _persistTimer = setTimeout(() => {
-    useUnifiedArtifactStore.getState().persistToStorage();
-  }, 500);
+interface BackendArtifact {
+  id: string;
+  name: string;
+  type: UnifiedArtifactType;
+  icon: string;
+  version: number;
+  pinned: boolean;
+  pinnedBy?: string[];
+  sessionId?: string | null;
+  createdAt: number;
+  updatedAt: number;
+  files?: Array<{ path: string; type: string; content: string }>;
+  state?: Record<string, unknown>;
+  versions?: Array<{ id: string; createdAt: number | null; fileCount: number }>;
 }
 
-const loaded = (() => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { artifacts: {} as Record<string, Artifact>, pinnedIds: [] as string[] };
-    const data = JSON.parse(raw);
-    const artifacts = (data.artifacts || {}) as Record<string, Artifact>;
-    // Migrate pre-named-icon artifacts (emoji or free-form strings) to named icons.
-    for (const id in artifacts) {
-      const a = artifacts[id];
-      a.icon = resolveIconName(a.icon, a.type);
-    }
-    return {
-      artifacts,
-      pinnedIds: (data.pinnedArtifactIds || []) as string[],
-    };
-  } catch {
-    return { artifacts: {} as Record<string, Artifact>, pinnedIds: [] as string[] };
+function toArtifact(b: BackendArtifact): Artifact {
+  const files: ArtifactFile[] = (b.files ?? []).map((f) => ({
+    path: f.path,
+    type: (['html', 'jsx', 'css', 'json', 'text'].includes(f.type) ? f.type : 'text') as ArtifactFile['type'],
+    content: f.content,
+  }));
+  const state = b.state ?? {};
+  const backendVersions = b.versions ?? [];
+  // Frontend keeps a synthetic linear version history. File contents for
+  // older versions are fetched lazily if the user actually browses them.
+  const versions: ArtifactVersion[] = backendVersions.length > 0
+    ? backendVersions.map((v, i) => ({
+        id: v.id,
+        files: i === backendVersions.length - 1 ? files : [],
+        state: i === backendVersions.length - 1 ? state : {},
+        title: b.name,
+        timestamp: v.createdAt ?? b.updatedAt,
+      }))
+    : [{
+        id: `${b.id}-v0`,
+        files,
+        state,
+        title: b.name,
+        timestamp: b.createdAt,
+      }];
+  return {
+    id: b.id,
+    name: b.name,
+    icon: resolveIconName(b.icon, b.type),
+    type: b.type,
+    files,
+    state,
+    versions,
+    activeVersionIndex: versions.length - 1,
+    createdAt: b.createdAt,
+    updatedAt: b.updatedAt,
+    sessionId: b.sessionId ?? undefined,
+    pinned: b.pinned,
+  };
+}
+
+async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`${method} ${path} → ${res.status} ${text.slice(0, 200)}`);
   }
-})();
+  return (await res.json()) as T;
+}
+
+// Debounced PUT of state.json; per-artifact timer so high-frequency editors
+// (the novel studio sends setState on every keystroke) coalesce into one
+// round-trip per ~500ms.
+const _stateTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+function flushState(id: string, state: Record<string, unknown>) {
+  if (_stateTimers[id]) clearTimeout(_stateTimers[id]);
+  _stateTimers[id] = setTimeout(() => {
+    delete _stateTimers[id];
+    api('PUT', `/v1/artifacts/${id}/state`, { state }).catch((e) => {
+      console.warn('[artifacts] state sync failed', id, (e as Error).message);
+    });
+  }, 500);
+}
 
 // ---------------------------------------------------------------------------
 // Store
 // ---------------------------------------------------------------------------
 
 export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) => ({
-  artifacts: loaded.artifacts,
+  artifacts: {},
   activeArtifactId: null,
   sessionArtifactIds: [],
-  pinnedArtifactIds: loaded.pinnedIds,
+  pinnedArtifactIds: [],
   pinnedElement: null,
   sessionMap: {},
   currentSessionId: null,
@@ -198,22 +253,23 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
   createArtifact: (props) => {
     const now = Date.now();
     const id = props.id ?? `art-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    const type: UnifiedArtifactType = props.type ?? 'app';
+    const icon = resolveIconName(props.icon, type);
     const state = props.state ?? {};
     const files = props.files;
 
+    // Optimistic local insert so Canvas renders immediately.
     const initialVersion: ArtifactVersion = {
       id: `${id}-v0`,
-      files: [...files],
+      files: files.map((f) => ({ ...f })),
       state: { ...state },
       title: props.name,
       timestamp: now,
     };
-
-    const type: UnifiedArtifactType = props.type ?? 'app';
     const artifact: Artifact = {
       id,
       name: props.name,
-      icon: resolveIconName(props.icon, type),
+      icon,
       type,
       files,
       state,
@@ -230,7 +286,22 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       sessionArtifactIds: [...s.sessionArtifactIds, id],
     }));
 
-    debouncedPersist();
+    // Server create, then refresh to pick up canonical meta (real version id etc).
+    api<BackendArtifact>('POST', '/v1/artifacts', {
+      id,
+      name: props.name,
+      type,
+      icon,
+      session_id: get().currentSessionId ?? null,
+      files: files.map((f) => ({ path: f.path, type: f.type, content: f.content })),
+      state,
+    })
+      .then((b) => {
+        const merged = toArtifact(b);
+        set((s) => ({ artifacts: { ...s.artifacts, [id]: merged } }));
+      })
+      .catch((e) => console.warn('[artifacts] create sync failed', (e as Error).message));
+
     return id;
   },
 
@@ -258,7 +329,9 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
         pinnedArtifactIds: s.pinnedArtifactIds.filter((i) => i !== id),
       };
     });
-    debouncedPersist();
+    api('DELETE', `/v1/artifacts/${id}`).catch((e) => {
+      console.warn('[artifacts] delete sync failed', id, (e as Error).message);
+    });
   },
 
   // ---- Code updates --------------------------------------------------------
@@ -267,23 +340,19 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
     const artifact = get().artifacts[id];
     if (!artifact) return;
 
+    // Optimistic local apply so the iframe re-renders immediately.
     const files = [...artifact.files.map((f) => ({ ...f }))];
-
     for (const patch of filePatches) {
       switch (patch.action) {
         case 'replace': {
           const idx = files.findIndex((f) => f.path === patch.path);
-          if (idx !== -1) {
-            files[idx] = { ...files[idx], content: patch.content };
-          } else {
-            files.push({ path: patch.path, type: patch.fileType as ArtifactFile['type'], content: patch.content });
-          }
+          if (idx !== -1) files[idx] = { ...files[idx], content: patch.content };
+          else files.push({ path: patch.path, type: patch.fileType as ArtifactFile['type'], content: patch.content });
           break;
         }
-        case 'create': {
+        case 'create':
           files.push({ path: patch.path, type: patch.fileType as ArtifactFile['type'], content: patch.content });
           break;
-        }
         case 'delete': {
           const delIdx = files.findIndex((f) => f.path === patch.path);
           if (delIdx !== -1) files.splice(delIdx, 1);
@@ -300,9 +369,7 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       title: artifact.name,
       timestamp: now,
     };
-
     const versions = [...artifact.versions, newVersion];
-
     set((s) => ({
       artifacts: {
         ...s.artifacts,
@@ -316,13 +383,25 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       },
     }));
 
-    debouncedPersist();
+    // Server patch; refresh afterward to pick up canonical version id.
+    api<BackendArtifact>('PATCH', `/v1/artifacts/${id}`, {
+      files: filePatches.map((p) => ({
+        path: p.path,
+        action: p.action,
+        content: p.content,
+        file_type: p.fileType,
+      })),
+    })
+      .then((b) => {
+        const merged = toArtifact(b);
+        set((s) => ({ artifacts: { ...s.artifacts, [id]: merged } }));
+      })
+      .catch((e) => console.warn('[artifacts] patch sync failed', id, (e as Error).message));
   },
 
   updateFiles: (id, files) => {
     const artifact = get().artifacts[id];
     if (!artifact) return;
-
     const now = Date.now();
     set((s) => ({
       artifacts: {
@@ -330,6 +409,8 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
         [id]: { ...artifact, files, updatedAt: now },
       },
     }));
+    // updateFiles is intentionally local-only (used by selectVersion);
+    // the server already has the authoritative file tree.
   },
 
   // ---- State updates -------------------------------------------------------
@@ -337,44 +418,37 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
   updateState: (id, newState) => {
     const artifact = get().artifacts[id];
     if (!artifact) return;
-
     const merged = { ...artifact.state, ...newState };
     const now = Date.now();
-
     const versions = [...artifact.versions];
     if (versions.length > 0) {
       const vi = artifact.activeVersionIndex;
       versions[vi] = { ...versions[vi], state: { ...merged } };
     }
-
     set((s) => ({
       artifacts: {
         ...s.artifacts,
         [id]: { ...artifact, state: merged, versions, updatedAt: now },
       },
     }));
-
-    debouncedPersist();
+    flushState(id, merged);
   },
 
   replaceState: (id, newState) => {
     const artifact = get().artifacts[id];
     if (!artifact) return;
-
     const versions = [...artifact.versions];
     if (versions.length > 0) {
       const vi = artifact.activeVersionIndex;
       versions[vi] = { ...versions[vi], state: { ...newState } };
     }
-
     set((s) => ({
       artifacts: {
         ...s.artifacts,
         [id]: { ...artifact, state: newState, versions },
       },
     }));
-
-    debouncedPersist();
+    flushState(id, newState);
   },
 
   // ---- Version management --------------------------------------------------
@@ -383,9 +457,7 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
     const artifact = get().artifacts[id];
     if (!artifact) return;
     if (versionIndex < 0 || versionIndex >= artifact.versions.length) return;
-
     const version = artifact.versions[versionIndex];
-
     set((s) => ({
       artifacts: {
         ...s.artifacts,
@@ -397,6 +469,9 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
         },
       },
     }));
+    // Full version browsing / rollback remains a v2 — for now, selecting an
+    // older version only updates the local view. Use <springo-artifact
+    // op="patch"> to actually apply a change.
   },
 
   currentVersion: (id) => {
@@ -414,47 +489,43 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
   pinArtifact: (id) => {
     const artifact = get().artifacts[id];
     if (!artifact) return;
-
     set((s) => ({
       artifacts: { ...s.artifacts, [id]: { ...artifact, pinned: true } },
       pinnedArtifactIds: s.pinnedArtifactIds.includes(id)
         ? s.pinnedArtifactIds
         : [...s.pinnedArtifactIds, id],
     }));
-
-    debouncedPersist();
+    api('POST', `/v1/artifacts/${id}/pin`, { pinned: true }).catch((e) =>
+      console.warn('[artifacts] pin sync failed', id, (e as Error).message),
+    );
   },
 
   unpinArtifact: (id) => {
     const artifact = get().artifacts[id];
     if (!artifact) return;
-
     set((s) => ({
       artifacts: { ...s.artifacts, [id]: { ...artifact, pinned: false } },
       pinnedArtifactIds: s.pinnedArtifactIds.filter((i) => i !== id),
     }));
-
-    debouncedPersist();
+    api('POST', `/v1/artifacts/${id}/pin`, { pinned: false }).catch((e) =>
+      console.warn('[artifacts] unpin sync failed', id, (e as Error).message),
+    );
   },
 
   // ---- Element pinning -----------------------------------------------------
 
   pinElement: (el) => set({ pinnedElement: el }),
-
   clearPin: () => set({ pinnedElement: null }),
 
   // ---- Session management --------------------------------------------------
 
   switchSession: (sessionId) => {
     const { currentSessionId, activeArtifactId, sessionArtifactIds, sessionMap } = get();
-
     const updatedMap = { ...sessionMap };
     if (currentSessionId) {
       updatedMap[currentSessionId] = { activeArtifactId, sessionArtifactIds };
     }
-
     const restored = sessionId ? updatedMap[sessionId] : null;
-
     set({
       sessionMap: updatedMap,
       currentSessionId: sessionId,
@@ -463,34 +534,32 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
     });
   },
 
-  // ---- Persistence ---------------------------------------------------------
+  // ---- Backend sync --------------------------------------------------------
 
-  persistToStorage: () => {
+  loadFromBackend: async () => {
     try {
-      const { artifacts, pinnedArtifactIds } = get();
-      const pinnedArtifacts: Record<string, Artifact> = {};
-      for (const id of pinnedArtifactIds) {
-        if (artifacts[id]) pinnedArtifacts[id] = artifacts[id];
+      const list = await api<{ artifacts: BackendArtifact[] }>('GET', '/v1/artifacts');
+      // Hydrate metadata only; file contents come via refreshArtifact on demand.
+      const byId: Record<string, Artifact> = {};
+      const pinned: string[] = [];
+      for (const b of list.artifacts) {
+        byId[b.id] = toArtifact(b);
+        if (b.pinned) pinned.push(b.id);
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        artifacts: pinnedArtifacts,
-        pinnedArtifactIds,
-      }));
-    } catch { /* noop */ }
+      set({ artifacts: byId, pinnedArtifactIds: pinned });
+    } catch (e) {
+      console.warn('[artifacts] loadFromBackend failed', (e as Error).message);
+    }
   },
 
-  loadFromStorage: () => {
+  refreshArtifact: async (id) => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const data = JSON.parse(raw);
-      const artifacts = (data.artifacts || {}) as Record<string, Artifact>;
-      const pinnedIds = (data.pinnedArtifactIds || []) as string[];
-      set((s) => ({
-        artifacts: { ...artifacts, ...s.artifacts },
-        pinnedArtifactIds: pinnedIds,
-      }));
-    } catch { /* noop */ }
+      const b = await api<BackendArtifact>('GET', `/v1/artifacts/${id}`);
+      const merged = toArtifact(b);
+      set((s) => ({ artifacts: { ...s.artifacts, [id]: merged } }));
+    } catch (e) {
+      console.warn('[artifacts] refreshArtifact failed', id, (e as Error).message);
+    }
   },
 
   // ---- Selectors -----------------------------------------------------------
@@ -512,5 +581,15 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
   },
 }));
 
-// Expose for debugging
-if (typeof window !== 'undefined') (window as any).__unifiedArtifactStore = useUnifiedArtifactStore;
+// ---------------------------------------------------------------------------
+// Startup: purge any leftover localStorage from the pre-filesystem era,
+// then hydrate from the backend.
+// ---------------------------------------------------------------------------
+
+if (typeof window !== 'undefined') {
+  try { localStorage.removeItem('springo-unified-artifacts'); } catch { /* noop */ }
+  // Fire-and-forget initial sync.
+  void useUnifiedArtifactStore.getState().loadFromBackend();
+  // Expose for debugging.
+  (window as any).__unifiedArtifactStore = useUnifiedArtifactStore;
+}
