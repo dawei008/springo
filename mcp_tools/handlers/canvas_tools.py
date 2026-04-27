@@ -11,11 +11,11 @@ await its response, and surface it to the assistant as a tool_result.
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-VALID_ACTIONS = {"list", "read", "state", "query", "patch", "dispatch"}
+VALID_ACTIONS = {"list", "read", "state", "query"}
 
 # Reference to the main event loop — the Canvas bridge's _pending dict and
 # asyncio.Event objects are created on this loop.  We MUST schedule
@@ -47,34 +47,30 @@ def canvas(
     artifact_id: Optional[str] = None,
     path: Optional[str] = None,
     selector: Optional[str] = None,
-    files: Optional[List[Dict[str, Any]]] = None,
-    payload: Optional[Dict[str, Any]] = None,
     timeout: float = 15.0,
 ) -> Dict[str, Any]:
     """
-    Operate on the Springo Canvas panel.
+    Inspect the Springo Canvas panel. This tool is READ-ONLY.
 
-    action: one of list | read | state | query | patch | dispatch
+    Writes (create / modify / drive) go through the <springo-artifact op="..."> XML
+    tag emitted in the assistant's message text — not through this tool.
+
+    action: one of list | read | state | query
     artifact_id: required for everything except `list`
     path: for `read` — optional; if omitted, returns all files
-    selector: for `query` and `dispatch` — CSS selector inside the iframe
-    files: for `patch` — [{path, action: replace|create|delete, content, file_type}]
-    payload: for arbitrary extra data (unused for now)
+    selector: for `query` — CSS selector inside the iframe
     timeout: seconds to wait for the renderer to respond (default 15s)
     """
     if action not in VALID_ACTIONS:
         return _error(
-            f"Unknown action '{action}'. Valid: {', '.join(sorted(VALID_ACTIONS))}"
+            f"Unknown action '{action}'. Valid (read-only): {', '.join(sorted(VALID_ACTIONS))}. "
+            "To create / patch / drive an artifact, emit a <springo-artifact op=\"create|patch|action\"> tag."
         )
 
     if action != "list" and not artifact_id:
         return _error(f"action='{action}' requires artifact_id")
     if action == "query" and not selector:
         return _error("action='query' requires selector")
-    if action == "dispatch" and not selector:
-        return _error("action='dispatch' requires selector")
-    if action == "patch" and not files:
-        return _error("action='patch' requires files=[{path, action, content, file_type}]")
 
     request_payload: Dict[str, Any] = {"action": action}
     if artifact_id:
@@ -83,10 +79,6 @@ def canvas(
         request_payload["path"] = path
     if selector is not None:
         request_payload["selector"] = selector
-    if files is not None:
-        request_payload["files"] = files
-    if payload is not None:
-        request_payload["payload"] = payload
 
     # Canvas bridge's Event objects live on the main loop — schedule there.
     if _main_loop is not None and _main_loop.is_running():

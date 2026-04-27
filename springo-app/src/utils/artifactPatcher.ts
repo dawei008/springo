@@ -4,23 +4,46 @@ type ArtifactFileType = ArtifactFile['type'];
 
 // ── Types ──────────────────────────────────────────────────────
 
-export type PatchAction = 'replace' | 'create' | 'delete';
+export type FileAction = 'replace' | 'create' | 'delete';
+export type ArtifactOp = 'create' | 'patch' | 'action';
 
 export interface FilePatch {
   path: string;
-  action: PatchAction;
+  action: FileAction;
   content: string;
   fileType: ArtifactFileType;
 }
 
-export interface DesignPatch {
+export interface CreateOp {
+  op: 'create';
+  id?: string;
+  artifactType: 'app' | 'component' | 'document' | 'template';
+  title: string;
+  icon?: string;
   files: FilePatch[];
-  artifactId?: string;
 }
+
+export interface PatchOp {
+  op: 'patch';
+  id: string;
+  files: FilePatch[];
+}
+
+export interface ActionOp {
+  op: 'action';
+  id: string;
+  payload: Record<string, unknown>;
+}
+
+export type ParsedArtifactOp = CreateOp | PatchOp | ActionOp;
 
 // ── Helpers ────────────────────────────────────────────────────
 
-function inferFileType(path: string): ArtifactFileType {
+function inferFileType(path: string, typeAttr: string = ''): ArtifactFileType {
+  if (typeAttr.includes('jsx')) return 'jsx';
+  if (typeAttr.includes('css')) return 'css';
+  if (typeAttr.includes('html')) return 'html';
+  if (typeAttr.includes('json')) return 'json';
   const ext = path.split('.').pop()?.toLowerCase();
   switch (ext) {
     case 'jsx':
@@ -37,99 +60,117 @@ function inferFileType(path: string): ArtifactFileType {
   }
 }
 
-const VALID_ACTIONS: PatchAction[] = ['replace', 'create', 'delete'];
+const VALID_FILE_ACTIONS: FileAction[] = ['replace', 'create', 'delete'];
 
-function isValidAction(value: string): value is PatchAction {
-  return VALID_ACTIONS.includes(value as PatchAction);
+function isValidFileAction(value: string): value is FileAction {
+  return VALID_FILE_ACTIONS.includes(value as FileAction);
+}
+
+function getAttr(attrs: string, name: string): string | undefined {
+  const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
+  return m?.[1];
+}
+
+function parseFiles(body: string, defaultAction: FileAction = 'replace'): FilePatch[] {
+  const fileRegex = /<springo-file\s+([^>]*)(?:\/>|>([\s\S]*?)<\/springo-file>)/g;
+  const files: FilePatch[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = fileRegex.exec(body)) !== null) {
+    const attrs = m[1];
+    const inner = m[2] ?? '';
+    const path = getAttr(attrs, 'path');
+    if (!path) continue;
+    const rawAction = getAttr(attrs, 'action') ?? defaultAction;
+    const action: FileAction = isValidFileAction(rawAction) ? rawAction : defaultAction;
+    const typeAttr = getAttr(attrs, 'type') ?? '';
+    const content = inner.replace(/^\n/, '').replace(/\n$/, '');
+    files.push({ path, action, content, fileType: inferFileType(path, typeAttr) });
+  }
+  return files;
 }
 
 // ── Public API ─────────────────────────────────────────────────
 
 /**
- * Quick check whether the raw string contains a `<springo-patch>` block.
- * Matches both `<springo-patch>` and `<springo-patch artifact-id="...">`.
+ * Quick check whether the raw string contains a `<springo-artifact>` block.
+ * Matches the new unified tag (`<springo-artifact op="...">`) and the
+ * legacy creation tag (`<springo-artifact type="...">`).
  */
-export function hasPatch(raw: string): boolean {
-  return /<springo-patch(\s|>)/.test(raw);
+export function hasArtifactOp(raw: string): boolean {
+  return /<springo-artifact(\s|>)/.test(raw);
 }
 
 /**
- * Parse `<springo-patch>` XML from a raw AI response string.
- * Returns `null` when no patch block is found.
+ * Parse the first `<springo-artifact>` block.
+ *
+ * New form (single writer, three ops):
+ *   <springo-artifact op="create" title="..." type="app" icon="counter">
+ *     <springo-file path="App.jsx" type="text/jsx"> ... </springo-file>
+ *   </springo-artifact>
+ *
+ *   <springo-artifact op="patch" id="art-123">
+ *     <springo-file path="App.jsx" action="replace" type="text/jsx"> ... </springo-file>
+ *     <springo-file path="old.jsx" action="delete" />
+ *   </springo-artifact>
+ *
+ *   <springo-artifact op="action" id="art-123">
+ *     { "type": "reset" }
+ *   </springo-artifact>
+ *
+ * Legacy fallback: if `op` is omitted and `type` is present → treat as create.
  */
-export function parsePatch(raw: string): DesignPatch | null {
-  const patchMatch = raw.match(/<springo-patch(\s[^>]*)?>(([\s\S]*?))<\/springo-patch>/);
-  if (!patchMatch) return null;
+export function parseArtifactOp(raw: string): ParsedArtifactOp | null {
+  const m = raw.match(/<springo-artifact(\s[^>]*)?>([\s\S]*?)<\/springo-artifact>/);
+  if (!m) return null;
 
-  const attrsStr = patchMatch[1] || '';
-  // SKILL.md documents `artifact-id="..."`, but legacy callers also use `artifact="..."`.
-  // Accept either.
-  const artifactIdMatch =
-    attrsStr.match(/artifact-id="([^"]*)"/) ||
-    attrsStr.match(/artifact="([^"]*)"/);
-  const artifactId = artifactIdMatch?.[1] || undefined;
+  const attrs = m[1] || '';
+  const body = m[2];
 
-  const patchBody = patchMatch[2];
+  const opAttr = getAttr(attrs, 'op');
+  const idAttr = getAttr(attrs, 'id') ?? getAttr(attrs, 'artifact-id') ?? getAttr(attrs, 'artifact');
+  const typeAttr = getAttr(attrs, 'type') ?? 'document';
+  const titleAttr = getAttr(attrs, 'title') ?? 'Artifact';
+  const iconAttr = getAttr(attrs, 'icon');
 
-  const fileRegex =
-    /<springo-file\s+([^>]*)>([\s\S]*?)<\/springo-file>/g;
-
-  const files: FilePatch[] = [];
-  let m: RegExpExecArray | null;
-
-  while ((m = fileRegex.exec(patchBody)) !== null) {
-    const attrsStr = m[1];
-    const innerContent = m[2];
-
-    // Extract path attribute
-    const pathMatch = attrsStr.match(/path="([^"]*)"/);
-    if (!pathMatch) continue; // path is required
-    const path = pathMatch[1];
-
-    // Extract action attribute (default: 'replace')
-    const actionMatch = attrsStr.match(/action="([^"]*)"/);
-    const actionRaw = actionMatch ? actionMatch[1] : 'replace';
-    const action: PatchAction = isValidAction(actionRaw) ? actionRaw : 'replace';
-
-    // Trim leading/trailing newline from content (preserve internal whitespace)
-    const content = innerContent.replace(/^\n/, '').replace(/\n$/, '');
-
-    files.push({
-      path,
-      action,
-      content,
-      fileType: inferFileType(path),
-    });
-  }
-
-  return { files, artifactId };
-}
-
-export interface ArtifactAction {
-  artifactId?: string;
-  payload: Record<string, unknown>;
-}
-
-export function hasAction(raw: string): boolean {
-  return raw.includes('<springo-action');
-}
-
-export function parseAction(raw: string): ArtifactAction | null {
-  const match = raw.match(/<springo-action(\s[^>]*)?>(([\s\S]*?))<\/springo-action>/);
-  if (!match) return null;
-
-  const attrsStr = match[1] || '';
-  const artifactIdMatch =
-    attrsStr.match(/artifact-id="([^"]*)"/) ||
-    attrsStr.match(/artifact="([^"]*)"/);
-  const artifactId = artifactIdMatch?.[1] || undefined;
-
-  const body = match[2].trim();
-  try {
-    const payload = JSON.parse(body);
-    return { artifactId, payload };
-  } catch {
+  // Resolve op. If not specified, infer: `type=` → create, otherwise skip.
+  let op: ArtifactOp;
+  if (opAttr === 'create' || opAttr === 'patch' || opAttr === 'action') {
+    op = opAttr;
+  } else if (getAttr(attrs, 'type')) {
+    op = 'create';
+  } else {
     return null;
   }
-}
 
+  if (op === 'action') {
+    if (!idAttr) return null;
+    try {
+      const payload = JSON.parse(body.trim());
+      return { op: 'action', id: idAttr, payload };
+    } catch {
+      return null;
+    }
+  }
+
+  if (op === 'patch') {
+    if (!idAttr) return null;
+    const files = parseFiles(body, 'replace');
+    return { op: 'patch', id: idAttr, files };
+  }
+
+  // op === 'create'
+  const artifactType = ((): CreateOp['artifactType'] => {
+    const t = typeAttr.toLowerCase();
+    if (t === 'app' || t === 'component' || t === 'template') return t;
+    return 'document';
+  })();
+  const files = parseFiles(body, 'create');
+  return {
+    op: 'create',
+    id: idAttr,
+    artifactType,
+    title: titleAttr,
+    icon: iconAttr,
+    files,
+  };
+}

@@ -780,27 +780,22 @@ Use this when you need the agent to remember previous conversation turns.""",
     {
         "name": "canvas",
         "description": (
-            "Operate on Springo's Canvas panel — list, read, patch, query, dispatch, or read runtime state "
-            "of interactive artifacts. Use this INSTEAD of writing Python to read/modify Canvas artifact files. "
-            "Every call is forwarded to the Electron renderer and returns synchronously.\n\n"
+            "READ-ONLY inspection of Springo's Canvas panel. Every call returns synchronously.\n\n"
             "Actions:\n"
             "- list: list all open/pinned artifacts → [{id, name, type, pinned, fileCount, isActive}]\n"
             "- read: read the source of an artifact. If `path` is given, returns that file's content; otherwise returns all files.\n"
             "- state: return the latest runtime state the artifact reported via window.springo.setState(...).\n"
-            "- query: evaluate a CSS selector against the live iframe and return {exists, text, tagName, classes}.\n"
-            "- patch: apply file-level changes (same semantics as <springo-patch>). `files` is an array of {path, action: replace|create|delete, content, file_type}.\n"
-            "- dispatch: synthesize a click on a DOM element in the iframe. Best-effort — prefer <springo-action> for reliable state changes.\n\n"
-            "IMPORTANT: for the *final* visible output (create new artifact / modify source that the user should see right away), "
-            "prefer emitting <springo-artifact> / <springo-patch> / <springo-action> tags directly in your response text. "
-            "Use this tool when you need to OBSERVE or when you need to chain multiple operations programmatically."
+            "- query: evaluate a CSS selector against the live iframe and return {exists, text, tagName, classes}.\n\n"
+            "To CREATE, PATCH, or DRIVE an artifact, emit a <springo-artifact op=\"create|patch|action\"> "
+            "XML tag directly in your response text. That is the only write path; this tool cannot mutate Canvas."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["list", "read", "state", "query", "patch", "dispatch"],
-                    "description": "What to do against Canvas",
+                    "enum": ["list", "read", "state", "query"],
+                    "description": "What to read from Canvas",
                 },
                 "artifact_id": {
                     "type": "string",
@@ -812,21 +807,7 @@ Use this when you need the agent to remember previous conversation turns.""",
                 },
                 "selector": {
                     "type": "string",
-                    "description": "CSS selector inside the iframe. Required for 'query' and 'dispatch'.",
-                },
-                "files": {
-                    "type": "array",
-                    "description": "For action='patch': file operations.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "path": {"type": "string"},
-                            "action": {"type": "string", "enum": ["replace", "create", "delete"]},
-                            "content": {"type": "string"},
-                            "file_type": {"type": "string", "enum": ["html", "jsx", "css", "json", "text"]},
-                        },
-                        "required": ["path", "action"],
-                    },
+                    "description": "CSS selector inside the iframe. Required for 'query'.",
                 },
                 "timeout": {
                     "type": "number",

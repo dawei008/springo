@@ -6,19 +6,6 @@ interface Artifact {
   html: string
 }
 
-/** Model-generated artifact via <springo-artifact> tags */
-export interface ModelArtifact {
-  id: string
-  /** Display/card type — coarse grouping for inline rendering. */
-  type: 'markdown' | 'html' | 'svg' | 'code'
-  /** Unified artifact type — routes to the artifact store. */
-  artifactType: 'app' | 'component' | 'document' | 'template'
-  /** Named icon supplied by the model (see ArtifactIcon registry). */
-  icon?: string
-  title: string
-  content: string
-}
-
 interface ArtifactRendererProps {
   /** Raw markdown/text content that may contain HTML artifacts. */
   text: string
@@ -37,94 +24,6 @@ function isFullHtmlDocument(code: string): boolean {
 
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-}
-
-/**
- * Map springo-artifact type attr to:
- *   - display type: markdown | html | svg | code (for inline card rendering)
- *   - unified artifact type: app | component | document | template (for the store)
- *
- * Accepts both the new unified values ("app", "component", "document", "template")
- * and the legacy media-type values ("text/html", "design/project", "image/svg+xml",
- * "application/code", "text/markdown") for backward compat with older sessions.
- */
-function mapArtifactType(typeAttr: string): { display: ModelArtifact['type']; unified: ModelArtifact['artifactType'] } {
-  const t = typeAttr.toLowerCase()
-  // New unified values (preferred)
-  if (t === 'app') return { display: 'html', unified: 'app' }
-  if (t === 'component') return { display: 'html', unified: 'component' }
-  if (t === 'document') return { display: 'markdown', unified: 'document' }
-  if (t === 'template') return { display: 'html', unified: 'template' }
-  // Legacy values
-  if (t === 'design/project' || t.includes('html')) return { display: 'html', unified: 'app' }
-  if (t.includes('svg')) return { display: 'svg', unified: 'document' }
-  if (t.includes('code')) return { display: 'code', unified: 'document' }
-  return { display: 'markdown', unified: 'document' }
-}
-
-let modelArtifactCounter = 0
-
-import type { ArtifactFile } from '@/stores/unifiedArtifactStore'
-
-/**
- * Parse <springo-file> tags from within a design/project artifact.
- */
-export function parseSpringoFiles(content: string): ArtifactFile[] {
-  const files: ArtifactFile[] = []
-  const re = /<springo-file\s+([^>]*?)>([\s\S]*?)<\/springo-file>/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(content)) !== null) {
-    const attrs = m[1]
-    const body = m[2]
-    const pathMatch = attrs.match(/path="([^"]*)"/)
-    const typeMatch = attrs.match(/type="([^"]*)"/)
-    const path = pathMatch?.[1] || `file-${files.length}`
-    const rawType = typeMatch?.[1] || ''
-    let fileType: ArtifactFile['type'] = 'text'
-    if (rawType.includes('jsx') || path.endsWith('.jsx') || path.endsWith('.tsx')) fileType = 'jsx'
-    else if (rawType.includes('css') || path.endsWith('.css')) fileType = 'css'
-    else if (rawType.includes('html') || path.endsWith('.html')) fileType = 'html'
-    else if (rawType.includes('json') || path.endsWith('.json')) fileType = 'json'
-    files.push({ path, type: fileType, content: body.trim() })
-  }
-  return files
-}
-
-/**
- * Extract <springo-artifact> tags from model output.
- * Returns cleaned text (tags replaced) and extracted artifacts.
- */
-export function extractModelArtifacts(text: string): { cleaned: string; artifacts: ModelArtifact[] } {
-  if (!text || typeof text !== 'string') return { cleaned: text, artifacts: [] }
-
-  const artifacts: ModelArtifact[] = []
-  let cleaned = text.replace(
-    /<springo-artifact\s+([^>]*?)>([\s\S]*?)<\/springo-artifact>/g,
-    (_match, attrs: string, content: string) => {
-      const typeMatch = attrs.match(/type="([^"]*)"/)
-      const titleMatch = attrs.match(/title="([^"]*)"/)
-      const iconMatch = attrs.match(/icon="([^"]*)"/)
-      const idMatch = attrs.match(/id="([^"]*)"/)
-      const rawType = typeMatch?.[1] || 'document'
-      const { display, unified } = mapArtifactType(rawType)
-      const title = titleMatch?.[1] || 'Artifact'
-      const icon = iconMatch?.[1]
-      const id = idMatch?.[1] || `mart-${++modelArtifactCounter}`
-      artifacts.push({
-        id, type: display, artifactType: unified, icon, title, content: content.trim(),
-      })
-      return '' // Remove from inline text
-    }
-  )
-
-  // During streaming, the closing tag may not have arrived yet.
-  // Strip incomplete artifact content to prevent raw code from showing in chat.
-  const incompleteIdx = cleaned.indexOf('<springo-artifact')
-  if (incompleteIdx !== -1) {
-    cleaned = cleaned.substring(0, incompleteIdx)
-  }
-
-  return { cleaned: cleaned.trim(), artifacts }
 }
 
 /**

@@ -40,7 +40,7 @@ function buildArtifactContext(): string | undefined {
   const includeFullContent = totalLines < 500;
 
   let ctx = `<artifact-context>\n`;
-  ctx += `  <!-- To edit this artifact, emit <springo-patch artifact-id="${escXml(artifact.id)}">. Do NOT rebuild it as a new <springo-artifact>. -->\n`;
+  ctx += `  <!-- To edit this artifact, emit <springo-artifact op="patch" id="${escXml(artifact.id)}">. Do NOT rebuild it with op="create". -->\n`;
   ctx += `  <artifact id="${escXml(artifact.id)}" name="${escXml(artifact.name)}" type="${escXml(artifact.type)}" version="${artifact.versions.length}">\n`;
   ctx += `    <runtime-state>\n${formatRuntimeState(artifact.state)}\n    </runtime-state>\n`;
 

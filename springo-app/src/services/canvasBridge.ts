@@ -18,9 +18,7 @@ type CanvasAction =
   | 'list'
   | 'read'
   | 'state'
-  | 'query'
-  | 'patch'
-  | 'dispatch';
+  | 'query';
 
 interface CanvasRequest {
   id: string;
@@ -29,7 +27,6 @@ interface CanvasRequest {
     artifactId?: string;
     path?: string;
     selector?: string;
-    files?: Array<{ path: string; action: 'replace' | 'create' | 'delete'; content?: string; file_type?: string }>;
   };
 }
 
@@ -116,83 +113,14 @@ function handleQuery(artifactId: string, selector: string | undefined): CanvasRe
   }
 }
 
-function handlePatch(
-  artifactId: string,
-  files: CanvasRequest['payload']['files'],
-): CanvasResult {
-  if (!files?.length) return { success: false, error: 'patch requires files=[]' };
-  const s = useUnifiedArtifactStore.getState();
-  if (!s.artifacts[artifactId]) {
-    return { success: false, error: `Artifact not found: ${artifactId}` };
-  }
-  const mapped = files.map((f) => ({
-    path: f.path,
-    action: f.action,
-    content: f.content ?? '',
-    fileType: f.file_type || 'jsx',
-  }));
-  s.applyPatch(artifactId, mapped);
-  const after = useUnifiedArtifactStore.getState().artifacts[artifactId];
-  return {
-    success: true,
-    data: {
-      version: after?.versions.length ?? 0,
-      fileCount: after?.files.length ?? 0,
-    },
-  };
-}
-
-function handleDispatch(artifactId: string, selector: string | undefined): CanvasResult {
-  if (!selector) return { success: false, error: 'dispatch requires selector' };
-  const s = useUnifiedArtifactStore.getState();
-  if (s.activeArtifactId !== artifactId) {
-    return {
-      success: false,
-      error: `Artifact ${artifactId} is not active. Open it before dispatching.`,
-    };
-  }
-  const iframe = activeIframe();
-  const win = iframe?.contentWindow as (Window & typeof globalThis) | null | undefined;
-  if (!win) return { success: false, error: 'No iframe mounted' };
-
-  // Same caveats as the dev hook: React 18 in srcdoc can swallow synthesized
-  // events. Prefer <springo-action> for reliable state changes.
-  try {
-    const runEval = ((win as unknown as { eval: (s: string) => unknown }).eval);
-    const ok = runEval(
-      '(function(sel){' +
-        'var el=document.querySelector(sel);' +
-        'if(!el) return false;' +
-        'for (var t of ["mousedown","mouseup","click"]) {' +
-          'el.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window}));' +
-        '}' +
-        'return true;' +
-      '})(' + JSON.stringify(selector) + ')',
-    );
-    return {
-      success: true,
-      data: {
-        dispatched: Boolean(ok),
-        note: ok
-          ? 'Click dispatched. React 18 in sandboxed iframes may not always commit the resulting state update — verify with canvas(action="state") or prefer <springo-action>.'
-          : `Selector not found: ${selector}`,
-      },
-    };
-  } catch (e) {
-    return { success: false, error: `Dispatch failed: ${(e as Error).message}` };
-  }
-}
-
 function execute(req: CanvasRequest): CanvasResult {
   const p = req.payload;
   const id = p.artifactId || '';
   switch (p.action) {
-    case 'list':     return handleList();
-    case 'read':     return handleRead(id, p.path);
-    case 'state':    return handleState(id);
-    case 'query':    return handleQuery(id, p.selector);
-    case 'patch':    return handlePatch(id, p.files);
-    case 'dispatch': return handleDispatch(id, p.selector);
+    case 'list':  return handleList();
+    case 'read':  return handleRead(id, p.path);
+    case 'state': return handleState(id);
+    case 'query': return handleQuery(id, p.selector);
     default:
       return { success: false, error: `Unknown action: ${(p as { action: string }).action}` };
   }

@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react';
 import Markdown from '@/components/common/Markdown';
-import ArtifactRenderer, { extractModelArtifacts, parseSpringoFiles } from '@/components/Visual/ArtifactRenderer';
-import { hasPatch, parsePatch, hasAction, parseAction } from '@/utils/artifactPatcher';
+import ArtifactRenderer from '@/components/Visual/ArtifactRenderer';
+import { hasArtifactOp, parseArtifactOp } from '@/utils/artifactPatcher';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
@@ -612,78 +612,63 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
     );
   }, [message.mergedContent, message.displayContent, message.content]);
 
-  // Extract model-generated artifacts (<springo-artifact> tags) — pure derivation
-  const { textAfterArtifacts, modelArtifacts } = useMemo(() => {
-    if (message.role !== 'assistant' || !rawText) return { textAfterArtifacts: rawText, modelArtifacts: [] };
-    const { cleaned, artifacts } = extractModelArtifacts(rawText);
-    return { textAfterArtifacts: cleaned, modelArtifacts: artifacts };
+  // Strip the <springo-artifact> block from the chat text (whatever op it is)
+  const textAfterArtifacts = useMemo(() => {
+    if (message.role !== 'assistant' || !rawText) return rawText;
+    if (!hasArtifactOp(rawText)) return rawText;
+    return rawText
+      .replace(/<springo-artifact(\s[^>]*)?>([\s\S]*?)<\/springo-artifact>/g, '')
+      // Drop an unterminated tag during streaming
+      .replace(/<springo-artifact[\s\S]*$/, '')
+      .trim();
   }, [message.role, rawText]);
 
-  // Route artifacts/patches/actions to stores (side effects)
+  // Route the artifact op to the unified store / iframe (single dispatch path)
   useEffect(() => {
     if (message.role !== 'assistant' || !rawText) return;
+    if (!hasArtifactOp(rawText)) return;
+    const parsed = parseArtifactOp(rawText);
+    if (!parsed) return;
+
     const msgId = (message as any).id || message.timestamp || 0;
+    const uStore = useUnifiedArtifactStore.getState();
 
-    // Route <springo-artifact> to unified store
-    if (modelArtifacts.length > 0) {
-      for (let ai = 0; ai < modelArtifacts.length; ai++) {
-        const a = modelArtifacts[ai];
-        const stableId = `art-msg-${msgId}-${ai}`;
-        const store = useUnifiedArtifactStore.getState();
-
-        if (store.artifacts[stableId]) continue;
-
-        const files = parseSpringoFiles(a.content);
-        if (files.length === 0 && a.content) {
-          files.push({ path: 'index.html', type: 'html' as const, content: a.content });
-        }
-        if (files.length === 0) continue;
-
-        store.createArtifact({
-          id: stableId,
-          name: a.title || 'Artifact',
-          icon: a.icon,
-          type: a.artifactType,
-          files,
-        });
-      }
+    if (parsed.op === 'create') {
+      const stableId = parsed.id || `art-msg-${msgId}-0`;
+      if (uStore.artifacts[stableId]) return;
+      const files = parsed.files.length > 0
+        ? parsed.files.map(f => ({ path: f.path, type: f.fileType, content: f.content }))
+        : [];
+      if (files.length === 0) return;
+      uStore.createArtifact({
+        id: stableId,
+        name: parsed.title,
+        icon: parsed.icon,
+        type: parsed.artifactType,
+        files,
+      });
+      return;
     }
 
-    // Route <springo-patch> to unified store
-    if (hasPatch(rawText)) {
-      const patch = parsePatch(rawText);
-      if (patch && patch.files.length > 0) {
-        const uStore = useUnifiedArtifactStore.getState();
-        const targetId = patch.artifactId || uStore.activeArtifactId;
-        if (targetId && uStore.artifacts[targetId]) {
-          const patchKey = `patch-${msgId}`;
-          const art = uStore.artifacts[targetId];
-          const alreadyApplied = art.versions.some((v) => v.id.includes(patchKey));
-          if (!alreadyApplied) {
-            uStore.applyPatch(targetId, patch.files);
-          }
-        }
-      }
+    if (parsed.op === 'patch') {
+      const targetId = parsed.id;
+      if (!uStore.artifacts[targetId]) return;
+      const patchKey = `patch-${msgId}`;
+      const art = uStore.artifacts[targetId];
+      if (art.versions.some(v => v.id.includes(patchKey))) return;
+      if (parsed.files.length === 0) return;
+      uStore.applyPatch(targetId, parsed.files);
+      return;
     }
 
-    // Route <springo-action> to iframe via postMessage
-    if (hasAction(rawText)) {
-      const action = parseAction(rawText);
-      if (action) {
-        const uStore = useUnifiedArtifactStore.getState();
-        const targetId = action.artifactId || uStore.activeArtifactId;
-        if (targetId) {
-          const iframe = document.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
-          if (iframe?.contentWindow) {
-            iframe.contentWindow.postMessage({
-              type: 'springo:chat-action',
-              payload: action.payload,
-            }, '*');
-          }
-        }
-      }
+    if (parsed.op === 'action') {
+      const iframe = document.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
+      iframe?.contentWindow?.postMessage({
+        type: 'springo:chat-action',
+        payload: parsed.payload,
+      }, '*');
     }
-  }, [message.role, rawText, message.timestamp, modelArtifacts]);
+  }, [message.role, rawText, message.timestamp]);
 
   // Detect skill-wrapped user messages
   const skillInfo = useMemo(() => {
