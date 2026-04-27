@@ -667,6 +667,15 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
         type: 'springo:chat-action',
         payload: parsed.payload,
       }, '*');
+      return;
+    }
+
+    if (parsed.op === 'delete') {
+      // Guard against accidental re-deletion if the user scrolls the same
+      // message back into view — deleteArtifact on an unknown id is a no-op
+      // but would still round-trip to the backend uselessly.
+      if (!uStore.artifacts[parsed.id]) return;
+      uStore.deleteArtifact(parsed.id);
     }
   }, [message.role, rawText, message.timestamp]);
 

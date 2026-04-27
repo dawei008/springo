@@ -325,9 +325,11 @@ function PinnedSection({
 
 function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const sessionIds = useUnifiedArtifactStore((s) => s.sessionArtifactIds);
+  const pinnedIds = useUnifiedArtifactStore((s) => s.pinnedArtifactIds);
   const artifactMap = useUnifiedArtifactStore((s) => s.artifacts);
   const activeArtifactId = useUnifiedArtifactStore((s) => s.activeArtifactId);
   const openUnifiedArtifact = useUnifiedArtifactStore((s) => s.openArtifact);
+  const pinUnifiedArtifact = useUnifiedArtifactStore((s) => s.pinArtifact);
   const deleteArtifact = useUnifiedArtifactStore((s) => s.deleteArtifact);
 
   // Artifacts belonging to the current session that the user hasn't pinned yet.
@@ -337,38 +339,74 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     [sessionIds, artifactMap],
   );
 
+  // "Unattached" artifacts: exist in the store but don't belong to the current
+  // session and aren't pinned. Without this section they'd be invisible in the
+  // sidebar even though they still take disk space under ~/.springo/artifacts/.
+  // Common sources: artifact created in an older session the user hasn't
+  // cleaned up, or a botched op left the record around.
+  const unattachedArtifacts = useMemo(() => {
+    const sessionSet = new Set(sessionIds);
+    const pinnedSet = new Set(pinnedIds);
+    return Object.values(artifactMap)
+      .filter((a) => a && !a.pinned && !sessionSet.has(a.id) && !pinnedSet.has(a.id))
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }, [artifactMap, sessionIds, pinnedIds]);
+
   const handleDelete = useCallback((id: string, name: string) => {
     if (window.confirm(`Delete artifact "${name}"? Source and version history will be lost.`)) {
       deleteArtifact(id);
     }
   }, [deleteArtifact]);
 
-  if (sessionArtifacts.length === 0) return null;
+  if (sessionArtifacts.length === 0 && unattachedArtifacts.length === 0) return null;
+
+  const showSubheaders = sessionArtifacts.length > 0 && unattachedArtifacts.length > 0;
+
+  const renderArtifactRow = (art: typeof sessionArtifacts[number], orphan: boolean) => (
+    <div key={art.id} className="nav-item-with-action">
+      <NavItem
+        icon={<ArtifactIcon name={art.icon} size={14} />}
+        label={art.name}
+        active={activeArtifactId === art.id}
+        onClick={() => openUnifiedArtifact(art.id)}
+      />
+      {orphan && (
+        <button
+          className="nav-item-pin-toggle"
+          title="Pin to keep this artifact in your sidebar"
+          onClick={(e) => { e.stopPropagation(); pinUnifiedArtifact(art.id); }}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 17v5" />
+            <path d="M9 10.76a2 2 0 0 1-1.11 1.79L6 13.5V15h12v-1.5l-1.89-.95A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1Z" />
+          </svg>
+        </button>
+      )}
+      <button
+        className="nav-item-delete"
+        title="Delete artifact"
+        onClick={(e) => { e.stopPropagation(); handleDelete(art.id, art.name); }}
+      >
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 6 6 18M6 6l12 12" />
+        </svg>
+      </button>
+    </div>
+  );
 
   return (
     <div className="nav-section">
       <SectionHeader title="Apps" collapsed={collapsed} onToggle={onToggle} />
       {!collapsed && (
         <>
-          {sessionArtifacts.map((art) => (
-            <div key={art.id} className="nav-item-with-action">
-              <NavItem
-                icon={<ArtifactIcon name={art.icon} size={14} />}
-                label={art.name}
-                active={activeArtifactId === art.id}
-                onClick={() => openUnifiedArtifact(art.id)}
-              />
-              <button
-                className="nav-item-delete"
-                title="Delete artifact"
-                onClick={(e) => { e.stopPropagation(); handleDelete(art.id, art.name); }}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M18 6 6 18M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          ))}
+          {showSubheaders && sessionArtifacts.length > 0 && (
+            <div className="nav-subheader">This session</div>
+          )}
+          {sessionArtifacts.map((art) => renderArtifactRow(art, false))}
+          {unattachedArtifacts.length > 0 && (
+            <div className="nav-subheader">Unattached</div>
+          )}
+          {unattachedArtifacts.map((art) => renderArtifactRow(art, true))}
         </>
       )}
     </div>

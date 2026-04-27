@@ -5,7 +5,7 @@ type ArtifactFileType = ArtifactFile['type'];
 // ── Types ──────────────────────────────────────────────────────
 
 export type FileAction = 'replace' | 'create' | 'delete';
-export type ArtifactOp = 'create' | 'patch' | 'action';
+export type ArtifactOp = 'create' | 'patch' | 'action' | 'delete';
 
 export interface FilePatch {
   path: string;
@@ -35,7 +35,12 @@ export interface ActionOp {
   payload: Record<string, unknown>;
 }
 
-export type ParsedArtifactOp = CreateOp | PatchOp | ActionOp;
+export interface DeleteOp {
+  op: 'delete';
+  id: string;
+}
+
+export type ParsedArtifactOp = CreateOp | PatchOp | ActionOp | DeleteOp;
 
 // ── Helpers ────────────────────────────────────────────────────
 
@@ -134,12 +139,17 @@ export function parseArtifactOp(raw: string): ParsedArtifactOp | null {
 
   // Resolve op. If not specified, infer: `type=` → create, otherwise skip.
   let op: ArtifactOp;
-  if (opAttr === 'create' || opAttr === 'patch' || opAttr === 'action') {
+  if (opAttr === 'create' || opAttr === 'patch' || opAttr === 'action' || opAttr === 'delete') {
     op = opAttr;
   } else if (getAttr(attrs, 'type')) {
     op = 'create';
   } else {
     return null;
+  }
+
+  if (op === 'delete') {
+    if (!idAttr) return null;
+    return { op: 'delete', id: idAttr };
   }
 
   if (op === 'action') {
