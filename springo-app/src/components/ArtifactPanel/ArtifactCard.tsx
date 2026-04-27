@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useArtifactStore, type ArtifactItem } from '@/stores/artifactStore'
+import { useUnifiedArtifactStore, type ArtifactFile, type UnifiedArtifactType, type ArtifactIconName } from '@/stores/unifiedArtifactStore'
+import { useUIStore } from '@/stores/uiStore'
 
 interface ArtifactCardProps {
   artifact: ArtifactItem
@@ -39,6 +41,48 @@ const EXT_MAP: Record<ArtifactItem['type'], string> = {
   svg: '.svg',
   excalidraw: '.excalidraw',
   drawio: '.drawio',
+}
+
+// Promote an inline chat artifact into a persistent Canvas artifact so the
+// user can keep it around across sessions and iterate on it. Maps the legacy
+// ArtifactItem type into the unified type/icon vocabulary.
+function pinInlineToCanvas(artifact: ArtifactItem): string {
+  const legacyToUnified: Record<ArtifactItem['type'], { type: UnifiedArtifactType; icon: ArtifactIconName; path: string; fileType: ArtifactFile['type'] }> = {
+    html:        { type: 'app',      icon: 'web',      path: 'index.html',    fileType: 'html' },
+    markdown:    { type: 'document', icon: 'document', path: 'index.md',     fileType: 'text' },
+    image:       { type: 'document', icon: 'image',    path: 'index.html',   fileType: 'html' },
+    svg:         { type: 'document', icon: 'image',    path: 'index.svg',    fileType: 'text' },
+    excalidraw:  { type: 'document', icon: 'chart',    path: 'scene.json',   fileType: 'json' },
+    drawio:      { type: 'document', icon: 'chart',    path: 'diagram.xml',  fileType: 'text' },
+  };
+  const m = legacyToUnified[artifact.type];
+
+  // Image cards store their content as a data: URL. Wrap it in a minimal HTML
+  // shell so the Canvas iframe can render it with no extra plumbing.
+  let content = artifact.content;
+  if (artifact.type === 'image' && content.startsWith('data:')) {
+    content =
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title>` +
+      `<style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;}` +
+      `img{max-width:100%;max-height:100vh;object-fit:contain;}</style></head>` +
+      `<body><img src="${content}" alt="${artifact.title.replace(/"/g, '&quot;')}"/></body></html>`;
+  } else if (artifact.type === 'excalidraw') {
+    const scene = {
+      type: 'excalidraw',
+      version: 2,
+      source: 'springo',
+      elements: Array.isArray(artifact.elements) ? artifact.elements : [],
+      appState: { viewBackgroundColor: '#ffffff' },
+    };
+    content = JSON.stringify(scene, null, 2);
+  }
+
+  return useUnifiedArtifactStore.getState().createArtifact({
+    name: artifact.title || 'Pinned artifact',
+    type: m.type,
+    icon: m.icon,
+    files: [{ path: m.path, type: m.fileType, content }],
+  });
 }
 
 function saveArtifact(artifact: ArtifactItem) {
@@ -97,6 +141,13 @@ const DownloadIcon = () => (
   </svg>
 )
 
+const PinIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="12" y1="17" x2="12" y2="22" />
+    <path d="M9 10.76a2 2 0 0 1-1.11 1.79L6 13.5V15h12v-1.5l-1.89-.95A2 2 0 0 1 15 10.76V6h1a1 1 0 0 0 0-2H8a1 1 0 0 0 0 2h1Z" />
+  </svg>
+)
+
 /** Save artifact content to a temp file and open with system app */
 async function openWithSystemApp(artifact: ArtifactItem) {
   // If artifact has a filePath, open that directly
@@ -148,6 +199,14 @@ function ContextMenu({ x, y, artifact, onClose }: { x: number; y: number; artifa
           Open URL in Browser
         </div>
       )}
+      <div className="artifact-context-menu-item" onClick={() => {
+        onClose();
+        pinInlineToCanvas(artifact);
+        useUIStore.getState().showToast(`Pinned "${artifact.title}" to Canvas`, 'success');
+      }}>
+        <PinIcon />
+        Pin to Canvas
+      </div>
       <div className="artifact-context-menu-item" onClick={() => { onClose(); saveArtifact(artifact) }}>
         <DownloadIcon />
         Save / Export
@@ -230,6 +289,17 @@ export default function ArtifactCard({ artifact, onClickOverride, defaultCollaps
               <GlobeIcon />
             </button>
           )}
+          <button
+            className="artifact-card-action"
+            title="Pin to Canvas"
+            onClick={(e) => {
+              e.stopPropagation();
+              pinInlineToCanvas(artifact);
+              useUIStore.getState().showToast(`Pinned "${artifact.title}" to Canvas`, 'success');
+            }}
+          >
+            <PinIcon />
+          </button>
           <button
             className="artifact-card-action"
             title="Save"
