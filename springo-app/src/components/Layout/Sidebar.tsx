@@ -8,6 +8,8 @@ import { useReplayStore } from '@/stores/replayStore';
 import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { ArtifactIcon } from '@/components/Canvas/ArtifactIcon';
+import { getCleanupSuggestions, countActionableSuggestions } from '@/utils/cleanupSuggestions';
+import CleanupModal from '@/components/Layout/CleanupModal';
 import type { SessionMode } from '@/types';
 
 // ─── Section Header (collapsible) ───
@@ -548,7 +550,15 @@ export default function Sidebar() {
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [showEmptyChats, setShowEmptyChats] = useState(false);
+  const [cleanupModalOpen, setCleanupModalOpen] = useState(false);
+  const [cleanupDismissedIds, setCleanupDismissedIds] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('springo-cleanup-dismissed');
+      return new Set(raw ? (JSON.parse(raw) as string[]) : []);
+    } catch {
+      return new Set();
+    }
+  });
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
     visible: false,
@@ -806,14 +816,54 @@ export default function Sidebar() {
     return items;
   }, [sessions, unifiedPinnedIds, unifiedArtifacts]);
 
-  // ─── Helper: is a session "empty" (never had a user message beyond the default title)? ───
-  const isEmptyChat = useCallback((s: typeof sessions[number]) => {
-    if (s.pinned) return false;
-    const defaultTitles = new Set(['New Chat', 'New Design', 'New Plan', 'Team Chat', 'Untitled']);
-    return defaultTitles.has(s.title);
+  // ─── Cleanup suggestions (replaces the old "empty chats" auto-fold) ───
+  // Periodic background scan: re-compute disposable-chat suggestions every 30m,
+  // and on mount. Updates `cleanupTick` to force the memo below to re-run.
+  const [cleanupTick, setCleanupTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setCleanupTick((n) => n + 1), 30 * 60 * 1000);
+    return () => clearInterval(id);
   }, []);
 
+  const runtimesSnapshot = useChatStore((s) => s.runtimes);
+  const cleanupSuggestions = useMemo(
+    () => getCleanupSuggestions(sessions, runtimesSnapshot),
+    // cleanupTick intentionally included to pick up age changes without
+    // waiting for an external store update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, runtimesSnapshot, cleanupTick],
+  );
+  const actionableCleanupCount = useMemo(
+    () => countActionableSuggestions(cleanupSuggestions, cleanupDismissedIds),
+    [cleanupSuggestions, cleanupDismissedIds],
+  );
+
+  const persistDismissed = useCallback((next: Set<string>) => {
+    setCleanupDismissedIds(next);
+    try {
+      localStorage.setItem('springo-cleanup-dismissed', JSON.stringify(Array.from(next)));
+    } catch { /* quota — ignore */ }
+  }, []);
+
+  const dismissCleanupSuggestions = useCallback((ids: string[]) => {
+    const next = new Set(cleanupDismissedIds);
+    for (const id of ids) next.add(id);
+    persistDismissed(next);
+  }, [cleanupDismissedIds, persistDismissed]);
+
+  const handleBulkCleanupDelete = useCallback(async (ids: string[]) => {
+    // Also drop these from dismissed set since they're gone anyway.
+    const next = new Set(cleanupDismissedIds);
+    for (const id of ids) next.delete(id);
+    persistDismissed(next);
+    for (const id of ids) {
+      await deleteSession(id);
+    }
+  }, [cleanupDismissedIds, persistDismissed, deleteSession]);
+
   // ─── Date-grouped sessions (pinned excluded — they live in PINNED section) ───
+  // All non-pinned chats show up here — no auto-folding. The CleanupBanner
+  // surfaces abandoned ones explicitly when it's time to prune.
   const groupedSessions = useMemo(() => {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
@@ -827,15 +877,8 @@ export default function Sidebar() {
       { label: 'Older', sessions: [] },
     ];
 
-    let hiddenEmptyCount = 0;
-    const searching = !!searchQuery.trim();
     for (const session of filteredSessions) {
       if (session.pinned) continue;
-      // Auto-collapse empty chats unless the user expanded them or is searching
-      if (!showEmptyChats && !searching && isEmptyChat(session)) {
-        hiddenEmptyCount++;
-        continue;
-      }
       const ts = session.updatedAt || session.createdAt || 0;
       if (ts >= todayStart) groups[0].sessions.push(session);
       else if (ts >= yesterdayStart) groups[1].sessions.push(session);
@@ -843,8 +886,8 @@ export default function Sidebar() {
       else groups[3].sessions.push(session);
     }
 
-    return { groups: groups.filter((g) => g.sessions.length > 0), hiddenEmptyCount };
-  }, [filteredSessions, showEmptyChats, searchQuery, isEmptyChat]);
+    return { groups: groups.filter((g) => g.sessions.length > 0) };
+  }, [filteredSessions]);
 
   const totalCount = sessions.filter((s) => !s.pinned).length;
 
@@ -967,6 +1010,35 @@ export default function Sidebar() {
                   <span className="kbd">⌘K</span>
                 )}
               </div>
+              {actionableCleanupCount > 0 && !searchQuery.trim() && (
+                <div className="cleanup-banner">
+                  <div className="cleanup-banner-icon" aria-hidden="true">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="3 6 5 6 21 6" />
+                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                      <path d="M10 11v6M14 11v6" />
+                    </svg>
+                  </div>
+                  <div className="cleanup-banner-text">
+                    <strong>{actionableCleanupCount}</strong> chat{actionableCleanupCount === 1 ? '' : 's'} look disposable
+                  </div>
+                  <button
+                    className="cleanup-banner-action"
+                    onClick={() => setCleanupModalOpen(true)}
+                  >
+                    Review
+                  </button>
+                  <button
+                    className="cleanup-banner-dismiss"
+                    title="Dismiss until new chats qualify"
+                    onClick={() => dismissCleanupSuggestions(cleanupSuggestions.map((s) => s.session.id))}
+                  >
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M18 6 6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
             <div className="session-list">
               {groupedSessions.groups.map((group) => (
                 <div key={group.label}>
@@ -1048,28 +1120,6 @@ export default function Sidebar() {
                   })}
                 </div>
               ))}
-              {groupedSessions.hiddenEmptyCount > 0 && !showEmptyChats && !searchQuery.trim() && (
-                <button
-                  className="sidebar-show-empty-chats"
-                  onClick={() => setShowEmptyChats(true)}
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
-                  Show {groupedSessions.hiddenEmptyCount} empty chat{groupedSessions.hiddenEmptyCount === 1 ? '' : 's'}
-                </button>
-              )}
-              {showEmptyChats && !searchQuery.trim() && (
-                <button
-                  className="sidebar-show-empty-chats"
-                  onClick={() => setShowEmptyChats(false)}
-                >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="m6 9 6 6 6-6" />
-                  </svg>
-                  Hide empty chats
-                </button>
-              )}
             </div>
             </>
           )}
@@ -1095,6 +1145,15 @@ export default function Sidebar() {
         onCopyId={handleContextCopyId}
         onTogglePin={handleContextTogglePin}
       />
+
+      {cleanupModalOpen && (
+        <CleanupModal
+          suggestions={cleanupSuggestions}
+          onDelete={handleBulkCleanupDelete}
+          onDismissIds={dismissCleanupSuggestions}
+          onClose={() => setCleanupModalOpen(false)}
+        />
+      )}
 
       {/* Sidebar footer */}
       <div className="sidebar-footer">

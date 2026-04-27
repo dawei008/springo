@@ -121,6 +121,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
                 const v = meta.pinnedAt ?? meta.pinned_at ?? s.pinnedAt ?? s.pinned_at;
                 return typeof v === 'number' ? v : undefined;
               })(),
+              messageCount: (() => {
+                const v = s.message_count ?? s.messageCount ?? meta.message_count;
+                return typeof v === 'number' ? v : undefined;
+              })(),
               messages: [],
             };
           })

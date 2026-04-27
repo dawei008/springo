@@ -121,6 +121,8 @@ export interface Conversation {
   pinned?: boolean;
   /** Timestamp the conversation was last pinned — used to sort PINNED section. */
   pinnedAt?: number;
+  /** Backend-reported count of all messages ever stored in this session (user + assistant + tool). */
+  messageCount?: number;
   messages: Message[];
   todos?: TodoItem[];
 }
