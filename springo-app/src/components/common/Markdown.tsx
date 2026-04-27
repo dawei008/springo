@@ -5,12 +5,13 @@ import remarkBreaks from 'remark-breaks';
 import rehypeHighlight from 'rehype-highlight';
 import 'highlight.js/styles/github-dark.css';
 import { useUIStore } from '@/stores/uiStore';
-import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
-import type { ArtifactType } from '@/stores/artifactStore';
+import { useUnifiedArtifactStore, type ArtifactFile, type UnifiedArtifactType } from '@/stores/unifiedArtifactStore';
+
+type PreviewKind = 'markdown' | 'html' | 'image' | 'svg' | 'excalidraw' | 'drawio';
 import type { Components } from 'react-markdown';
 
-/** File extensions that can be previewed in the artifact panel */
-const PREVIEW_EXTENSIONS: Record<string, ArtifactType> = {
+/** File extensions that can be previewed in the Canvas panel */
+const PREVIEW_EXTENSIONS: Record<string, PreviewKind> = {
   '.md': 'markdown', '.markdown': 'markdown', '.mdx': 'markdown',
   '.html': 'html', '.htm': 'html',
   '.svg': 'svg',
@@ -25,14 +26,14 @@ const PREVIEW_EXTENSIONS: Record<string, ArtifactType> = {
   '.sql': 'markdown', '.graphql': 'markdown',
 };
 
-function getPreviewType(path: string): ArtifactType | null {
+function getPreviewType(path: string): PreviewKind | null {
   const ext = path.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
   return ext ? PREVIEW_EXTENSIONS[ext] ?? null : null;
 }
 
-async function openFileInArtifactPanel(filePath: string) {
-  const type = getPreviewType(filePath);
-  if (!type || !window.electronAPI?.readFileBase64) {
+async function openFileInCanvas(filePath: string) {
+  const kind = getPreviewType(filePath);
+  if (!kind || !window.electronAPI?.readFileBase64) {
     window.electronAPI?.openPath(filePath);
     return;
   }
@@ -48,22 +49,21 @@ async function openFileInArtifactPanel(filePath: string) {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const content = new TextDecoder('utf-8').decode(bytes);
     const fileName = filePath.split('/').pop() || filePath;
-    const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';
 
-    // For code/config files, wrap in code fence for syntax highlighting
-    let finalContent = content;
-    if (type === 'markdown' && ext !== '.md' && ext !== '.markdown' && ext !== '.mdx' && ext !== '.txt') {
-      const lang = ext.replace('.', '');
-      finalContent = '```' + lang + '\n' + content + '\n```';
-    }
+    // Map preview kind → unified artifact type + single-file content
+    const artifactType: UnifiedArtifactType =
+      kind === 'html' ? 'app' : 'document';
+    const file: ArtifactFile = {
+      path: kind === 'html' ? 'index.html' : kind === 'svg' ? 'index.svg' : 'index.md',
+      type: kind === 'html' ? 'html' : 'text',
+      content,
+    };
 
-    useArtifactStore.getState().openArtifact({
-      id: createArtifactId(),
-      type,
-      title: fileName,
-      content: finalContent,
-      filePath,
-      timestamp: Date.now(),
+    useUnifiedArtifactStore.getState().createArtifact({
+      name: fileName,
+      type: artifactType,
+      icon: kind === 'html' ? 'web' : kind === 'image' ? 'image' : 'document',
+      files: [file],
     });
   } catch {
     window.electronAPI?.openPath(filePath);
@@ -260,7 +260,7 @@ export default function Markdown({ content }: Props) {
         if (!href) return;
 
         if (isFilePath) {
-          openFileInArtifactPanel(href);
+          openFileInCanvas(href);
           return;
         }
 
@@ -331,7 +331,7 @@ export default function Markdown({ content }: Props) {
             className="clickable-path"
             title="Click: preview | Right-click: open with system app"
             style={{ cursor: 'pointer' }}
-            onClick={() => openFileInArtifactPanel(text)}
+            onClick={() => openFileInCanvas(text)}
             onContextMenu={(e) => { e.preventDefault(); window.electronAPI?.openPath(text) }}
           >
             {children}
