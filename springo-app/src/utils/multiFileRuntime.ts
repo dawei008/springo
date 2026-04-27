@@ -89,11 +89,20 @@ const SPRINGO_TOKENS_CSS = `
     --error-text: #f87171;
   }
 }
+/* Iframe host defaults: when artifact content exceeds the Canvas width, scroll
+   internally instead of getting clipped by the Canvas panel. Artifacts can
+   opt out with their own html/body overflow rules. */
+html, body {
+  overflow-x: auto;
+  overflow-y: auto;
+  margin: 0;
+}
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
   font-family: var(--font-family);
   font-size: var(--font-size-base);
+  min-width: min-content;
 }
 button, input, textarea, select { font-family: inherit; }
 `;
