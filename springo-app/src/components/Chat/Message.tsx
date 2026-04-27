@@ -769,19 +769,6 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
             {(cleaned, htmlArtifacts) => (
               <>
                 <Markdown content={cleaned} />
-                {/* Model-generated artifacts via <springo-artifact> tags */}
-                {modelArtifacts.map((a) => (
-                  <ArtifactCard
-                    key={a.id}
-                    artifact={{
-                      id: a.id,
-                      type: a.type === 'code' ? 'markdown' : a.type,
-                      title: a.title,
-                      content: a.type === 'code' ? '```\n' + a.content + '\n```' : a.content,
-                      timestamp: message.timestamp || Date.now(),
-                    }}
-                  />
-                ))}
                 {/* HTML artifacts detected from code fences */}
                 {htmlArtifacts.map((a) => (
                   <ArtifactCard
