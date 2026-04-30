@@ -4,9 +4,9 @@ import ArtifactRenderer from '@/components/Visual/ArtifactRenderer';
 import { hasArtifactOp, parseArtifactOp } from '@/utils/artifactPatcher';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
-import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import type { ArtifactType } from '@/stores/artifactStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
+import { openFileInCanvas } from '@/utils/openFileInCanvas';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -390,56 +390,8 @@ function FileArtifactCard({ filePath, timestamp }: { filePath: string; timestamp
   const fileName = filePath.split('/').pop() || filePath;
   const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';
 
-  const handleClick = async () => {
-    if (!window.electronAPI?.readFileBase64) return;
-    try {
-      const result = await window.electronAPI.readFileBase64(filePath);
-      if (!result.success || !result.data) return;
-      // Decode base64 → binary → UTF-8 (atob alone mangles multi-byte chars like Chinese)
-      const binary = atob(result.data);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const content = new TextDecoder('utf-8').decode(bytes);
-
-      // HTML files get first-class treatment: route them through the unified
-      // artifact store so Canvas renders them with Pin/Version/Open controls.
-      // One shared artifact id per file path means re-opening the same file
-      // reuses the existing Canvas artifact (and its version history) instead
-      // of creating a duplicate.
-      if (type === 'html') {
-        const stableId = 'file-' + filePath.replace(/[^a-zA-Z0-9]+/g, '-').slice(-48);
-        const store = useUnifiedArtifactStore.getState();
-        const existing = store.artifacts[stableId];
-        if (existing) {
-          store.openArtifact(stableId);
-          store.applyPatch(stableId, [
-            { path: 'index.html', action: 'replace', fileType: 'html', content },
-          ]);
-        } else {
-          store.createArtifact({
-            id: stableId,
-            name: fileName,
-            icon: 'web',
-            type: 'app',
-            files: [{ path: 'index.html', type: 'html', content }],
-          });
-        }
-        return;
-      }
-
-      let finalContent = content;
-      if (type === 'markdown' && ext !== '.md' && ext !== '.markdown' && ext !== '.mdx' && ext !== '.txt') {
-        finalContent = '```' + ext.replace('.', '') + '\n' + content + '\n```';
-      }
-      useArtifactStore.getState().openArtifact({
-        id: createArtifactId(),
-        type,
-        title: fileName,
-        content: finalContent,
-        filePath,
-        timestamp: Date.now(),
-      });
-    } catch { /* ignore */ }
+  const handleClick = () => {
+    openFileInCanvas(filePath);
   };
 
   return (

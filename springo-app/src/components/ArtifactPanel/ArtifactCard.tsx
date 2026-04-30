@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { useArtifactStore, type ArtifactItem } from '@/stores/artifactStore'
-import { useUnifiedArtifactStore, type ArtifactFile, type UnifiedArtifactType, type ArtifactIconName } from '@/stores/unifiedArtifactStore'
+import { useUnifiedArtifactStore, type ArtifactIconName } from '@/stores/unifiedArtifactStore'
 import { useUIStore } from '@/stores/uiStore'
+import { buildFilePreviewHtml } from '@/utils/filePreviewHtml'
 
 interface ArtifactCardProps {
   artifact: ArtifactItem
@@ -44,44 +45,53 @@ const EXT_MAP: Record<ArtifactItem['type'], string> = {
 }
 
 // Promote an inline chat artifact into a persistent Canvas artifact so the
-// user can keep it around across sessions and iterate on it. Maps the legacy
-// ArtifactItem type into the unified type/icon vocabulary.
+// user can keep it around across sessions and iterate on it. Every output is
+// a single index.html file so ArtifactIframe's raw-HTML path can render it.
 function pinInlineToCanvas(artifact: ArtifactItem): string {
-  const legacyToUnified: Record<ArtifactItem['type'], { type: UnifiedArtifactType; icon: ArtifactIconName; path: string; fileType: ArtifactFile['type'] }> = {
-    html:        { type: 'app',      icon: 'web',      path: 'index.html',    fileType: 'html' },
-    markdown:    { type: 'document', icon: 'document', path: 'index.md',     fileType: 'text' },
-    image:       { type: 'document', icon: 'image',    path: 'index.html',   fileType: 'html' },
-    svg:         { type: 'document', icon: 'image',    path: 'index.svg',    fileType: 'text' },
-    excalidraw:  { type: 'document', icon: 'chart',    path: 'scene.json',   fileType: 'json' },
-    drawio:      { type: 'document', icon: 'chart',    path: 'diagram.xml',  fileType: 'text' },
+  const iconByType: Partial<Record<ArtifactItem['type'], ArtifactIconName>> = {
+    html: 'web', markdown: 'document', image: 'image',
+    svg: 'image', excalidraw: 'chart', drawio: 'chart',
   };
-  const m = legacyToUnified[artifact.type];
 
-  // Image cards store their content as a data: URL. Wrap it in a minimal HTML
-  // shell so the Canvas iframe can render it with no extra plumbing.
-  let content = artifact.content;
-  if (artifact.type === 'image' && content.startsWith('data:')) {
-    content =
-      `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title>` +
-      `<style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;}` +
-      `img{max-width:100%;max-height:100vh;object-fit:contain;}</style></head>` +
-      `<body><img src="${content}" alt="${artifact.title.replace(/"/g, '&quot;')}"/></body></html>`;
-  } else if (artifact.type === 'excalidraw') {
-    const scene = {
-      type: 'excalidraw',
-      version: 2,
-      source: 'springo',
-      elements: Array.isArray(artifact.elements) ? artifact.elements : [],
-      appState: { viewBackgroundColor: '#ffffff' },
-    };
-    content = JSON.stringify(scene, null, 2);
+  let htmlContent = artifact.content;
+  switch (artifact.type) {
+    case 'html':
+      break;
+    case 'markdown':
+      htmlContent = buildFilePreviewHtml(artifact.title + '.md', artifact.content, 'markdown');
+      break;
+    case 'svg':
+      htmlContent = buildFilePreviewHtml(artifact.title + '.svg', artifact.content, 'svg');
+      break;
+    case 'image':
+      if (artifact.content.startsWith('data:')) {
+        htmlContent = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${artifact.title}</title>
+<style>body{margin:0;display:flex;align-items:center;justify-content:center;min-height:100vh;}
+img{max-width:100%;max-height:100vh;object-fit:contain;}</style></head>
+<body><img src="${artifact.content}" alt="${artifact.title.replace(/"/g, '&quot;')}"/></body></html>`;
+      }
+      break;
+    case 'excalidraw': {
+      const scene = {
+        type: 'excalidraw',
+        version: 2,
+        source: 'springo',
+        elements: Array.isArray(artifact.elements) ? artifact.elements : [],
+        appState: { viewBackgroundColor: '#ffffff' },
+      };
+      htmlContent = buildFilePreviewHtml('scene.json', JSON.stringify(scene, null, 2), 'markdown');
+      break;
+    }
+    case 'drawio':
+      htmlContent = buildFilePreviewHtml('diagram.xml', artifact.content, 'markdown');
+      break;
   }
 
   return useUnifiedArtifactStore.getState().createArtifact({
     name: artifact.title || 'Pinned artifact',
-    type: m.type,
-    icon: m.icon,
-    files: [{ path: m.path, type: m.fileType, content }],
+    type: 'app',
+    icon: iconByType[artifact.type] ?? 'document',
+    files: [{ path: 'index.html', type: 'html', content: htmlContent }],
   });
 }
 
