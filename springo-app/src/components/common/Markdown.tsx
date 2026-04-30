@@ -31,6 +31,114 @@ function getPreviewType(path: string): PreviewKind | null {
   return ext ? PREVIEW_EXTENSIONS[ext] ?? null : null;
 }
 
+// Languages highlight.js recognizes by extension (pass through to className).
+const HLJS_LANG_BY_EXT: Record<string, string> = {
+  '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml',
+  '.xml': 'xml', '.csv': 'plaintext',
+  '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
+  '.py': 'python', '.go': 'go', '.rs': 'rust', '.java': 'java',
+  '.css': 'css', '.scss': 'scss',
+  '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash',
+  '.toml': 'ini', '.ini': 'ini', '.conf': 'plaintext',
+  '.sql': 'sql', '.graphql': 'graphql',
+};
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Build an HTML document that renders the file content inside Canvas's
+ * raw-HTML iframe path. Markdown → marked.js on CDN, code → highlight.js,
+ * SVG → inline, plain text → <pre>.
+ */
+function buildPreviewHtml(filePath: string, content: string, kind: PreviewKind): string {
+  const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';
+  const isMarkdown = ext === '.md' || ext === '.markdown' || ext === '.mdx';
+  const isPlainText = ext === '.txt' || ext === '.log';
+
+  if (kind === 'svg') {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+svg{max-width:100%;max-height:90vh}
+</style></head><body>${content}</body></html>`;
+  }
+
+  if (isMarkdown) {
+    const safe = escapeHtml(content);
+    return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<script src="https://unpkg.com/marked@12/marked.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<style>
+body{padding:24px 28px;max-width:860px;margin:0 auto;line-height:1.7;font-size:15px}
+h1,h2,h3,h4{margin:1.4em 0 .6em;line-height:1.3}
+h1{font-size:1.8em;border-bottom:1px solid var(--border-default);padding-bottom:.3em}
+h2{font-size:1.4em;border-bottom:1px solid var(--border);padding-bottom:.25em}
+h3{font-size:1.2em} h4{font-size:1.05em}
+p{margin:.6em 0;text-wrap:pretty}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+code{font-family:var(--font-mono);font-size:.88em;background:var(--bg-secondary);padding:.15em .4em;border-radius:4px}
+pre{background:var(--bg-secondary);padding:14px 16px;border-radius:8px;overflow-x:auto;margin:.8em 0}
+pre code{background:transparent;padding:0;font-size:.85em;line-height:1.55}
+blockquote{border-left:3px solid var(--border-strong);margin:.8em 0;padding:.2em 0 .2em 1em;color:var(--text-secondary)}
+ul,ol{margin:.6em 0;padding-left:1.6em}
+li{margin:.25em 0}
+table{border-collapse:collapse;margin:.8em 0;width:100%}
+th,td{border:1px solid var(--border-default);padding:.4em .7em;text-align:left}
+th{background:var(--bg-secondary);font-weight:600}
+img{max-width:100%;height:auto;border-radius:6px}
+hr{border:0;border-top:1px solid var(--border);margin:1.5em 0}
+</style>
+</head>
+<body>
+<div id="content"></div>
+<pre id="raw" style="display:none">${safe}</pre>
+<script>
+(function(){
+  var src = document.getElementById('raw').textContent;
+  if (window.marked) {
+    marked.setOptions({ gfm: true, breaks: true });
+    document.getElementById('content').innerHTML = marked.parse(src);
+    if (window.hljs) document.querySelectorAll('pre code').forEach(function(b){ hljs.highlightElement(b); });
+  } else {
+    document.getElementById('content').innerHTML = '<pre>'+src+'</pre>';
+  }
+})();
+</script>
+</body></html>`;
+  }
+
+  if (isPlainText) {
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+body{padding:20px;font-family:var(--font-mono);font-size:13px;line-height:1.6;white-space:pre-wrap;word-wrap:break-word}
+</style></head><body>${escapeHtml(content)}</body></html>`;
+  }
+
+  // Code / structured data file — highlight.js
+  const lang = HLJS_LANG_BY_EXT[ext] || 'plaintext';
+  return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github.min.css" media="(prefers-color-scheme: light)">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+<script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.9.0/build/highlight.min.js"></script>
+<style>
+body{padding:0;margin:0}
+pre{margin:0;padding:20px;font-family:var(--font-mono);font-size:13px;line-height:1.55;overflow-x:auto}
+code{background:transparent!important}
+</style>
+</head><body>
+<pre><code class="language-${lang}">${escapeHtml(content)}</code></pre>
+<script>if(window.hljs)hljs.highlightAll();</script>
+</body></html>`;
+}
+
 async function openFileInCanvas(filePath: string) {
   const kind = getPreviewType(filePath);
   if (!kind || !window.electronAPI?.readFileBase64) {
@@ -50,19 +158,32 @@ async function openFileInCanvas(filePath: string) {
     const content = new TextDecoder('utf-8').decode(bytes);
     const fileName = filePath.split('/').pop() || filePath;
 
-    // Map preview kind → unified artifact type + single-file content
-    const artifactType: UnifiedArtifactType =
-      kind === 'html' ? 'app' : 'document';
-    const file: ArtifactFile = {
-      path: kind === 'html' ? 'index.html' : kind === 'svg' ? 'index.svg' : 'index.md',
-      type: kind === 'html' ? 'html' : 'text',
-      content,
-    };
+    // For HTML files, pass through raw; everything else gets wrapped into an
+    // HTML shell so Canvas's raw-HTML path renders it (marked for markdown,
+    // highlight.js for code, inline SVG, <pre> for plain text).
+    const htmlContent = kind === 'html' ? content : buildPreviewHtml(filePath, content, kind);
 
-    useUnifiedArtifactStore.getState().createArtifact({
+    // Stable id per path so re-opening the same file reuses the existing
+    // Canvas artifact (and its version history) instead of duplicating.
+    const stableId = 'file-' + filePath.replace(/[^a-zA-Z0-9]+/g, '-').slice(-48);
+    const store = useUnifiedArtifactStore.getState();
+    const file: ArtifactFile = { path: 'index.html', type: 'html', content: htmlContent };
+
+    const existing = store.artifacts[stableId];
+    if (existing) {
+      store.openArtifact(stableId);
+      store.applyPatch(stableId, [
+        { path: 'index.html', action: 'replace', fileType: 'html', content: htmlContent },
+      ]);
+      return;
+    }
+
+    const artifactType: UnifiedArtifactType = 'app';
+    store.createArtifact({
+      id: stableId,
       name: fileName,
       type: artifactType,
-      icon: kind === 'html' ? 'web' : kind === 'image' ? 'image' : 'document',
+      icon: kind === 'html' ? 'web' : kind === 'svg' ? 'image' : 'document',
       files: [file],
     });
   } catch {
