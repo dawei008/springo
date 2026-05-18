@@ -5,7 +5,6 @@ import { useUIStore } from '@/stores/uiStore';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useVoiceStore } from '@/stores/voiceStore';
 import { useReplayStore } from '@/stores/replayStore';
-import { useArtifactStore, createArtifactId } from '@/stores/artifactStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { ArtifactIcon } from '@/components/Canvas/ArtifactIcon';
 import { getCleanupSuggestions, countActionableSuggestions } from '@/utils/cleanupSuggestions';
@@ -334,8 +333,9 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 
   // Artifacts belonging to the current session that the user hasn't pinned yet.
   // Pinned artifacts live in the dedicated PINNED section at the top of the sidebar.
+  // Internal panels (Tasks/Schedules/Meeting/Recording) have their own TOOLS row.
   const sessionArtifacts = useMemo(
-    () => sessionIds.map((id) => artifactMap[id]).filter((a) => a && !a.pinned),
+    () => sessionIds.map((id) => artifactMap[id]).filter((a) => a && !a.pinned && !a.internalComponent),
     [sessionIds, artifactMap],
   );
 
@@ -348,7 +348,7 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     const sessionSet = new Set(sessionIds);
     const pinnedSet = new Set(pinnedIds);
     return Object.values(artifactMap)
-      .filter((a) => a && !a.pinned && !sessionSet.has(a.id) && !pinnedSet.has(a.id))
+      .filter((a) => a && !a.pinned && !a.internalComponent && !sessionSet.has(a.id) && !pinnedSet.has(a.id))
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   }, [artifactMap, sessionIds, pinnedIds]);
 
@@ -415,16 +415,8 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 
 // ─── Background Tasks Section ───
 
-function openCanvasPanel(componentId: string, title: string) {
-  const artId = createArtifactId();
-  useArtifactStore.getState().openArtifact({
-    id: artId,
-    type: 'component',
-    title,
-    content: '',
-    componentId,
-    timestamp: Date.now(),
-  });
+function openInternalPanel(component: 'tasks' | 'schedules' | 'meeting' | 'recording', title: string) {
+  useUnifiedArtifactStore.getState().openInternal(component, title);
 }
 
 function ToolsSection({
@@ -435,7 +427,9 @@ function ToolsSection({
   onToggle: () => void;
 }) {
   const todos = useUIStore((s) => s.todos);
-  const activeArtifact = useArtifactStore((s) => s.activeArtifact);
+  const activeArtifact = useUnifiedArtifactStore((s) =>
+    s.activeArtifactId ? s.artifacts[s.activeArtifactId] ?? null : null,
+  );
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isTranscribing = useVoiceStore((s) => s.isTranscribing);
   const language = useVoiceStore((s) => s.language);
@@ -450,14 +444,7 @@ function ToolsSection({
     }
     const sid = useSessionStore.getState().createSession(undefined, 'meeting');
     setTimeout(() => {
-      useArtifactStore.getState().openArtifact({
-        id: createArtifactId(),
-        type: 'component',
-        title: 'Meeting Notes',
-        content: '',
-        componentId: 'meeting',
-        timestamp: Date.now(),
-      });
+      useUnifiedArtifactStore.getState().openInternal('meeting', 'Meeting Notes');
     }, 100);
     useVoiceStore.getState().startTranscription(sid);
   }, [isTranscribing]);
@@ -472,14 +459,7 @@ function ToolsSection({
       useSessionStore.getState().createSession(undefined, 'recording');
       await useRecordingStore.getState().startRecording();
       setTimeout(() => {
-        useArtifactStore.getState().openArtifact({
-          id: createArtifactId(),
-          type: 'component',
-          title: 'Screen Recording',
-          content: '',
-          componentId: 'recording',
-          timestamp: Date.now(),
-        });
+        useUnifiedArtifactStore.getState().openInternal('recording', 'Screen Recording');
       }, 100);
     }
   }, [isRecording]);
@@ -493,14 +473,14 @@ function ToolsSection({
             icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>}
             label="Tasks"
             badge={todos.length > 0 ? todos.length : undefined}
-            active={activeArtifact?.componentId === 'tasks'}
-            onClick={() => openCanvasPanel('tasks', 'Tasks')}
+            active={activeArtifact?.internalComponent === 'tasks'}
+            onClick={() => openInternalPanel('tasks', 'Tasks')}
           />
           <NavItem
             icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>}
             label="Schedules"
-            active={activeArtifact?.componentId === 'schedules'}
-            onClick={() => openCanvasPanel('schedules', 'Schedules')}
+            active={activeArtifact?.internalComponent === 'schedules'}
+            onClick={() => openInternalPanel('schedules', 'Schedules')}
           />
           <div className="nav-item-with-action">
             <NavItem
@@ -539,7 +519,7 @@ function ToolsSection({
                   icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>}
                   label={task.subject}
                   status="rec"
-                  onClick={() => openCanvasPanel('tasks', 'Tasks')}
+                  onClick={() => openInternalPanel('tasks', 'Tasks')}
                 />
               ))}
               {pendingTasks.map((task) => (
@@ -547,7 +527,7 @@ function ToolsSection({
                   key={task.id}
                   icon={<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>}
                   label={task.subject}
-                  onClick={() => openCanvasPanel('tasks', 'Tasks')}
+                  onClick={() => openInternalPanel('tasks', 'Tasks')}
                 />
               ))}
             </div>

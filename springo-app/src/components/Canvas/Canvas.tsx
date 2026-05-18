@@ -1,10 +1,65 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
-import type { Artifact } from '@/stores/unifiedArtifactStore';
+import type { Artifact, InternalComponentId } from '@/stores/unifiedArtifactStore';
 import { ARTIFACT_TEMPLATES } from '@/data/artifactTemplates';
 import type { ArtifactTemplate } from '@/data/artifactTemplates';
 import ArtifactIframe from './ArtifactIframe';
 import { ArtifactIcon } from './ArtifactIcon';
+import { useUIStore } from '@/stores/uiStore';
+import SchedulesPanel from '@/components/RightPanel/SchedulesPanel';
+import MeetingPanel from '@/components/RightPanel/MeetingPanel';
+import RecordingCanvasPanel from '@/components/RightPanel/RecordingCanvasPanel';
+
+function TasksCanvasPanel() {
+  const todos = useUIStore((s) => s.todos);
+  const completedCount = todos.filter((t) => t.status === 'completed').length;
+
+  if (todos.length === 0) {
+    return (
+      <div className="canvas-empty">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity="0.5">
+          <path d="M9 11l3 3L22 4" />
+          <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+        </svg>
+        <p style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)', marginTop: '8px' }}>
+          No background tasks
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '16px', overflow: 'auto', height: '100%' }}>
+      <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '12px' }}>
+        {completedCount}/{todos.length} completed
+      </div>
+      {todos.map((todo) => {
+        let statusIcon = '○';
+        let color = 'var(--text-tertiary)';
+        if (todo.status === 'in_progress') { statusIcon = '◔'; color = 'var(--accent)'; }
+        else if (todo.status === 'completed') { statusIcon = '✓'; color = 'var(--success, #22c55e)'; }
+        return (
+          <div key={todo.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px 0', fontSize: '13px' }}>
+            <span style={{ color, flexShrink: 0 }}>{statusIcon}</span>
+            <span style={{ color: todo.status === 'completed' ? 'var(--text-tertiary)' : 'var(--text-primary)', textDecoration: todo.status === 'completed' ? 'line-through' : 'none' }}>
+              {todo.subject}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function InternalRenderer({ component }: { component: InternalComponentId }) {
+  switch (component) {
+    case 'tasks': return <TasksCanvasPanel />;
+    case 'schedules': return <SchedulesPanel />;
+    case 'meeting': return <MeetingPanel />;
+    case 'recording': return <RecordingCanvasPanel />;
+    default: return null;
+  }
+}
 
 function VersionTimeline({ artifact }: { artifact: Artifact }) {
   const selectVersion = useUnifiedArtifactStore((s) => s.selectVersion);
@@ -213,22 +268,42 @@ export default function Canvas() {
     );
   }
 
+  const isInternal = !!activeArtifact.internalComponent;
+
   return (
     <div className="canvas-panel" ref={canvasRef}>
       <div className="canvas-resize" ref={resizeHandleRef} />
       <div className="canvas-header">
         <ArtifactIcon name={activeArtifact.icon} size={16} className="canvas-header-icon" />
         <span className="canvas-header-title">{activeArtifact.name}</span>
-        <ActionBar artifact={activeArtifact} containerRef={canvasRef} />
+        {isInternal ? <InternalActionBar /> : <ActionBar artifact={activeArtifact} containerRef={canvasRef} />}
       </div>
       <div className="canvas-body">
-        <ArtifactIframe
-          artifactId={activeArtifactId}
-          files={activeArtifact.files}
-          state={activeArtifact.state}
-        />
+        {isInternal ? (
+          <InternalRenderer component={activeArtifact.internalComponent!} />
+        ) : (
+          <ArtifactIframe
+            artifactId={activeArtifactId}
+            files={activeArtifact.files}
+            state={activeArtifact.state}
+          />
+        )}
       </div>
-      <VersionTimeline artifact={activeArtifact} />
+      {!isInternal && <VersionTimeline artifact={activeArtifact} />}
+    </div>
+  );
+}
+
+function InternalActionBar() {
+  const closeArtifact = useUnifiedArtifactStore((s) => s.closeArtifact);
+  return (
+    <div className="canvas-action-bar">
+      <button className="canvas-action-btn" onClick={closeArtifact} title="Close">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
     </div>
   );
 }

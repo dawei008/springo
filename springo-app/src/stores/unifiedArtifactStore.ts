@@ -15,6 +15,13 @@ import { create } from 'zustand';
 export type UnifiedArtifactType = 'app' | 'component' | 'document' | 'template';
 
 /**
+ * IDs of built-in React panels that the Canvas can render instead of an
+ * iframe. These artifacts never round-trip to the backend; they are
+ * local-only singletons keyed by stable IDs (`internal-${id}`).
+ */
+export type InternalComponentId = 'tasks' | 'schedules' | 'meeting' | 'recording';
+
+/**
  * Registered artifact icon names. Runtime icon renderers live in
  * `components/Canvas/ArtifactIcon.tsx` — this type is the data-layer source of
  * truth so the store and serialized artifacts can type the `icon` field.
@@ -65,6 +72,13 @@ export interface Artifact {
   updatedAt: number;
   sessionId?: string;
   pinned: boolean;
+  /**
+   * If set, the Canvas renders the matching built-in React panel
+   * (TasksCanvasPanel/SchedulesPanel/MeetingPanel/RecordingCanvasPanel)
+   * instead of an iframe. These artifacts are never persisted to the backend
+   * and are filtered out of the Apps sidebar section.
+   */
+  internalComponent?: InternalComponentId;
 }
 
 export interface PinnedElement {
@@ -106,6 +120,12 @@ export interface UnifiedArtifactState {
   openArtifact: (id: string) => void;
   closeArtifact: () => void;
   deleteArtifact: (id: string) => void;
+  /**
+   * Open a built-in React panel as an artifact. Idempotent — calling twice
+   * with the same id reuses the existing local artifact. Never hits the
+   * backend.
+   */
+  openInternal: (component: InternalComponentId, name: string, icon?: ArtifactIconName) => void;
 
   // Code updates
   applyPatch: (id: string, filePatches: Array<{
@@ -317,6 +337,34 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
 
   closeArtifact: () => {
     set({ activeArtifactId: null, pinnedElement: null });
+  },
+
+  openInternal: (component, name, icon) => {
+    const id = `internal-${component}`;
+    set((s) => {
+      const existing = s.artifacts[id];
+      const now = Date.now();
+      const artifact: Artifact = existing ?? {
+        id,
+        name,
+        icon: icon ?? 'component',
+        type: 'component',
+        files: [],
+        state: {},
+        versions: [{ id: `${id}-v0`, files: [], state: {}, title: name, timestamp: now }],
+        activeVersionIndex: 0,
+        createdAt: now,
+        updatedAt: now,
+        pinned: false,
+        internalComponent: component,
+      };
+      const inSession = s.sessionArtifactIds.includes(id);
+      return {
+        artifacts: { ...s.artifacts, [id]: artifact },
+        activeArtifactId: id,
+        sessionArtifactIds: inSession ? s.sessionArtifactIds : [...s.sessionArtifactIds, id],
+      };
+    });
   },
 
   deleteArtifact: (id) => {
