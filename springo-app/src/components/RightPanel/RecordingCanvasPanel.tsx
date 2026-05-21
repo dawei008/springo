@@ -2,6 +2,8 @@ import { useEffect, useRef } from 'react';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useReplayStore } from '@/stores/replayStore';
 import { useUIStore } from '@/stores/uiStore';
+import { useSessionStore } from '@/stores/sessionStore';
+import { useChatStore } from '@/stores/chatStore';
 
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -13,6 +15,10 @@ export default function RecordingCanvasPanel() {
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isPaused = useRecordingStore((s) => s.isPaused);
   const elapsed = useRecordingStore((s) => s.elapsed);
+  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const sourceMessageCount = useChatStore((s) =>
+    currentSessionId ? s.runtimes[currentSessionId]?.messages.length ?? 0 : 0,
+  );
   const timerRef = useRef<ReturnType<typeof setInterval>>();
 
   useEffect(() => {
@@ -46,7 +52,24 @@ export default function RecordingCanvasPanel() {
     await useRecordingStore.getState().startRecording();
   };
 
+  const handleReplayAndRecord = async () => {
+    if (!currentSessionId || sourceMessageCount === 0) return;
+    const sourceSessionId = currentSessionId;
+    const ok = await useRecordingStore.getState().startRecording();
+    if (!ok) {
+      useUIStore.getState().showToast('Failed to start recording', 'error');
+      return;
+    }
+    const replaySessionId = useSessionStore
+      .getState()
+      .createSession('Replay', 'recording');
+    void useReplayStore
+      .getState()
+      .startReplay(sourceSessionId, replaySessionId);
+  };
+
   if (!isRecording) {
+    const canReplay = !!currentSessionId && sourceMessageCount > 0;
     return (
       <div className="recording-canvas-panel">
         <div className="recording-canvas-empty">
@@ -57,6 +80,18 @@ export default function RecordingCanvasPanel() {
           <span>Recording stopped</span>
           <button className="recording-canvas-start-btn" onClick={handleStart}>
             Start Recording
+          </button>
+          <button
+            className="recording-canvas-start-btn"
+            onClick={handleReplayAndRecord}
+            disabled={!canReplay}
+            title={
+              canReplay
+                ? 'Replay current session messages with typing animation, while recording'
+                : 'Open a session with messages to enable replay'
+            }
+          >
+            Replay &amp; Record
           </button>
         </div>
       </div>
