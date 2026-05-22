@@ -1,9 +1,29 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import { buildMultiFileRuntime, SPRINGO_TOKENS_STYLE_TAG } from '@/utils/multiFileRuntime';
 import { generateBridgeSdk, BRIDGE_MESSAGE_TYPES } from '@/utils/bridgeSdk';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { ArtifactFile } from '@/stores/unifiedArtifactStore';
 import { api } from '@/services/api';
+
+interface SelectionInfo {
+  text: string;
+  rect: { x: number; y: number; width: number; height: number } | null;
+}
+
+function injectAsContext(text: string) {
+  const el = document.getElementById('message-input') as HTMLTextAreaElement | null;
+  if (!el) return;
+  const quoted = text.split('\n').map((l) => '> ' + l).join('\n') + '\n\n';
+  const current = el.value || '';
+  const next = quoted + current;
+  const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  nativeSet?.call(el, next);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  // Place caret right after the quoted block so the user can keep typing.
+  const caret = quoted.length;
+  el.focus();
+  try { el.setSelectionRange(caret, caret); } catch { /* ignore */ }
+}
 
 const TOOL_ALLOWLIST = new Set([
   'read_file', 'write_file', 'list_directory',
@@ -42,6 +62,10 @@ function buildArtifactHtml(files: ArtifactFile[], state: Record<string, unknown>
 export default function ArtifactIframe({ artifactId, files, state }: ArtifactIframeProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const lastSrcdocRef = useRef<string>('');
+  const [selection, setSelection] = useState<SelectionInfo | null>(null);
+
+  // Reset selection when switching artifacts.
+  useEffect(() => { setSelection(null); }, [artifactId]);
 
   const handleMessage = useCallback((e: MessageEvent) => {
     if (!e.data || typeof e.data.type !== 'string') return;
@@ -59,6 +83,14 @@ export default function ArtifactIframe({ artifactId, files, state }: ArtifactIfr
 
       case BRIDGE_MESSAGE_TYPES.ELEMENT_PINNED:
         store.pinElement(payload);
+        break;
+
+      case BRIDGE_MESSAGE_TYPES.SELECTION_CONTEXT:
+        if (payload && typeof payload.text === 'string') {
+          setSelection({ text: payload.text, rect: payload.rect ?? null });
+        } else {
+          setSelection(null);
+        }
         break;
 
       case BRIDGE_MESSAGE_TYPES.SEND_TO_CHAT: {
@@ -143,11 +175,46 @@ export default function ArtifactIframe({ artifactId, files, state }: ArtifactIfr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [files]);
 
+  // Position the chip near the selection rect (clamped within the canvas body).
+  // The rect is in iframe-content coords, which equal viewport coords because
+  // the iframe spans the body; we just need to add the iframe's offset.
+  const chipStyle: React.CSSProperties = (() => {
+    if (!selection?.rect) return { right: 16, bottom: 16 };
+    const iframe = iframeRef.current;
+    if (!iframe) return { right: 16, bottom: 16 };
+    const ir = iframe.getBoundingClientRect();
+    const top = Math.max(ir.top, ir.top + selection.rect.y - 36);
+    const left = Math.min(
+      ir.right - 220,
+      Math.max(ir.left + 8, ir.left + selection.rect.x + selection.rect.width / 2 - 110),
+    );
+    return { position: 'fixed', top, left };
+  })();
+
   return (
-    <iframe
-      ref={iframeRef}
-      className="artifact-iframe"
-      sandbox="allow-scripts allow-same-origin"
-    />
+    <>
+      <iframe
+        ref={iframeRef}
+        className="artifact-iframe"
+        sandbox="allow-scripts allow-same-origin"
+      />
+      {selection && (
+        <button
+          type="button"
+          className="canvas-selection-chip"
+          style={chipStyle}
+          onClick={() => {
+            injectAsContext(selection.text);
+            setSelection(null);
+          }}
+          title={`Add ${selection.text.length.toLocaleString()} chars as context`}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          Add as context
+        </button>
+      )}
+    </>
   );
 }

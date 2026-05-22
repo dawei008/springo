@@ -588,6 +588,7 @@ ${cssFiles.map(f => `  <style>/* ${f.path} */\n${f.content}</style>`).join('\n')
           document.documentElement.style.setProperty(e.data.name, e.data.value);
         }
       });
+
       setTimeout(function() {
         var root = document.getElementById('root');
         if (root && root.innerHTML.trim() === '') {

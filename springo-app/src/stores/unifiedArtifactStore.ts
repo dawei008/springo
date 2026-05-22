@@ -123,7 +123,11 @@ export interface UnifiedArtifactState {
   }) => string;
   openArtifact: (id: string) => void;
   closeArtifact: () => void;
+  /** Close a tab: remove from sessionArtifactIds; switch active to next/prev sibling. */
+  closeArtifactTab: (id: string) => void;
   deleteArtifact: (id: string) => void;
+  /** Reorder tabs (drag/drop in Canvas tab strip). */
+  reorderSessionArtifacts: (orderedIds: string[]) => void;
   /**
    * Open a built-in React panel as an artifact. Idempotent — calling twice
    * with the same id reuses the existing local artifact. Never hits the
@@ -437,6 +441,36 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
 
   closeArtifact: () => {
     set({ activeArtifactId: null, pinnedElement: null });
+  },
+
+  closeArtifactTab: (id) => {
+    set((s) => {
+      const ids = s.sessionArtifactIds;
+      const idx = ids.indexOf(id);
+      if (idx === -1) return s;
+      const nextIds = ids.filter((x) => x !== id);
+      // If we closed the active tab, jump to the right neighbor (or left).
+      let nextActive = s.activeArtifactId;
+      if (s.activeArtifactId === id) {
+        nextActive = nextIds[idx] ?? nextIds[idx - 1] ?? null;
+      }
+      return {
+        sessionArtifactIds: nextIds,
+        activeArtifactId: nextActive,
+        pinnedElement: nextActive === id ? null : s.pinnedElement,
+      };
+    });
+  },
+
+  reorderSessionArtifacts: (orderedIds) => {
+    set((s) => {
+      const known = new Set(s.sessionArtifactIds);
+      // Keep only ids we actually know about, in the requested order, then
+      // append anything that wasn't in the new order so we don't lose tabs.
+      const filtered = orderedIds.filter((id) => known.has(id));
+      const tail = s.sessionArtifactIds.filter((id) => !filtered.includes(id));
+      return { sessionArtifactIds: [...filtered, ...tail] };
+    });
   },
 
   openInternal: (component, name, icon) => {
