@@ -22,9 +22,16 @@ export default function MeetingPanel() {
   const handleTranscribeToggle = useCallback(() => {
     if (isTranscribing) {
       useVoiceStore.getState().stopTranscription();
-    } else if (currentSessionId) {
-      useVoiceStore.getState().startTranscription(currentSessionId);
+      return;
     }
+    // If there's no current session, spin up a dedicated meeting session so
+    // the user can start transcribing from the panel without first creating
+    // one in the sidebar.
+    let sid = currentSessionId;
+    if (!sid) {
+      sid = useSessionStore.getState().createSession(undefined, 'meeting');
+    }
+    useVoiceStore.getState().startTranscription(sid);
   }, [isTranscribing, currentSessionId]);
 
   const handleCopy = useCallback(() => {
@@ -54,7 +61,10 @@ export default function MeetingPanel() {
             <path d="M5 10a7 7 0 0 0 14 0" />
             <line x1="12" y1="19" x2="12" y2="22" />
           </svg>
-          <span>Start a session to use meeting notes</span>
+          <span>No active session</span>
+          <button className="recording-canvas-start-btn" onClick={handleTranscribeToggle}>
+            Start Transcription
+          </button>
         </div>
       </div>
     );

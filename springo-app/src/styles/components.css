@@ -294,26 +294,6 @@
             min-width: 0;
         }
 
-        .meeting-lang-toggle {
-            position: absolute;
-            right: 8px;
-            background: var(--bg-tertiary);
-            border: none;
-            border-radius: 4px;
-            padding: 2px 6px;
-            font-size: 10px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            cursor: pointer;
-            letter-spacing: 0.3px;
-            z-index: 1;
-        }
-
-        .meeting-lang-toggle:hover {
-            background: var(--bg-hover);
-            color: var(--text-primary);
-        }
-
         .nav-subheader {
             font-size: 10px;
             font-weight: 600;

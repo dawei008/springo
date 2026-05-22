@@ -4,7 +4,6 @@ import { useChatStore } from '@/stores/chatStore';
 import { useUIStore } from '@/stores/uiStore';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useVoiceStore } from '@/stores/voiceStore';
-import { useReplayStore } from '@/stores/replayStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { ArtifactIcon } from '@/components/Canvas/ArtifactIcon';
 import { getCleanupSuggestions, countActionableSuggestions } from '@/utils/cleanupSuggestions';
@@ -424,39 +423,14 @@ function ToolsSection({
   const activeArtifact = useUnifiedArtifactStore((s) =>
     s.activeArtifactId ? s.artifacts[s.activeArtifactId] ?? null : null,
   );
+  // We still subscribe to recording / transcription state so the sidebar row
+  // can show a "rec" status dot, but starting/stopping is now only available
+  // inside the panel itself — the sidebar item is purely "open the panel".
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isTranscribing = useVoiceStore((s) => s.isTranscribing);
-  const language = useVoiceStore((s) => s.language);
 
   const activeTasks = todos.filter((t) => t.status === 'in_progress');
   const pendingTasks = todos.filter((t) => t.status === 'pending');
-
-  const handleMeetingToggle = useCallback(() => {
-    if (isTranscribing) {
-      useVoiceStore.getState().stopTranscription();
-      return;
-    }
-    const sid = useSessionStore.getState().createSession(undefined, 'meeting');
-    setTimeout(() => {
-      useUnifiedArtifactStore.getState().openInternal('meeting', 'Meeting Notes');
-    }, 100);
-    useVoiceStore.getState().startTranscription(sid);
-  }, [isTranscribing]);
-
-  const handleRecordToggle = useCallback(async () => {
-    if (isRecording) {
-      if (useReplayStore.getState().isReplaying) {
-        useReplayStore.getState().stopReplay();
-      }
-      await useRecordingStore.getState().stopRecording();
-    } else {
-      useSessionStore.getState().createSession(undefined, 'recording');
-      await useRecordingStore.getState().startRecording();
-      setTimeout(() => {
-        useUnifiedArtifactStore.getState().openInternal('recording', 'Screen Recording');
-      }, 100);
-    }
-  }, [isRecording]);
 
   return (
     <div className="nav-section">
@@ -476,34 +450,19 @@ function ToolsSection({
             active={activeArtifact?.internalComponent === 'schedules'}
             onClick={() => openInternalPanel('schedules', 'Schedules')}
           />
-          <div className="nav-item-with-action">
-            <NavItem
-              icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>}
-              label="Meeting Notes"
-              status={isTranscribing ? 'rec' : undefined}
-              active={isTranscribing}
-              onClick={handleMeetingToggle}
-            />
-            {isTranscribing && (
-              <button
-                className="meeting-lang-toggle"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  const cur = useVoiceStore.getState().language;
-                  const cycle: Record<string, string> = { zh: 'en', en: 'auto', auto: 'zh' };
-                  useVoiceStore.getState().setLanguage(cycle[cur] || 'auto');
-                }}
-                title="Switch language"
-              >
-                {language === 'zh' ? 'ZH' : language === 'en' ? 'EN' : 'AUTO'}
-              </button>
-            )}
-          </div>
+          <NavItem
+            icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>}
+            label="Meeting Notes"
+            status={isTranscribing ? 'rec' : undefined}
+            active={activeArtifact?.internalComponent === 'meeting'}
+            onClick={() => openInternalPanel('meeting', 'Meeting Notes')}
+          />
           <NavItem
             icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><circle cx="12" cy="10" r="3"/></svg>}
             label="Screen Recording"
             status={isRecording ? 'rec' : undefined}
-            onClick={handleRecordToggle}
+            active={activeArtifact?.internalComponent === 'recording'}
+            onClick={() => openInternalPanel('recording', 'Screen Recording')}
           />
           {activeTasks.length > 0 && (
             <div className="nav-sub">
