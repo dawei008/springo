@@ -12136,6 +12136,46 @@
     opacity: 1;
 }
 
+/* Drop-zone for "remove session from folder" — the Recents area lights up
+   when dragging a foldered session. */
+.recents-drop-zone {
+    border-radius: var(--radius-sm);
+    transition: background var(--transition-fast), outline-color var(--transition-fast);
+    outline: 1px dashed transparent;
+    outline-offset: -2px;
+}
+
+.recents-drop-zone.drag-over {
+    background: var(--accent-light);
+    outline-color: var(--accent);
+}
+
+.recents-drop-zone.drag-over .session-date-group {
+    color: var(--accent);
+}
+
+.recents-drop-zone.drag-over .session-date-group::after {
+    content: ' ← drop to remove from folder';
+    margin-left: 8px;
+    font-weight: 500;
+    color: var(--accent);
+    text-transform: none;
+    letter-spacing: 0;
+}
+
+.recents-empty {
+    min-height: 80px;
+    padding: 8px 4px;
+}
+
+.recents-empty-hint {
+    margin-top: 12px;
+    text-align: center;
+    color: var(--text-tertiary);
+    font-size: 11px;
+    font-style: italic;
+}
+
 /* Submenu inside the conversation context menu */
 .conv-context-submenu {
     margin: 2px 0 2px 8px;

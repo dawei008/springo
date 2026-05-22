@@ -1279,45 +1279,112 @@ export default function Sidebar() {
                     );
                   })}
 
-                  {/* Recents (date-grouped, unfiled) */}
-                  {groupedSessions.groups.map((group) => (
-                    <div key={group.label}>
-                      <div className="session-date-group">
-                        {group.label}
-                        {group.label === 'Today' && !isSearching && (
-                          <button
-                            className="folder-new-btn"
-                            onClick={handleNewFolder}
-                            title="New folder"
-                          >
-                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                              <path d="M12 5v14M5 12h14" />
-                            </svg>
-                          </button>
+                  {/* Recents (date-grouped, unfiled). The whole region accepts a
+                      drop to remove a session from its current folder. Each
+                      date-group also handles drop so dropping anywhere inside
+                      the recents zone works — not just on the bare bottom. */}
+                  {(() => {
+                    const removeFromFolderHandlers = {
+                      onDragOver: (e: React.DragEvent) => {
+                        if (dragSessionRef.current) {
+                          // Only intercept when the dragged session is currently in a folder.
+                          const dragged = sessions.find((s) => s.id === dragSessionRef.current);
+                          if (dragged?.folderId) e.preventDefault();
+                        }
+                      },
+                      onDragEnter: (e: React.DragEvent) => {
+                        if (!dragSessionRef.current) return;
+                        const dragged = sessions.find((s) => s.id === dragSessionRef.current);
+                        if (dragged?.folderId) {
+                          (e.currentTarget as HTMLElement).classList.add('drag-over');
+                        }
+                      },
+                      onDragLeave: (e: React.DragEvent) => {
+                        (e.currentTarget as HTMLElement).classList.remove('drag-over');
+                      },
+                      onDrop: (e: React.DragEvent) => {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLElement).classList.remove('drag-over');
+                        const sessionId = dragSessionRef.current ?? e.dataTransfer.getData('text/plain');
+                        dragSessionRef.current = null;
+                        if (!sessionId) return;
+                        const dragged = sessions.find((s) => s.id === sessionId);
+                        if (dragged?.folderId) void setSessionFolder(sessionId, null);
+                      },
+                    };
+
+                    return groupedSessions.groups.map((group) => (
+                      <div
+                        key={group.label}
+                        className="recents-drop-zone"
+                        {...removeFromFolderHandlers}
+                      >
+                        <div className="session-date-group">
+                          {group.label}
+                          {group.label === 'Today' && !isSearching && (
+                            <button
+                              className="folder-new-btn"
+                              onClick={handleNewFolder}
+                              title="New folder"
+                            >
+                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M12 5v14M5 12h14" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                        {group.sessions.map((s) =>
+                          renderSessionRow(
+                            s,
+                            group.isToday ? 'today' : group.label === 'Yesterday' ? 'yesterday' : 'older',
+                          ),
                         )}
                       </div>
-                      {group.sessions.map((s) =>
-                        renderSessionRow(
-                          s,
-                          group.isToday ? 'today' : group.label === 'Yesterday' ? 'yesterday' : 'older',
-                        ),
-                      )}
-                    </div>
-                  ))}
+                    ));
+                  })()}
 
-                  {/* If there are no recent sessions but folders exist, still surface the New Folder action */}
+                  {/* If there are no recent sessions but folders exist, still surface
+                      the New Folder action AND act as a drop target so the user can
+                      remove the only foldered chat back to Recents. */}
                   {!isSearching && groupedSessions.groups.length === 0 && (
-                    <div className="session-date-group">
-                      Recents
-                      <button
-                        className="folder-new-btn"
-                        onClick={handleNewFolder}
-                        title="New folder"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 5v14M5 12h14" />
-                        </svg>
-                      </button>
+                    <div
+                      className="recents-drop-zone recents-empty"
+                      onDragOver={(e) => {
+                        if (dragSessionRef.current) {
+                          const d = sessions.find((s) => s.id === dragSessionRef.current);
+                          if (d?.folderId) e.preventDefault();
+                        }
+                      }}
+                      onDragEnter={(e) => {
+                        const d = sessions.find((s) => s.id === dragSessionRef.current);
+                        if (d?.folderId) (e.currentTarget as HTMLElement).classList.add('drag-over');
+                      }}
+                      onDragLeave={(e) => {
+                        (e.currentTarget as HTMLElement).classList.remove('drag-over');
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        (e.currentTarget as HTMLElement).classList.remove('drag-over');
+                        const sid = dragSessionRef.current ?? e.dataTransfer.getData('text/plain');
+                        dragSessionRef.current = null;
+                        if (!sid) return;
+                        const dragged = sessions.find((s) => s.id === sid);
+                        if (dragged?.folderId) void setSessionFolder(sid, null);
+                      }}
+                    >
+                      <div className="session-date-group">
+                        Recents
+                        <button
+                          className="folder-new-btn"
+                          onClick={handleNewFolder}
+                          title="New folder"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                        </button>
+                      </div>
+                      <div className="recents-empty-hint">Drop chats here to remove from folder</div>
                     </div>
                   )}
                 </div>
