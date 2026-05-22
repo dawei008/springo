@@ -87,6 +87,7 @@ class SessionStore:
                     "session_mode": metadata.get("session_mode", "general"),
                     "pinned": bool(metadata.get("pinned", False)),
                     "pinned_at": metadata.get("pinnedAt") or metadata.get("pinned_at"),
+                    "folder_id": metadata.get("folder_id") or metadata.get("folderId"),
                 }
 
                 # 过滤工作目录

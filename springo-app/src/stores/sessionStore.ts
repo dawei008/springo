@@ -55,6 +55,9 @@ interface SessionState {
   renameSession: (id: string, title: string) => Promise<void>;
   pinSession: (id: string) => Promise<void>;
   unpinSession: (id: string) => Promise<void>;
+  setSessionFolder: (id: string, folderId: string | null) => Promise<void>;
+  /** Called when a folder is deleted: clear folderId on every member session. */
+  detachAllFromFolder: (folderId: string) => Promise<void>;
   updateSessionStatus: (id: string, status: ConversationStatus) => void;
   markUnseenCompletion: (id: string) => void;
   clearUnseenCompletion: (id: string) => void;
@@ -120,6 +123,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
               pinnedAt: (() => {
                 const v = meta.pinnedAt ?? meta.pinned_at ?? s.pinnedAt ?? s.pinned_at;
                 return typeof v === 'number' ? v : undefined;
+              })(),
+              folderId: (() => {
+                const v = meta.folder_id ?? meta.folderId ?? s.folder_id ?? s.folderId;
+                return typeof v === 'string' && v.length > 0 ? v : null;
               })(),
               messageCount: (() => {
                 const v = s.message_count ?? s.messageCount ?? meta.message_count;
@@ -325,6 +332,44 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     } catch (e) {
       console.error('SessionAPI.updateMetadata error:', e);
     }
+  },
+
+  setSessionFolder: async (id: string, folderId: string | null) => {
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.id === id ? { ...s, folderId } : s,
+      ),
+    }));
+    try {
+      await fetch(`${BASE_URL}/v1/sessions/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ metadata: { folder_id: folderId } }),
+      });
+    } catch (e) {
+      console.error('SessionAPI.setFolder error:', e);
+    }
+  },
+
+  detachAllFromFolder: async (folderId: string) => {
+    const targets = get().sessions.filter((s) => s.folderId === folderId);
+    set((state) => ({
+      sessions: state.sessions.map((s) =>
+        s.folderId === folderId ? { ...s, folderId: null } : s,
+      ),
+    }));
+    // Persist each affected session in parallel; failure here is non-fatal —
+    // the folder is gone from disk and stale folder_id values will harmlessly
+    // resolve to "unfiled" on next load anyway.
+    await Promise.all(
+      targets.map((t) =>
+        fetch(`${BASE_URL}/v1/sessions/${t.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metadata: { folder_id: null } }),
+        }).catch((e) => console.warn('detachAllFromFolder failed for', t.id, (e as Error).message)),
+      ),
+    );
   },
 
   pinSession: async (id: string) => {

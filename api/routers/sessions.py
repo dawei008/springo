@@ -35,6 +35,7 @@ class SessionInfo(BaseModel):
     session_mode: str = "general"
     pinned: bool = False
     pinned_at: Optional[float] = None
+    folder_id: Optional[str] = None
 
 
 class SessionsListResponse(BaseModel):

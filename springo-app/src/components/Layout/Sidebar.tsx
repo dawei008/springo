@@ -5,6 +5,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { useRecordingStore } from '@/stores/recordingStore';
 import { useVoiceStore } from '@/stores/voiceStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
+import { useFoldersStore } from '@/stores/foldersStore';
 import { ArtifactIcon } from '@/components/Canvas/ArtifactIcon';
 import { getCleanupSuggestions, countActionableSuggestions } from '@/utils/cleanupSuggestions';
 import CleanupModal from '@/components/Layout/CleanupModal';
@@ -58,6 +59,9 @@ interface ContextMenuState {
 function ConversationContextMenu({
   menu,
   pinned,
+  folders,
+  currentFolderId,
+  onMoveToFolder,
   onClose,
   onRename,
   onExport,
@@ -66,12 +70,16 @@ function ConversationContextMenu({
 }: {
   menu: ContextMenuState;
   pinned: boolean;
+  folders: Array<{ id: string; name: string }>;
+  currentFolderId: string | null;
+  onMoveToFolder: (folderId: string | null) => void;
   onClose: () => void;
   onRename: () => void;
   onExport: () => void;
   onCopyId: () => void;
   onTogglePin: () => void;
 }) {
+  const [folderSubmenu, setFolderSubmenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -133,6 +141,45 @@ function ConversationContextMenu({
         </svg>
         Export
       </div>
+      <div
+        className="conv-context-menu-item"
+        onClick={(e) => { e.stopPropagation(); setFolderSubmenu((v) => !v); }}
+      >
+        <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+        </svg>
+        Move to folder…
+        <svg width="10" height="10" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24" style={{ marginLeft: 'auto' }}>
+          <path d="m9 6 6 6-6 6" />
+        </svg>
+      </div>
+      {folderSubmenu && (
+        <div className="conv-context-submenu">
+          <div
+            className="conv-context-menu-item"
+            onClick={(e) => { e.stopPropagation(); onMoveToFolder(null); }}
+          >
+            <span style={{ width: 14 }} />
+            {currentFolderId ? 'Remove from folder (Recents)' : '✓ Recents (no folder)'}
+          </div>
+          {folders.map((f) => (
+            <div
+              key={f.id}
+              className="conv-context-menu-item"
+              onClick={(e) => { e.stopPropagation(); onMoveToFolder(f.id); }}
+            >
+              <span style={{ width: 14 }} />
+              {f.id === currentFolderId ? `✓ ${f.name}` : f.name}
+            </div>
+          ))}
+          {folders.length === 0 && (
+            <div className="conv-context-menu-item" style={{ opacity: 0.6 }}>
+              <span style={{ width: 14 }} />
+              (No folders yet — create one in the sidebar)
+            </div>
+          )}
+        </div>
+      )}
       <div
         className="conv-context-menu-item"
         onClick={(e) => { e.stopPropagation(); onCopyId(); }}
@@ -513,6 +560,14 @@ export default function Sidebar() {
   const unpinUnifiedArtifact = useUnifiedArtifactStore((s) => s.unpinArtifact);
   const deleteUnifiedArtifact = useUnifiedArtifactStore((s) => s.deleteArtifact);
 
+  // ─── Folders store (single-level grouping for chats) ───
+  const folders = useFoldersStore((s) => s.folders);
+  const createFolder = useFoldersStore((s) => s.createFolder);
+  const renameFolder = useFoldersStore((s) => s.renameFolder);
+  const deleteFolderAction = useFoldersStore((s) => s.deleteFolder);
+  const setSessionFolder = useSessionStore((s) => s.setSessionFolder);
+  const detachAllFromFolder = useSessionStore((s) => s.detachAllFromFolder);
+
   // ─── UI store ───
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen);
 
@@ -755,6 +810,20 @@ export default function Sidebar() {
     [sessions, contextMenu.sessionId],
   );
 
+  const contextMenuFolderId = useMemo(
+    () => sessions.find((s) => s.id === contextMenu.sessionId)?.folderId ?? null,
+    [sessions, contextMenu.sessionId],
+  );
+
+  const handleContextMoveToFolder = useCallback(
+    (folderId: string | null) => {
+      const id = contextMenu.sessionId;
+      closeContextMenu();
+      if (id) void setSessionFolder(id, folderId);
+    },
+    [contextMenu.sessionId, closeContextMenu, setSessionFolder],
+  );
+
   const handleOpenSettings = useCallback(() => {
     setSettingsOpen(true);
   }, [setSettingsOpen]);
@@ -832,6 +901,71 @@ export default function Sidebar() {
     }
   }, [cleanupDismissedIds, persistDismissed, deleteSession]);
 
+  // ─── Folder groupings (Quick-style single-level) ───
+  // Folders only render when there's no active search. Search collapses
+  // everything to a flat date-grouped list so users can find anything
+  // without first knowing which folder it's in.
+  const isSearching = !!searchQuery.trim();
+  const folderGroups = useMemo(() => {
+    if (isSearching) return [] as Array<{ folder: { id: string; name: string }; sessions: typeof filteredSessions }>;
+    const byId: Record<string, typeof filteredSessions> = {};
+    for (const s of filteredSessions) {
+      if (s.pinned) continue;
+      if (!s.folderId) continue;
+      const list = byId[s.folderId] ?? (byId[s.folderId] = []);
+      list.push(s);
+    }
+    // Render folders in the order folders-store provides (creation order),
+    // include even empty ones so the user can drop into them. Sessions inside
+    // each folder sort by updatedAt desc.
+    return folders.map((f) => ({
+      folder: f,
+      sessions: (byId[f.id] ?? []).sort(
+        (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0),
+      ),
+    }));
+  }, [folders, filteredSessions, isSearching]);
+
+  // Track which session is being dragged for HTML5 DnD into folders.
+  const dragSessionRef = useRef<string | null>(null);
+
+  const handleNewFolder = useCallback(async () => {
+    // Suggest a name based on the current selected session, fall back to a
+    // generic prompt. Quick uses an inline rename input — we'll start with a
+    // simple browser prompt and upgrade to inline later if needed.
+    const name = window.prompt('New folder name:', '');
+    if (!name || !name.trim()) return;
+    const created = await createFolder(name.trim());
+    if (!created) {
+      window.alert('Failed to create folder (duplicate name?)');
+    }
+  }, [createFolder]);
+
+  const handleRenameFolder = useCallback(
+    async (id: string, currentName: string) => {
+      const next = window.prompt('Rename folder:', currentName);
+      if (!next || !next.trim() || next.trim() === currentName) return;
+      const ok = await renameFolder(id, next.trim());
+      if (!ok) window.alert('Rename failed (duplicate name?)');
+    },
+    [renameFolder],
+  );
+
+  const handleDeleteFolder = useCallback(
+    async (id: string, name: string) => {
+      const sessionsInFolder = filteredSessions.filter((s) => s.folderId === id).length;
+      const msg = sessionsInFolder > 0
+        ? `Delete folder "${name}"? ${sessionsInFolder} chat${sessionsInFolder === 1 ? '' : 's'} will move back to Recents.`
+        : `Delete folder "${name}"?`;
+      if (!window.confirm(msg)) return;
+      // Detach session memberships first so the UI doesn't briefly show ghost
+      // assignments when the folder disappears.
+      await detachAllFromFolder(id);
+      await deleteFolderAction(id);
+    },
+    [filteredSessions, detachAllFromFolder, deleteFolderAction],
+  );
+
   // ─── Date-grouped sessions (pinned excluded — they live in PINNED section) ───
   // All non-pinned chats show up here — no auto-folding. The CleanupBanner
   // surfaces abandoned ones explicitly when it's time to prune.
@@ -850,6 +984,9 @@ export default function Sidebar() {
 
     for (const session of filteredSessions) {
       if (session.pinned) continue;
+      // Skip sessions assigned to a known folder — they show under that
+      // folder. Ignore foldering when searching so search hits remain flat.
+      if (!isSearching && session.folderId && folders.some((f) => f.id === session.folderId)) continue;
       const ts = session.updatedAt || session.createdAt || 0;
       if (ts >= todayStart) groups[0].sessions.push(session);
       else if (ts >= yesterdayStart) groups[1].sessions.push(session);
@@ -858,7 +995,7 @@ export default function Sidebar() {
     }
 
     return { groups: groups.filter((g) => g.sessions.length > 0) };
-  }, [filteredSessions]);
+  }, [filteredSessions, isSearching, folders]);
 
   const totalCount = sessions.filter((s) => !s.pinned).length;
 
@@ -1010,88 +1147,182 @@ export default function Sidebar() {
                   </button>
                 </div>
               )}
-            <div className="session-list">
-              {groupedSessions.groups.map((group) => (
-                <div key={group.label}>
-                  <div className="session-date-group">{group.label}</div>
-                  {group.sessions.map((session) => {
-                    const rawStatus = session.status || 'idle';
-                    const isActive = session.id === currentSessionId;
-                    const isRenaming = renamingId === session.id;
+            {(() => {
+              // Single render path for session rows used by both folder and date sections.
+              const renderSessionRow = (
+                session: typeof filteredSessions[number],
+                hint: 'today' | 'yesterday' | 'older',
+              ) => {
+                const rawStatus = session.status || 'idle';
+                const isActive = session.id === currentSessionId;
+                const isRenaming = renamingId === session.id;
+                let visualStatus: string = rawStatus;
+                if (rawStatus === 'idle') {
+                  if (unseenCompletedSessions.has(session.id)) visualStatus = 'completed-unseen';
+                  else if (isActive) visualStatus = 'current';
+                  else if (hint === 'today' || hint === 'yesterday') visualStatus = 'recent';
+                }
+                return (
+                  <div
+                    key={session.id}
+                    className={`session-item${isActive ? ' active' : ''}`}
+                    onClick={() => handleSwitch(session.id)}
+                    onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
+                    draggable
+                    onDragStart={(e) => {
+                      dragSessionRef.current = session.id;
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', session.id);
+                    }}
+                    onDragEnd={() => { dragSessionRef.current = null; }}
+                    data-id={session.id}
+                  >
+                    <SessionModeIcon mode={session.mode} status={visualStatus} />
+                    <div className="session-content">
+                      {isRenaming ? (
+                        <input
+                          ref={renameInputRef}
+                          type="text"
+                          className="rename-input"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') { e.preventDefault(); finishRename(); }
+                            else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={finishRename}
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <div
+                          className="session-title"
+                          onDoubleClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            startRename(session.id, session.title);
+                          }}
+                          title="Double-click to rename"
+                        >
+                          {session.title}
+                        </div>
+                      )}
+                    </div>
+                    <DelegationBadges convId={session.id} />
+                    <button
+                      className="session-delete"
+                      onClick={(e) => { e.stopPropagation(); handleDelete(session.id); }}
+                      title="Delete session"
+                    >
+                      <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M3 3l8 8M11 3l-8 8"/>
+                      </svg>
+                    </button>
+                  </div>
+                );
+              };
 
-                    let visualStatus: string = rawStatus;
-                    if (rawStatus === 'idle') {
-                      if (unseenCompletedSessions.has(session.id)) {
-                        visualStatus = 'completed-unseen';
-                      } else if (isActive) {
-                        visualStatus = 'current';
-                      } else if (group.isToday || group.label === 'Yesterday') {
-                        visualStatus = 'recent';
-                      }
-                    }
-
+              return (
+                <div className="session-list">
+                  {/* Folders (Quick-style single-level groups) */}
+                  {!isSearching && folderGroups.map(({ folder, sessions: folderSessions }) => {
+                    const folderCollapsed = collapsed[`folder:${folder.id}`] ?? false;
                     return (
-                      <div
-                        key={session.id}
-                        className={`session-item${isActive ? ' active' : ''}`}
-                        onClick={() => handleSwitch(session.id)}
-                        onContextMenu={(e) => handleContextMenu(session.id, session.title, e)}
-                        data-id={session.id}
-                      >
-                        <SessionModeIcon mode={session.mode} status={visualStatus} />
-                        <div className="session-content">
-                          {isRenaming ? (
-                            <input
-                              ref={renameInputRef}
-                              type="text"
-                              className="rename-input"
-                              value={renameValue}
-                              onChange={(e) => setRenameValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  finishRename();
-                                } else if (e.key === 'Escape') {
-                                  e.preventDefault();
-                                  cancelRename();
-                                }
-                              }}
-                              onBlur={finishRename}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                          ) : (
-                            <div
-                              className="session-title"
-                              onDoubleClick={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                startRename(session.id, session.title);
-                              }}
-                              title="Double-click to rename"
-                            >
-                              {session.title}
-                            </div>
+                      <div key={`fld-${folder.id}`} className="folder-group">
+                        <div
+                          className="folder-header"
+                          onClick={() => toggleSection(`folder:${folder.id}`)}
+                          onContextMenu={(e) => {
+                            e.preventDefault();
+                            const action = window.prompt(
+                              `Folder "${folder.name}" — type "rename" or "delete":`,
+                              '',
+                            );
+                            if (action === 'rename') handleRenameFolder(folder.id, folder.name);
+                            else if (action === 'delete') handleDeleteFolder(folder.id, folder.name);
+                          }}
+                          onDragOver={(e) => {
+                            if (dragSessionRef.current) e.preventDefault();
+                          }}
+                          onDragEnter={(e) => {
+                            if (dragSessionRef.current) {
+                              e.currentTarget.classList.add('drag-over');
+                            }
+                          }}
+                          onDragLeave={(e) => {
+                            e.currentTarget.classList.remove('drag-over');
+                          }}
+                          onDrop={(e) => {
+                            e.preventDefault();
+                            e.currentTarget.classList.remove('drag-over');
+                            const sessionId = dragSessionRef.current ?? e.dataTransfer.getData('text/plain');
+                            dragSessionRef.current = null;
+                            if (!sessionId) return;
+                            void setSessionFolder(sessionId, folder.id);
+                          }}
+                          title="Click to expand/collapse · Right-click to rename/delete · Drop a chat here to file it"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="folder-chevron">
+                            {folderCollapsed
+                              ? <path d="m9 6 6 6-6 6" />
+                              : <path d="m6 9 6 6 6-6" />}
+                          </svg>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="folder-icon">
+                            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+                          </svg>
+                          <span className="folder-name">{folder.name}</span>
+                          {folderSessions.length > 0 && (
+                            <span className="folder-count">{folderSessions.length}</span>
                           )}
                         </div>
-                        <DelegationBadges convId={session.id} />
-                        <button
-                          className="session-delete"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(session.id);
-                          }}
-                          title="Delete session"
-                        >
-                          <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2">
-                            <path d="M3 3l8 8M11 3l-8 8"/>
-                          </svg>
-                        </button>
+                        {!folderCollapsed && folderSessions.map((s) => renderSessionRow(s, 'older'))}
                       </div>
                     );
                   })}
+
+                  {/* Recents (date-grouped, unfiled) */}
+                  {groupedSessions.groups.map((group) => (
+                    <div key={group.label}>
+                      <div className="session-date-group">
+                        {group.label}
+                        {group.label === 'Today' && !isSearching && (
+                          <button
+                            className="folder-new-btn"
+                            onClick={handleNewFolder}
+                            title="New folder"
+                          >
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 5v14M5 12h14" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      {group.sessions.map((s) =>
+                        renderSessionRow(
+                          s,
+                          group.isToday ? 'today' : group.label === 'Yesterday' ? 'yesterday' : 'older',
+                        ),
+                      )}
+                    </div>
+                  ))}
+
+                  {/* If there are no recent sessions but folders exist, still surface the New Folder action */}
+                  {!isSearching && groupedSessions.groups.length === 0 && (
+                    <div className="session-date-group">
+                      Recents
+                      <button
+                        className="folder-new-btn"
+                        onClick={handleNewFolder}
+                        title="New folder"
+                      >
+                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
                 </div>
-              ))}
-            </div>
+              );
+            })()}
             </>
           )}
         </div>
@@ -1110,6 +1341,9 @@ export default function Sidebar() {
       <ConversationContextMenu
         menu={contextMenu}
         pinned={contextMenuPinned}
+        folders={folders}
+        currentFolderId={contextMenuFolderId}
+        onMoveToFolder={handleContextMoveToFolder}
         onClose={closeContextMenu}
         onRename={handleContextRename}
         onExport={handleContextExport}

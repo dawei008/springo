@@ -12037,6 +12037,112 @@
     color: var(--text-primary);
 }
 
+/* ─── Sidebar folder groups (Quick-style single-level chat folders) ─── */
+.folder-group {
+    margin-bottom: 4px;
+}
+
+.folder-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    margin: 1px 0;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    user-select: none;
+    transition: background var(--transition-fast);
+}
+
+.folder-header:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.folder-header.drag-over {
+    background: var(--accent-light);
+    color: var(--accent);
+    outline: 1px dashed var(--accent);
+    outline-offset: -2px;
+}
+
+.folder-chevron {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+}
+
+.folder-icon {
+    flex-shrink: 0;
+    color: var(--text-tertiary);
+}
+
+.folder-header:hover .folder-icon,
+.folder-header.drag-over .folder-icon {
+    color: var(--accent);
+}
+
+.folder-name {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 500;
+}
+
+.folder-count {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-tertiary);
+    background: var(--bg-secondary);
+    padding: 1px 6px;
+    border-radius: 8px;
+    min-width: 16px;
+    text-align: center;
+}
+
+/* "+ New folder" affordance attached to the date-group label */
+.folder-new-btn {
+    margin-left: auto;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity var(--transition-fast), background var(--transition-fast);
+}
+
+.session-date-group {
+    display: flex;
+    align-items: center;
+}
+
+.session-date-group:hover .folder-new-btn {
+    opacity: 0.8;
+}
+
+.folder-new-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    opacity: 1;
+}
+
+/* Submenu inside the conversation context menu */
+.conv-context-submenu {
+    margin: 2px 0 2px 8px;
+    border-left: 1px solid var(--border);
+    padding-left: 0;
+}
+
 /* ─── Document-mode body (markdown artifacts rendered natively) ─── */
 .canvas-document {
     flex: 1;
