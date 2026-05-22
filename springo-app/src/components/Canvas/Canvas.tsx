@@ -276,6 +276,7 @@ export default function Canvas() {
       <div className="canvas-header">
         <ArtifactIcon name={activeArtifact.icon} size={16} className="canvas-header-icon" />
         <span className="canvas-header-title">{activeArtifact.name}</span>
+        <SyncIndicator />
         {isInternal ? <InternalActionBar /> : <ActionBar artifact={activeArtifact} containerRef={canvasRef} />}
       </div>
       <div className="canvas-body">
@@ -291,6 +292,41 @@ export default function Canvas() {
       </div>
       {!isInternal && <VersionTimeline artifact={activeArtifact} />}
     </div>
+  );
+}
+
+function SyncIndicator() {
+  const pending = useUnifiedArtifactStore((s) => s.syncPendingCount);
+  const offline = useUnifiedArtifactStore((s) => s.syncOffline);
+  if (pending === 0) return null;
+  const label = offline
+    ? `Backend offline — ${pending} pending`
+    : `Saving (${pending})…`;
+  return (
+    <span
+      className="canvas-sync-indicator"
+      title={label}
+      style={{
+        marginLeft: 'auto',
+        marginRight: '8px',
+        fontSize: '11px',
+        color: offline ? 'var(--warning-text, #b45309)' : 'var(--text-tertiary)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+      }}
+    >
+      <span
+        style={{
+          width: '6px',
+          height: '6px',
+          borderRadius: '50%',
+          background: offline ? 'var(--warning, #f59e0b)' : 'var(--accent, #6b5bff)',
+          animation: offline ? 'none' : 'pulse 1.2s ease-in-out infinite',
+        }}
+      />
+      {label}
+    </span>
   );
 }
 

@@ -47,6 +47,9 @@ export default function ArtifactIframe({ artifactId, files, state }: ArtifactIfr
     if (!e.data || typeof e.data.type !== 'string') return;
     if (e.source !== iframeRef.current?.contentWindow) return;
     const { type, payload } = e.data;
+    // Only accept the documented bridge message types — the iframe sandbox
+    // can technically post anything, so cheap validation here closes the gap.
+    if (typeof type !== 'string' || !type.startsWith('springo:')) return;
     const store = useUnifiedArtifactStore.getState();
 
     switch (type) {

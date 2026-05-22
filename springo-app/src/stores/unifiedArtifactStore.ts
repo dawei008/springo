@@ -106,6 +106,10 @@ export interface UnifiedArtifactState {
   pinnedElement: PinnedElement | null;
   sessionMap: Record<string, SessionSnapshot>;
   currentSessionId: string | null;
+  /** Number of backend ops currently waiting to retry. */
+  syncPendingCount: number;
+  /** Whether the most recent backend probe failed. */
+  syncOffline: boolean;
 
   // Artifact CRUD
   createArtifact: (props: {
@@ -141,7 +145,7 @@ export interface UnifiedArtifactState {
   replaceState: (id: string, state: Record<string, unknown>) => void;
 
   // Version management
-  selectVersion: (id: string, versionIndex: number) => void;
+  selectVersion: (id: string, versionIndex: number) => Promise<void>;
   currentVersion: (id: string) => ArtifactVersion | null;
 
   // Pinning
@@ -249,10 +253,98 @@ function flushState(id: string, state: Record<string, unknown>) {
   if (_stateTimers[id]) clearTimeout(_stateTimers[id]);
   _stateTimers[id] = setTimeout(() => {
     delete _stateTimers[id];
-    api('PUT', `/v1/artifacts/${id}/state`, { state }).catch((e) => {
-      console.warn('[artifacts] state sync failed', id, (e as Error).message);
+    enqueueSync({
+      kind: 'state',
+      key: `state:${id}`,
+      run: () => api('PUT', `/v1/artifacts/${id}/state`, { state }),
     });
   }, 500);
+}
+
+// ---------------------------------------------------------------------------
+// Sync queue with exponential backoff. Ops are de-duplicated by `key` so
+// rapid-fire updates collapse to the latest version. After max retries the
+// op is dropped and logged (the local optimistic state remains).
+// ---------------------------------------------------------------------------
+
+type SyncOp = {
+  kind: 'create' | 'patch' | 'state' | 'pin' | 'delete';
+  key: string;
+  run: () => Promise<unknown>;
+  onSuccess?: (result: unknown) => void;
+  attempts?: number;
+};
+
+const _queue = new Map<string, SyncOp>();
+let _flushScheduled = false;
+let _flushBackoff = 0;
+
+function setSyncStatus(pendingDelta: number, offline?: boolean) {
+  const s = useUnifiedArtifactStore.getState();
+  const next = Math.max(0, s.syncPendingCount + pendingDelta);
+  const patch: Partial<UnifiedArtifactState> = { syncPendingCount: next };
+  if (typeof offline === 'boolean') patch.syncOffline = offline;
+  useUnifiedArtifactStore.setState(patch);
+}
+
+function enqueueSync(op: SyncOp) {
+  const existed = _queue.has(op.key);
+  _queue.set(op.key, op);
+  if (!existed) setSyncStatus(+1);
+  scheduleFlush(0);
+}
+
+function scheduleFlush(delay: number) {
+  if (_flushScheduled) return;
+  _flushScheduled = true;
+  setTimeout(() => {
+    _flushScheduled = false;
+    void flushQueue();
+  }, delay);
+}
+
+async function flushQueue() {
+  if (_queue.size === 0) return;
+  // Snapshot keys so we don't re-process ops re-enqueued mid-loop.
+  const keys = Array.from(_queue.keys());
+  let anyFailed = false;
+  for (const key of keys) {
+    const op = _queue.get(key);
+    if (!op) continue;
+    try {
+      const result = await op.run();
+      _queue.delete(key);
+      setSyncStatus(-1, false);
+      op.onSuccess?.(result);
+    } catch (e) {
+      const attempts = (op.attempts ?? 0) + 1;
+      // Cap retries; after 6 attempts (≈ 60s w/ backoff) drop the op.
+      if (attempts >= 6) {
+        _queue.delete(key);
+        setSyncStatus(-1);
+        console.warn('[artifacts] sync giving up', op.kind, key, (e as Error).message);
+      } else {
+        op.attempts = attempts;
+        anyFailed = true;
+      }
+    }
+  }
+  if (_queue.size > 0) {
+    setSyncStatus(0, anyFailed);
+    _flushBackoff = anyFailed ? Math.min(30_000, Math.max(2000, _flushBackoff * 2 || 2000)) : 0;
+    scheduleFlush(_flushBackoff || 1000);
+  } else {
+    _flushBackoff = 0;
+    setSyncStatus(0, false);
+  }
+}
+
+// Listen for browser online events to retry sooner when connectivity returns.
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    _flushBackoff = 0;
+    if (_queue.size > 0) scheduleFlush(0);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +359,8 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
   pinnedElement: null,
   sessionMap: {},
   currentSessionId: null,
+  syncPendingCount: 0,
+  syncOffline: false,
 
   // ---- Artifact CRUD -------------------------------------------------------
 
@@ -306,21 +400,27 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       sessionArtifactIds: [...s.sessionArtifactIds, id],
     }));
 
-    // Server create, then refresh to pick up canonical meta (real version id etc).
-    api<BackendArtifact>('POST', '/v1/artifacts', {
-      id,
-      name: props.name,
-      type,
-      icon,
-      session_id: get().currentSessionId ?? null,
-      files: files.map((f) => ({ path: f.path, type: f.type, content: f.content })),
-      state,
-    })
-      .then((b) => {
-        const merged = toArtifact(b);
+    // Server create, then refresh to pick up canonical meta (real version id
+    // etc). If the backend is offline we keep retrying so the artifact is not
+    // lost on reload.
+    enqueueSync({
+      kind: 'create',
+      key: `create:${id}`,
+      run: () =>
+        api<BackendArtifact>('POST', '/v1/artifacts', {
+          id,
+          name: props.name,
+          type,
+          icon,
+          session_id: get().currentSessionId ?? null,
+          files: files.map((f) => ({ path: f.path, type: f.type, content: f.content })),
+          state,
+        }),
+      onSuccess: (result) => {
+        const merged = toArtifact(result as BackendArtifact);
         set((s) => ({ artifacts: { ...s.artifacts, [id]: merged } }));
-      })
-      .catch((e) => console.warn('[artifacts] create sync failed', (e as Error).message));
+      },
+    });
 
     return id;
   },
@@ -377,8 +477,10 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
         pinnedArtifactIds: s.pinnedArtifactIds.filter((i) => i !== id),
       };
     });
-    api('DELETE', `/v1/artifacts/${id}`).catch((e) => {
-      console.warn('[artifacts] delete sync failed', id, (e as Error).message);
+    enqueueSync({
+      kind: 'delete',
+      key: `delete:${id}`,
+      run: () => api('DELETE', `/v1/artifacts/${id}`),
     });
   },
 
@@ -431,20 +533,26 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       },
     }));
 
-    // Server patch; refresh afterward to pick up canonical version id.
-    api<BackendArtifact>('PATCH', `/v1/artifacts/${id}`, {
-      files: filePatches.map((p) => ({
-        path: p.path,
-        action: p.action,
-        content: p.content,
-        file_type: p.fileType,
-      })),
-    })
-      .then((b) => {
-        const merged = toArtifact(b);
+    // Server patch; refresh afterward to pick up canonical version id. The
+    // queue retries if the backend is offline, so the local optimistic state
+    // and the on-disk source eventually reconcile.
+    enqueueSync({
+      kind: 'patch',
+      key: `patch:${id}:${now}`,
+      run: () =>
+        api<BackendArtifact>('PATCH', `/v1/artifacts/${id}`, {
+          files: filePatches.map((p) => ({
+            path: p.path,
+            action: p.action,
+            content: p.content,
+            file_type: p.fileType,
+          })),
+        }),
+      onSuccess: (result) => {
+        const merged = toArtifact(result as BackendArtifact);
         set((s) => ({ artifacts: { ...s.artifacts, [id]: merged } }));
-      })
-      .catch((e) => console.warn('[artifacts] patch sync failed', id, (e as Error).message));
+      },
+    });
   },
 
   updateFiles: (id, files) => {
@@ -501,25 +609,62 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
 
   // ---- Version management --------------------------------------------------
 
-  selectVersion: (id, versionIndex) => {
+  selectVersion: async (id, versionIndex) => {
     const artifact = get().artifacts[id];
     if (!artifact) return;
     if (versionIndex < 0 || versionIndex >= artifact.versions.length) return;
-    const version = artifact.versions[versionIndex];
+    const target = artifact.versions[versionIndex];
+
+    // Selecting the current head version is a no-op.
+    if (versionIndex === artifact.activeVersionIndex) return;
+
+    // Optimistic local view swap. If the snapshot is empty (only metadata
+    // was hydrated), pull files first so the iframe has something to render.
+    let files = target.files;
+    if (files.length === 0) {
+      try {
+        const fetched = await api<{ files: Array<{ path: string; type: string; content: string }> }>(
+          'GET',
+          `/v1/artifacts/${id}/versions/${target.id}/files`,
+        );
+        files = fetched.files.map((f) => ({
+          path: f.path,
+          type: (['html', 'jsx', 'css', 'json', 'text'].includes(f.type) ? f.type : 'text') as ArtifactFile['type'],
+          content: f.content,
+        }));
+      } catch (e) {
+        console.warn('[artifacts] fetch version files failed', target.id, (e as Error).message);
+        return;
+      }
+    }
+
     set((s) => ({
       artifacts: {
         ...s.artifacts,
         [id]: {
           ...artifact,
           activeVersionIndex: versionIndex,
-          files: version.files.map((f) => ({ ...f })),
-          state: { ...version.state },
+          files: files.map((f) => ({ ...f })),
+          state: { ...target.state },
+          versions: artifact.versions.map((v, i) =>
+            i === versionIndex ? { ...v, files: files.map((f) => ({ ...f })) } : v,
+          ),
         },
       },
     }));
-    // Full version browsing / rollback remains a v2 — for now, selecting an
-    // older version only updates the local view. Use <springo-artifact
-    // op="patch"> to actually apply a change.
+
+    // Persist the rollback so the choice survives reload. The backend
+    // snapshots the rollback as a new version; refresh to pick up canonical
+    // version metadata.
+    try {
+      const merged = await api<BackendArtifact>(
+        'POST',
+        `/v1/artifacts/${id}/rollback/${target.id}`,
+      );
+      set((s) => ({ artifacts: { ...s.artifacts, [id]: toArtifact(merged) } }));
+    } catch (e) {
+      console.warn('[artifacts] rollback sync failed', id, (e as Error).message);
+    }
   },
 
   currentVersion: (id) => {
@@ -543,9 +688,11 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
         ? s.pinnedArtifactIds
         : [...s.pinnedArtifactIds, id],
     }));
-    api('POST', `/v1/artifacts/${id}/pin`, { pinned: true }).catch((e) =>
-      console.warn('[artifacts] pin sync failed', id, (e as Error).message),
-    );
+    enqueueSync({
+      kind: 'pin',
+      key: `pin:${id}`,
+      run: () => api('POST', `/v1/artifacts/${id}/pin`, { pinned: true }),
+    });
   },
 
   unpinArtifact: (id) => {
@@ -555,9 +702,11 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       artifacts: { ...s.artifacts, [id]: { ...artifact, pinned: false } },
       pinnedArtifactIds: s.pinnedArtifactIds.filter((i) => i !== id),
     }));
-    api('POST', `/v1/artifacts/${id}/pin`, { pinned: false }).catch((e) =>
-      console.warn('[artifacts] unpin sync failed', id, (e as Error).message),
-    );
+    enqueueSync({
+      kind: 'pin',
+      key: `pin:${id}`,
+      run: () => api('POST', `/v1/artifacts/${id}/pin`, { pinned: false }),
+    });
   },
 
   // ---- Element pinning -----------------------------------------------------

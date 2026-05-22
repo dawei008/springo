@@ -110,6 +110,23 @@ button, input, textarea, select { font-family: inherit; }
 /** Ready-to-inject <style> tag wrapping SPRINGO_TOKENS_CSS. */
 export const SPRINGO_TOKENS_STYLE_TAG = `<style id="springo-tokens">${SPRINGO_TOKENS_CSS}</style>`;
 
+/**
+ * Resolve a vendored runtime asset (React/Babel) to a URL the iframe can load.
+ *
+ * The renderer ships with `public/runtime/*.js` so artifacts work without
+ * network access. We resolve against `document.baseURI` because the iframe
+ * uses `srcdoc` and inherits the parent's base URI; in dev mode that's the
+ * Vite dev server, in packaged Electron it's `file:///.../renderer/index.html`.
+ */
+export function getRuntimeAssetUrl(filename: string): string {
+  if (typeof document === 'undefined') return `runtime/${filename}`;
+  try {
+    return new URL(`runtime/${filename}`, document.baseURI).toString();
+  } catch {
+    return `runtime/${filename}`;
+  }
+}
+
 interface CdnLib {
   scripts: string[];
   global: string;
@@ -189,22 +206,68 @@ export function buildMultiFileRuntime(files: ArtifactFile[], entryFile?: string)
     return htmlFile.content;
   }
 
-  const importRe = /import\s+(?:\{[^}]+\}|\w+)\s+from\s+['"]\.\/([^'"]+)['"]/g;
-  const fileBaseNames = new Map<string, ArtifactFile>();
+  const importRe = /import\s+(?:\{[^}]+\}|\w+)\s+from\s+['"](\.\.?\/[^'"]+)['"]/g;
+
+  // Resolve relative-import specifiers to actual file paths.
+  // Strategy:
+  //   1. Try each (importer dir + specifier) with no/.jsx/.tsx/.js/.ts/.json + /index.{ext}
+  //   2. Fall back to a basename-only match (legacy behavior) so older
+  //      artifacts that did `from './Button'` from a flat layout still work.
+  const filesByPath = new Map<string, ArtifactFile>();
+  for (const f of jsxFiles) filesByPath.set(f.path, f);
+  const filesByBasename = new Map<string, ArtifactFile[]>();
   for (const f of jsxFiles) {
     const base = f.path.replace(/^.*\//, '').replace(/\.\w+$/, '');
-    fileBaseNames.set(base, f);
+    const list = filesByBasename.get(base) ?? [];
+    list.push(f);
+    filesByBasename.set(base, list);
   }
+
+  const EXT_CANDIDATES = ['', '.jsx', '.tsx', '.js', '.ts', '.json'];
+  const INDEX_CANDIDATES = ['/index.jsx', '/index.tsx', '/index.js', '/index.ts'];
+
+  function dirname(p: string): string {
+    const idx = p.lastIndexOf('/');
+    return idx === -1 ? '' : p.slice(0, idx);
+  }
+  function joinPath(base: string, rel: string): string {
+    const parts = (base ? base.split('/') : []).concat(rel.split('/'));
+    const out: string[] = [];
+    for (const seg of parts) {
+      if (!seg || seg === '.') continue;
+      if (seg === '..') out.pop();
+      else out.push(seg);
+    }
+    return out.join('/');
+  }
+  function resolveImport(fromFile: string, specifier: string): ArtifactFile | null {
+    const base = dirname(fromFile);
+    const joined = joinPath(base, specifier);
+    for (const ext of EXT_CANDIDATES) {
+      const p = joined + ext;
+      const f = filesByPath.get(p);
+      if (f) return f;
+    }
+    for (const idx of INDEX_CANDIDATES) {
+      const p = joined + idx;
+      const f = filesByPath.get(p);
+      if (f) return f;
+    }
+    // Last-resort basename fallback (only if unambiguous).
+    const baseName = specifier.replace(/^.*\//, '').replace(/\.\w+$/, '');
+    const candidates = filesByBasename.get(baseName);
+    if (candidates && candidates.length === 1) return candidates[0];
+    return null;
+  }
+
   const deps = new Map<string, Set<string>>();
   for (const f of jsxFiles) {
     const fileDeps = new Set<string>();
-    let m: RegExpExecArray | null;
-    importRe.lastIndex = 0;
     const tmpRe = new RegExp(importRe.source, 'g');
+    let m: RegExpExecArray | null;
     while ((m = tmpRe.exec(f.content)) !== null) {
-      const importedName = m[1].replace(/\.\w+$/, '').replace(/^.*\//, '');
-      const target = fileBaseNames.get(importedName);
-      if (target) fileDeps.add(target.path);
+      const target = resolveImport(f.path, m[1]);
+      if (target && target.path !== f.path) fileDeps.add(target.path);
     }
     deps.set(f.path, fileDeps);
   }
@@ -230,25 +293,47 @@ export function buildMultiFileRuntime(files: ArtifactFile[], entryFile?: string)
     return a.path.localeCompare(b.path);
   });
 
+  // Synthetic per-path export keys so two files with the same basename
+  // don't overwrite each other on `window.__c`.
+  const pathKey = (p: string) => '__f_' + p.replace(/[^a-zA-Z0-9]/g, '_');
+
   const processedJsx = sorted.map(f => {
     let code = f.content;
+    const fileKey = pathKey(f.path);
+
+    // Default-export markers we'll backfill below — one of these wins per file.
+    let defaultIdent: string | null = null;
+
+    // Named imports: still go through the shared __c bag.
     code = code.replace(
       /import\s+\{([^}]+)\}\s+from\s+['"][^'"]+['"]\s*;?/g,
       (_m, names) => `const {${names}} = window.__c;`
     );
+
+    // Default imports: if the specifier resolves to one of our files, alias
+    // to that file's synthetic default key. Otherwise fall back to the bag
+    // (for CDN libs registered in window.__c).
     code = code.replace(
-      /import\s+(\w+)\s+from\s+['"][^'"]+['"]\s*;?/g,
-      (_m, name) => `const ${name} = window.__c.${name};`
+      /import\s+(\w+)\s+from\s+['"]([^'"]+)['"]\s*;?/g,
+      (_m, localName, spec) => {
+        if (spec.startsWith('./') || spec.startsWith('../')) {
+          const target = resolveImport(f.path, spec);
+          if (target) {
+            return `const ${localName} = window.__c[${JSON.stringify(pathKey(target.path) + '_default')}];`;
+          }
+        }
+        return `const ${localName} = window.__c.${localName};`;
+      }
     );
 
     const exportedNames: string[] = [];
     code = code.replace(
       /export\s+default\s+function\s+(\w+)/g,
-      (_m, name) => { exportedNames.push(name); return `function ${name}`; }
+      (_m, name) => { exportedNames.push(name); defaultIdent = name; return `function ${name}`; }
     );
     code = code.replace(
       /export\s+default\s+class\s+(\w+)/g,
-      (_m, name) => { exportedNames.push(name); return `class ${name}`; }
+      (_m, name) => { exportedNames.push(name); defaultIdent = name; return `class ${name}`; }
     );
     code = code.replace(
       /export\s+function\s+(\w+)/g,
@@ -263,20 +348,25 @@ export function buildMultiFileRuntime(files: ArtifactFile[], entryFile?: string)
       /export\s+default\s+(\w+)\s*;/g,
       (_m, ident) => {
         exportedNames.push(ident);
+        defaultIdent = ident;
         return `/* exported ${ident} */`;
       }
     );
     code = code.replace(
       /export\s+default\s+/g,
-      () => { exportedNames.push(baseName); return `var ${baseName} = `; }
+      () => { exportedNames.push(baseName); defaultIdent = baseName; return `var ${baseName} = `; }
     );
 
     const uniqueNames = [...new Set(exportedNames)];
+    const tail: string[] = [];
     if (uniqueNames.length > 0) {
-      code += '\n' + uniqueNames.map(n =>
-        `window.__c.${n} = ${n}; window.${n} = ${n};`
-      ).join('\n');
+      tail.push(...uniqueNames.map((n) => `window.__c.${n} = ${n}; window.${n} = ${n};`));
     }
+    if (defaultIdent) {
+      // Per-file synthetic default key — used by import resolver to avoid collisions.
+      tail.push(`window.__c[${JSON.stringify(fileKey + '_default')}] = ${defaultIdent};`);
+    }
+    if (tail.length > 0) code += '\n' + tail.join('\n');
 
     return { path: f.path, code };
   });
@@ -291,14 +381,18 @@ export function buildMultiFileRuntime(files: ArtifactFile[], entryFile?: string)
   const cdnLibs = detectCdnLibs(files);
   const cdnScriptTags = cdnLibs.scripts.map(url => `  <script src="${url}" crossorigin></script>`).join('\n');
 
+  const reactUrl = getRuntimeAssetUrl('react.production.min.js');
+  const reactDomUrl = getRuntimeAssetUrl('react-dom.production.min.js');
+  const babelUrl = getRuntimeAssetUrl('babel.min.js');
+
   return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="${reactUrl}"></script>
+  <script src="${reactDomUrl}"></script>
+  <script src="${babelUrl}"></script>
 ${cdnScriptTags}
   <style>* { margin: 0; padding: 0; box-sizing: border-box; }</style>
   <style id="springo-tokens">${SPRINGO_TOKENS_CSS}</style>

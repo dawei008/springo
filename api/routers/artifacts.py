@@ -184,6 +184,16 @@ async def list_versions(artifact_id: str) -> Dict[str, Any]:
     return {"versions": artifact_store.list_versions(artifact_id)}
 
 
+@router.get("/artifacts/{artifact_id}/versions/{version_id}/files")
+async def read_version_files(artifact_id: str, version_id: str) -> Dict[str, Any]:
+    try:
+        return {"files": artifact_store.read_version_files(artifact_id, version_id)}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/artifacts/{artifact_id}/versions/{version_id}/files/{path:path}")
 async def read_version_file(artifact_id: str, version_id: str, path: str) -> Dict[str, Any]:
     try:

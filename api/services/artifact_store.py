@@ -181,26 +181,34 @@ def read_artifact(artifact_id: str) -> Dict[str, Any]:
 
 
 def read_files(artifact_id: str) -> List[Dict[str, Any]]:
-    """Return list of {path, type, content} for the current version."""
+    """Return list of {path, type, content} for the current version.
+
+    Walks the files/ tree recursively so nested paths (e.g.
+    ``components/Button.jsx``) round-trip through the API.
+    """
     d = _artifact_dir(artifact_id) / "files"
     if not d.exists():
         return []
     out: List[Dict[str, Any]] = []
-    for f in sorted(d.iterdir()):
+    for f in sorted(d.rglob("*")):
         if f.is_file():
+            rel = f.relative_to(d).as_posix()
             out.append({
-                "path": f.name,
-                "type": _infer_file_type(f.name),
+                "path": rel,
+                "type": _infer_file_type(rel),
                 "content": f.read_text("utf-8"),
             })
     return out
 
 
 def read_file(artifact_id: str, path: str) -> Dict[str, Any]:
-    """Return a single file's content."""
-    if "/" in path or ".." in path:
+    """Return a single file's content. Nested paths permitted under files/."""
+    if ".." in path.split("/"):
         raise ValueError(f"Unsafe file path: {path!r}")
-    f = _artifact_dir(artifact_id) / "files" / path
+    files_root = _artifact_dir(artifact_id) / "files"
+    f = (files_root / path).resolve()
+    if files_root.resolve() not in f.parents and f != files_root:
+        raise ValueError(f"Path escapes artifact files dir: {path!r}")
     if not f.exists():
         raise FileNotFoundError(f"File not found in {artifact_id}: {path}")
     return {
@@ -253,10 +261,15 @@ def _parse_version_timestamp(vdir_name: str) -> Optional[int]:
 
 
 def read_version_file(artifact_id: str, version_id: str, path: str) -> Dict[str, Any]:
-    """Read a file from a historical version."""
-    if "/" in version_id or ".." in version_id or "/" in path or ".." in path:
-        raise ValueError("Unsafe path components")
-    vpath = _artifact_dir(artifact_id) / "versions" / version_id / path
+    """Read a file from a historical version (nested paths allowed)."""
+    if "/" in version_id or ".." in version_id.split("/"):
+        raise ValueError("Unsafe version id")
+    if ".." in path.split("/"):
+        raise ValueError("Unsafe file path")
+    vroot = _artifact_dir(artifact_id) / "versions" / version_id
+    vpath = (vroot / path).resolve()
+    if vroot.resolve() not in vpath.parents and vpath != vroot:
+        raise ValueError("Path escapes version dir")
     if not vpath.exists():
         raise FileNotFoundError(f"Version file not found: {artifact_id}/{version_id}/{path}")
     return {
@@ -264,6 +277,25 @@ def read_version_file(artifact_id: str, version_id: str, path: str) -> Dict[str,
         "type": _infer_file_type(path),
         "content": vpath.read_text("utf-8"),
     }
+
+
+def read_version_files(artifact_id: str, version_id: str) -> List[Dict[str, Any]]:
+    """Return all files in a historical version, recursively."""
+    if "/" in version_id or ".." in version_id.split("/"):
+        raise ValueError("Unsafe version id")
+    vdir = _artifact_dir(artifact_id) / "versions" / version_id
+    if not vdir.exists():
+        raise FileNotFoundError(f"Version not found: {artifact_id}/{version_id}")
+    out: List[Dict[str, Any]] = []
+    for f in sorted(vdir.rglob("*")):
+        if f.is_file():
+            rel = f.relative_to(vdir).as_posix()
+            out.append({
+                "path": rel,
+                "type": _infer_file_type(rel),
+                "content": f.read_text("utf-8"),
+            })
+    return out
 
 
 def create_artifact(
@@ -315,12 +347,19 @@ def apply_patch(artifact_id: str, file_patches: List[Dict[str, Any]]) -> Dict[st
     for p in file_patches:
         path = p["path"]
         action = p.get("action", "replace")
-        if "/" in path or ".." in path:
+        if ".." in path.split("/"):
             raise ValueError(f"Unsafe file path: {path!r}")
-        target = fdir / path
+        target = (fdir / path).resolve()
+        if fdir.resolve() not in target.parents:
+            raise ValueError(f"Path escapes artifact files dir: {path!r}")
         if action == "delete":
             if target.exists():
                 target.unlink()
+                # Best-effort: prune empty parent dirs up to fdir.
+                p_dir = target.parent
+                while p_dir != fdir.resolve() and p_dir.is_dir() and not any(p_dir.iterdir()):
+                    p_dir.rmdir()
+                    p_dir = p_dir.parent
         elif action in ("replace", "create"):
             _write_artifact_file(target, p.get("content", ""))
         else:

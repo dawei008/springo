@@ -106,8 +106,12 @@ export function generateBridgeSdk(initialState: Record<string, unknown>): string
       '};' +
 
       'window.addEventListener("message", function(event) {' +
+        // Only accept messages from the host that mounted us.
+        'if (event.source !== window.parent) { return; }' +
         'var data = event.data;' +
         'if (!data || typeof data.type !== "string") { return; }' +
+        // Allowlist host→iframe message types.
+        'if (data.type !== "springo:state-update" && data.type !== "springo:chat-action" && data.type !== "springo:tool-result") { return; }' +
 
         'if (data.type === "springo:state-update") {' +
           'state = JSON.parse(JSON.stringify(data.payload));' +
