@@ -200,10 +200,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to register canvas main loop: {e}")
 
+    # Start the daily skill-distill background loop. It wakes every 6h and
+    # only runs a full pass once 24h have elapsed since the previous one, so
+    # the import cost is negligible and bedrock is only hit once per day.
+    try:
+        from .services.skill_distiller import start_background_loop as start_distiller
+        start_distiller()
+        logger.info("Skill distiller daily loop started")
+    except Exception as e:
+        logger.warning(f"Failed to start skill distiller loop: {e}")
+
     yield
 
     # Shutdown
     logger.info("Shutting down Springo FastAPI...")
+    try:
+        from .services.skill_distiller import stop_background_loop as stop_distiller
+        stop_distiller()
+    except Exception as e:
+        logger.debug(f"Skill distiller stop noop: {e}")
     try:
         from .services.tool_manager import close_tool_manager
         await close_tool_manager()

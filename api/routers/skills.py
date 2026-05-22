@@ -269,3 +269,40 @@ async def get_skill_evaluation(skill_name: str):
     return asdict(result)
 
 
+
+
+# ============ Skill Distill (daily auto-extraction) ============
+# Mounted under /skill-distill/* (NOT /skills/distill/*) so the parameterized
+# /skills/{skill_name}/... routes don't shadow these by matching "distill" as
+# a skill name.
+
+@router.get("/skill-distill/status")
+async def distill_status():
+    """Where the daily skill-distill loop stands."""
+    from ..services.skill_distiller import get_status
+    return get_status()
+
+
+@router.post("/skill-distill/run")
+async def distill_run(force: bool = False):
+    """Manually kick the distill pass. `force=true` re-evaluates every session
+    regardless of watermark (useful to bootstrap an existing corpus)."""
+    from ..services.skill_distiller import run_distill_pass
+    return await run_distill_pass(force=force)
+
+
+@router.get("/skill-distill/usage")
+async def skill_usage():
+    """Per-skill usage counter. Records bumped each time a skill is injected
+    into a chat via skill_loader.create_skill_prompt or get_skill_instructions."""
+    from ..services.skill_distiller import _load_usage  # type: ignore
+    return {"usage": _load_usage()}
+
+
+@router.post("/skill-distill/gc")
+async def distill_gc(grace_days: int = 14):
+    """Run only the auto-archive pass (no Haiku calls). Returns archived slugs."""
+    from ..services.skill_distiller import garbage_collect_unused_skills
+    archived = garbage_collect_unused_skills(grace_days=grace_days)
+    return {"archived": archived, "count": len(archived)}
+

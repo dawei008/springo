@@ -315,6 +315,13 @@ def approve_proposal(proposal_id: str, edited_skill_md: Optional[str] = None) ->
         dst.mkdir(parents=True, exist_ok=False)
         skill_md = edited_skill_md if edited_skill_md is not None else (src / "SKILL.md").read_text(encoding="utf-8")
         (dst / "SKILL.md").write_text(skill_md, encoding="utf-8")
+        # Marker so the daily distiller knows this skill was auto-generated.
+        # Only auto-generated skills are eligible for usage-based archive,
+        # protecting plugin-installed and user-authored skills.
+        (dst / ".auto_generated").write_text(
+            f"approved_from_proposal={proposal_id}\napproved_at={datetime.utcnow().isoformat(timespec='seconds')}Z\n",
+            encoding="utf-8",
+        )
         entry["skill_md"] = skill_md
         entry["status"] = "approved"
         entry["approved_skill_dir"] = str(dst)

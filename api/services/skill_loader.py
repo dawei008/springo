@@ -214,6 +214,8 @@ For example: `{skill_path_str}/html2pptx.md` or `{skill_path_str}/scripts/conver
     def get_skill_instructions(self, name: str) -> Optional[str]:
         """Get the instructions for a skill"""
         skill = self.get_skill(name)
+        if skill:
+            self._record_use(skill.name)
         return skill.instructions if skill else None
 
     def get_skill_resource(self, name: str, resource_name: str) -> Optional[str]:
@@ -228,6 +230,7 @@ For example: `{skill_path_str}/html2pptx.md` or `{skill_path_str}/scripts/conver
         skill = self.get_skill(name)
         if not skill:
             return None
+        self._record_use(skill.name)
         return f"""<skill name="{skill.name}">
 {skill.instructions}
 </skill>
@@ -235,6 +238,20 @@ For example: `{skill_path_str}/html2pptx.md` or `{skill_path_str}/scripts/conver
 User request: {user_request}
 
 Please follow the skill instructions above to complete this task."""
+
+    @staticmethod
+    def _record_use(skill_name: str) -> None:
+        """Bump the per-skill usage counter (~/.springo/skills/_usage.json).
+
+        Lazy import so a circular import between skill_loader and
+        skill_distiller doesn't deadlock at module-init time. Failures here
+        are non-fatal — usage tracking is observability, not correctness.
+        """
+        try:
+            from .skill_distiller import record_skill_use
+            record_skill_use(skill_name)
+        except Exception:
+            pass
 
 
 # Global skill loader instance

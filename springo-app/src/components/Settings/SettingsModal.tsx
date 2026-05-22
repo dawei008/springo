@@ -1261,6 +1261,10 @@ export default function SettingsModal() {
 
               <div className="setting-divider"></div>
 
+              <SkillDistillSection />
+
+              <div className="setting-divider"></div>
+
               <div className="settings-section-header">
                 <h3>MCP Servers</h3>
                 <div style={{ display: 'flex', gap: '6px' }}>
@@ -1539,6 +1543,176 @@ export default function SettingsModal() {
           </div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// ─── Skill Distill (daily auto-extraction + usage tracking) ───
+//
+// Surfaces last-run time, top-line counts, and quick action buttons. The
+// backend's daily loop runs autonomously every 24h; this UI exposes manual
+// triggers for impatient users + a usage table so people can see which
+// skills are actually being pulled in.
+
+interface DistillStatus {
+  last_run: string | null
+  history: Array<{
+    finished_at: string
+    sessions_total: number
+    sessions_processed: number
+    sessions_skipped_unchanged: number
+    proposals_created: number
+    archived_skills: string[]
+    errors: number
+  }>
+  tracked_skills: number
+  active_skills: number
+  archived_skills_total: number
+}
+
+interface UsageEntry {
+  count: number
+  first_used?: string
+  last_used?: string
+}
+
+function SkillDistillSection() {
+  const BASE = 'http://127.0.0.1:8081'
+  const [status, setStatus] = useState<DistillStatus | null>(null)
+  const [usage, setUsage] = useState<Record<string, UsageEntry>>({})
+  const [running, setRunning] = useState<'distill' | 'gc' | null>(null)
+  const [forceMode, setForceMode] = useState(false)
+  const [showUsage, setShowUsage] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      const [s, u] = await Promise.all([
+        fetch(`${BASE}/v1/skill-distill/status`).then(r => r.json()),
+        fetch(`${BASE}/v1/skill-distill/usage`).then(r => r.json()),
+      ])
+      setStatus(s)
+      setUsage(u.usage || {})
+    } catch (e) {
+      console.warn('[skill-distill] refresh failed', e)
+    }
+  }, [])
+
+  useEffect(() => { void refresh() }, [refresh])
+
+  const runDistill = useCallback(async () => {
+    if (running) return
+    setRunning('distill')
+    try {
+      await fetch(`${BASE}/v1/skill-distill/run?force=${forceMode}`, { method: 'POST' })
+      await refresh()
+    } finally {
+      setRunning(null)
+    }
+  }, [running, forceMode, refresh])
+
+  const runGc = useCallback(async () => {
+    if (running) return
+    setRunning('gc')
+    try {
+      await fetch(`${BASE}/v1/skill-distill/gc?grace_days=14`, { method: 'POST' })
+      await refresh()
+    } finally {
+      setRunning(null)
+    }
+  }, [running, refresh])
+
+  const lastRunDisplay = status?.last_run
+    ? new Date(status.last_run).toLocaleString()
+    : 'never'
+
+  const topUsage = Object.entries(usage)
+    .sort((a, b) => (b[1].count || 0) - (a[1].count || 0))
+    .slice(0, 12)
+
+  return (
+    <div className="skill-distill-section">
+      <div className="settings-section-header">
+        <h3>Skill Distill</h3>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <label style={{ fontSize: 12, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <input
+              type="checkbox"
+              checked={forceMode}
+              onChange={(e) => setForceMode(e.target.checked)}
+            />
+            Force re-eval all
+          </label>
+          <button onClick={runDistill} disabled={!!running}>
+            {running === 'distill' ? 'Running…' : 'Run distill now'}
+          </button>
+          <button onClick={runGc} disabled={!!running}>
+            {running === 'gc' ? 'Running…' : 'Run GC only'}
+          </button>
+        </div>
+      </div>
+      <div className="hint">
+        Daily background pass mines past sessions for reusable patterns and
+        proposes new skills. Sessions whose mtime hasn't changed since the
+        last pass are skipped automatically. Auto-generated skills with 0
+        uses for 14+ days are moved to <code>~/.springo/skills/_archive/</code>.
+      </div>
+      {status && (
+        <div className="settings-list" style={{ marginTop: 8 }}>
+          <div className="settings-list-item">
+            <div className="item-info">
+              <div className="item-name">Last run</div>
+              <div className="item-desc">{lastRunDisplay}</div>
+            </div>
+          </div>
+          <div className="settings-list-item">
+            <div className="item-info">
+              <div className="item-name">Active / archived skills</div>
+              <div className="item-desc">
+                {status.active_skills} active · {status.archived_skills_total} archived ·
+                {' '}{status.tracked_skills} tracked usage records
+              </div>
+            </div>
+          </div>
+          {status.history && status.history.length > 0 && (
+            <div className="settings-list-item">
+              <div className="item-info">
+                <div className="item-name">Last pass</div>
+                <div className="item-desc">
+                  {status.history[status.history.length - 1].sessions_processed} processed,
+                  {' '}{status.history[status.history.length - 1].sessions_skipped_unchanged} skipped (unchanged),
+                  {' '}{status.history[status.history.length - 1].proposals_created} proposals created,
+                  {' '}{status.history[status.history.length - 1].archived_skills.length} archived
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ marginTop: 8 }}>
+        <button onClick={() => setShowUsage(v => !v)}>
+          {showUsage ? 'Hide' : 'Show'} usage by skill ({Object.keys(usage).length})
+        </button>
+      </div>
+      {showUsage && (
+        <div className="settings-list" style={{ marginTop: 8 }}>
+          {topUsage.length === 0 ? (
+            <div className="settings-list-empty">
+              No skill usage tracked yet — counters bump when a skill is injected
+              into chat context via skill_loader.
+            </div>
+          ) : topUsage.map(([slug, rec]) => (
+            <div key={slug} className="settings-list-item">
+              <div className="item-info">
+                <div className="item-name">{slug}</div>
+                <div className="item-desc">
+                  {rec.count} use{rec.count === 1 ? '' : 's'}
+                  {rec.last_used ? ` · last ${new Date(rec.last_used).toLocaleString()}` : ''}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
