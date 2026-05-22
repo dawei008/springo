@@ -491,7 +491,7 @@ async def save_state_debounced(artifact_id: str, state: Dict[str, Any], delay: f
 
     Call this from the HTTP handler; each call replaces the pending write
     for that artifact. Keeps state.json out of the hot path of editors
-    like the novel studio that call setState on every keystroke.
+    that call setState on every keystroke.
     """
     async with _state_lock:
         prior = _state_timers.pop(artifact_id, None)

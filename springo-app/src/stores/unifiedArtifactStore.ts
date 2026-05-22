@@ -250,7 +250,7 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 // Debounced PUT of state.json; per-artifact timer so high-frequency editors
-// (the novel studio sends setState on every keystroke) coalesce into one
+// (any artifact that calls setState on every keystroke) coalesce into one
 // round-trip per ~500ms.
 const _stateTimers: Record<string, ReturnType<typeof setTimeout>> = {};
 function flushState(id: string, state: Record<string, unknown>) {
