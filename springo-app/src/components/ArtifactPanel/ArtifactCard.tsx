@@ -1,8 +1,31 @@
 import { useState, useEffect, useRef } from 'react'
-import { useArtifactStore, type ArtifactItem } from '@/stores/artifactStore'
 import { useUnifiedArtifactStore, type ArtifactIconName } from '@/stores/unifiedArtifactStore'
 import { useUIStore } from '@/stores/uiStore'
 import { buildFilePreviewHtml } from '@/utils/filePreviewHtml'
+
+/**
+ * ArtifactItem is the inline-chat-card shape (HTML / markdown / image / svg /
+ * excalidraw / drawio). Distinct from `Artifact` in unifiedArtifactStore which
+ * is a sandboxed multi-file Canvas artifact. Cards click-promote to Canvas
+ * via pinInlineToCanvas() below.
+ */
+export type ArtifactItemType = 'html' | 'markdown' | 'image' | 'svg' | 'excalidraw' | 'drawio'
+
+export interface ArtifactItem {
+  id: string
+  type: ArtifactItemType
+  title: string
+  /** HTML source for html, markdown text for markdown, data URL for image, SVG string for svg, JSON XML for excalidraw/drawio. */
+  content: string
+  /** Optional: excalidraw elements JSON for excalidraw type */
+  elements?: unknown[]
+  /** Optional: file path on disk (for "Reveal in Folder") */
+  filePath?: string
+  /** Optional: URL (for "Open in Browser") */
+  url?: string
+  /** Timestamp for ordering */
+  timestamp: number
+}
 
 interface ArtifactCardProps {
   artifact: ArtifactItem
@@ -237,13 +260,21 @@ function ContextMenu({ x, y, artifact, onClose }: { x: number; y: number; artifa
 }
 
 export default function ArtifactCard({ artifact, onClickOverride, defaultCollapsed = false }: ArtifactCardProps) {
-  const openArtifact = useArtifactStore((s) => s.openArtifact)
-  const activeId = useArtifactStore((s) => s.activeArtifact?.id)
-  const panelOpen = useArtifactStore((s) => s.panelOpen)
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
-  const isActive = panelOpen && activeId === artifact.id
+  // Default action: pin into Canvas as a unified artifact, then open it.
+  // Inline cards used to flip a now-deleted ArtifactPanel; promoting to
+  // Canvas is the only behavior anyone actually wants.
+  const defaultClick = () => {
+    const id = pinInlineToCanvas(artifact)
+    useUnifiedArtifactStore.getState().openArtifact(id)
+  }
+
+  // No reliable "is this card the currently-open Canvas artifact" mapping
+  // for inline cards (they're created on demand from chat content), so we
+  // skip the active-highlight state.
+  const isActive = false
 
   // Collapsed view: compact single-line header
   if (collapsed) {
@@ -270,7 +301,7 @@ export default function ArtifactCard({ artifact, onClickOverride, defaultCollaps
     <>
       <div
         className={`artifact-card${isActive ? ' active' : ''}`}
-        onClick={onClickOverride ?? (() => openArtifact(artifact))}
+        onClick={onClickOverride ?? defaultClick}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }) }}
       >
         <div className="artifact-card-icon">

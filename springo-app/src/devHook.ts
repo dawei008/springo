@@ -17,7 +17,6 @@
  * bottom bails out before touching window.
  */
 
-import { useArtifactStore } from '@/stores/artifactStore';
 import { useChatStore } from '@/stores/chatStore';
 import { usePlanStore } from '@/stores/planStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -33,7 +32,6 @@ import { ARTIFACT_TEMPLATES } from '@/data/artifactTemplates';
 interface DevHook {
   stores: {
     artifacts: typeof useUnifiedArtifactStore;
-    legacyArtifacts: typeof useArtifactStore;
     chat: typeof useChatStore;
     plan: typeof usePlanStore;
     session: typeof useSessionStore;
@@ -86,7 +84,6 @@ function buildDevHook(): DevHook {
   return {
     stores: {
       artifacts: useUnifiedArtifactStore,
-      legacyArtifacts: useArtifactStore,
       chat: useChatStore,
       plan: usePlanStore,
       session: useSessionStore,

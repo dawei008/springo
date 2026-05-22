@@ -12727,6 +12727,89 @@
     color: var(--text-primary);
 }
 
+/* ─── Document-mode body (markdown artifacts rendered natively) ─── */
+.canvas-document {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    background: var(--bg-primary);
+}
+
+.canvas-document-inner {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 32px 40px 80px;
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+    line-height: 1.65;
+}
+
+.canvas-document-inner h1,
+.canvas-document-inner h2,
+.canvas-document-inner h3 {
+    margin-top: 1.6em;
+    margin-bottom: 0.5em;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.canvas-document-inner h1 { font-size: 28px; }
+.canvas-document-inner h2 { font-size: 22px; }
+.canvas-document-inner h3 { font-size: 18px; }
+
+.canvas-document-inner p,
+.canvas-document-inner li {
+    margin-bottom: 0.6em;
+}
+
+.canvas-document-inner pre {
+    padding: 14px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    overflow-x: auto;
+    font-size: var(--font-size-sm);
+}
+
+.canvas-document-inner code {
+    background: var(--bg-secondary);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.92em;
+    font-family: var(--font-mono);
+}
+
+.canvas-document-inner pre code {
+    background: transparent;
+    padding: 0;
+}
+
+.canvas-document-inner blockquote {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-light);
+    padding: 8px 14px;
+    margin: 12px 0;
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.canvas-document-inner table {
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: var(--font-size-sm);
+    width: 100%;
+}
+
+.canvas-document-inner th,
+.canvas-document-inner td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+}
+
+.canvas-document-inner th {
+    background: var(--bg-secondary);
+    font-weight: 600;
+}
+
 /* ─── Selection-to-context chip (floats near iframe selection) ─── */
 .canvas-selection-chip {
     position: fixed;

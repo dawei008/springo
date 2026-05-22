@@ -9,7 +9,6 @@ import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useTeamStore } from '@/stores/teamStore';
-import { useArtifactStore } from '@/stores/artifactStore';
 import { usePlanStore } from '@/stores/planStore';
 import Canvas from '@/components/Canvas/Canvas';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
@@ -447,7 +446,6 @@ export default function MainContent() {
 
   // Save/restore artifact panel and plan state per session
   useEffect(() => {
-    useArtifactStore.getState().switchSession(currentSessionId ?? null);
     useUnifiedArtifactStore.getState().switchSession(currentSessionId ?? null);
     usePlanStore.getState().switchSession(currentSessionId ?? null);
   }, [currentSessionId]);

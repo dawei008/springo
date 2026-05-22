@@ -4,7 +4,7 @@ import ArtifactRenderer from '@/components/Visual/ArtifactRenderer';
 import { hasArtifactOp, parseArtifactOp } from '@/utils/artifactPatcher';
 import ToolVisualContent from '@/components/Visual/ToolVisualContent';
 import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
-import type { ArtifactType } from '@/stores/artifactStore';
+import type { ArtifactItemType as ArtifactType } from '@/components/ArtifactPanel/ArtifactCard';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { openFileInCanvas } from '@/utils/openFileInCanvas';
 import { useUIStore } from '@/stores/uiStore';

@@ -9,6 +9,44 @@ import { useUIStore } from '@/stores/uiStore';
 import SchedulesPanel from '@/components/RightPanel/SchedulesPanel';
 import MeetingPanel from '@/components/RightPanel/MeetingPanel';
 import RecordingCanvasPanel from '@/components/RightPanel/RecordingCanvasPanel';
+import Markdown from '@/components/common/Markdown';
+
+/**
+ * Native document renderer (Quick-inspired). When an artifact is a `document`
+ * type with a single .md/.markdown file, we render it via the same Markdown
+ * component used in chat — no iframe / sandbox / Babel cost. Saves ~2MB of
+ * runtime payload and gives the user readable text instead of an HTML wrapper.
+ */
+function DocumentRenderer({ artifact }: { artifact: Artifact }) {
+  const mdFile = artifact.files.find((f) =>
+    /\.(md|markdown|mdx)$/i.test(f.path) || f.type === 'text',
+  );
+  const content = mdFile?.content ?? '';
+  if (!content.trim()) {
+    return (
+      <div className="canvas-empty">
+        <p style={{ color: 'var(--text-tertiary)', fontSize: 'var(--font-size-sm)' }}>
+          Empty document — waiting for content…
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="canvas-document">
+      <div className="canvas-document-inner">
+        <Markdown content={content} />
+      </div>
+    </div>
+  );
+}
+
+function isDocumentArtifact(a: Artifact): boolean {
+  if (a.type !== 'document') return false;
+  // Must have at least one md-ish file and no JSX/HTML to fall through to native.
+  const hasMd = a.files.some((f) => /\.(md|markdown|mdx)$/i.test(f.path));
+  const hasCode = a.files.some((f) => f.type === 'jsx' || (f.type === 'html' && /\.(html?)$/i.test(f.path)));
+  return hasMd && !hasCode;
+}
 
 function TasksCanvasPanel() {
   const todos = useUIStore((s) => s.todos);
@@ -69,6 +107,10 @@ function SessionTabs() {
   const closeTab = useUnifiedArtifactStore((s) => s.closeArtifactTab);
   const reorder = useUnifiedArtifactStore((s) => s.reorderSessionArtifacts);
 
+  // useRef MUST run on every render — keep it above any early return so we
+  // don't violate Rules of Hooks when the tab count crosses 1↔2.
+  const dragState = useRef<{ id: string | null }>({ id: null });
+
   const tabs = sessionIds
     .map((id) => artifacts[id])
     .filter((a): a is Artifact => !!a);
@@ -76,8 +118,6 @@ function SessionTabs() {
   // Hide the strip entirely if there's at most one tab — keeps a clean header
   // for the single-artifact case (which is most of the time).
   if (tabs.length <= 1) return null;
-
-  const dragState = useRef<{ id: string | null }>({ id: null });
 
   return (
     <div className="canvas-tabs" role="tablist">
@@ -448,6 +488,7 @@ export default function Canvas() {
   }
 
   const isInternal = !!activeArtifact.internalComponent;
+  const isDocument = !isInternal && isDocumentArtifact(activeArtifact);
 
   return (
     <div className={`canvas-panel${isFullscreen ? ' fullscreen' : ''}`} ref={canvasRef}>
@@ -456,6 +497,7 @@ export default function Canvas() {
       <div className="canvas-header">
         <ArtifactIcon name={activeArtifact.icon} size={16} className="canvas-header-icon" />
         <span className="canvas-header-title">{activeArtifact.name}</span>
+        <LiveIndicator artifact={activeArtifact} />
         <SyncIndicator />
         {isInternal ? (
           <InternalActionBar />
@@ -471,6 +513,8 @@ export default function Canvas() {
       <div className="canvas-body">
         {isInternal ? (
           <InternalRenderer component={activeArtifact.internalComponent!} />
+        ) : isDocument ? (
+          <DocumentRenderer artifact={activeArtifact} />
         ) : (
           <ArtifactIframe
             artifactId={activeArtifactId}
@@ -482,6 +526,50 @@ export default function Canvas() {
       {!isInternal && <VersionTimeline artifact={activeArtifact} />}
     </div>
   );
+}
+
+/**
+ * "Live" pulse — like Quick's live=True panel. Shows for ~1.5s after every
+ * applyPatch/updateState burst, then fades. Tells the user "this artifact is
+ * being actively rewritten by the model right now" without flooding the UI.
+ */
+function LiveIndicator({ artifact }: { artifact: Artifact }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 500);
+    return () => clearInterval(t);
+  }, []);
+  const ageMs = now - (artifact.updatedAt || 0);
+  if (artifact.internalComponent) return null;
+  if (ageMs < 1500) {
+    return (
+      <span
+        className="canvas-live-indicator"
+        title="Artifact updated just now"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '4px',
+          fontSize: '11px',
+          color: 'var(--accent)',
+          marginLeft: '6px',
+          flexShrink: 0,
+        }}
+      >
+        <span
+          style={{
+            width: '6px',
+            height: '6px',
+            borderRadius: '50%',
+            background: 'var(--accent)',
+            animation: 'pulse 1.2s ease-in-out infinite',
+          }}
+        />
+        Live
+      </span>
+    );
+  }
+  return null;
 }
 
 function SyncIndicator() {
