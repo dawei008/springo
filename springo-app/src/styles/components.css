@@ -13016,3 +13016,182 @@
     cursor: not-allowed;
     filter: none;
 }
+
+/* ─── Knowledge Base panel ─── */
+
+.kb-panel {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    background: var(--bg-primary);
+}
+
+.kb-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    font-size: var(--font-size-sm);
+}
+
+.kb-status {
+    color: var(--text-secondary);
+    flex: 1;
+    min-width: 0;
+}
+
+.kb-status strong {
+    color: var(--text-primary);
+}
+
+.kb-warn {
+    color: var(--warning-text, #b45309);
+}
+
+.kb-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.kb-view-toggle {
+    display: inline-flex;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+
+.kb-view-toggle button {
+    padding: 4px 10px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
+.kb-view-toggle button.active {
+    background: var(--accent);
+    color: var(--text-inverse);
+}
+
+.kb-body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+.kb-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    padding: 32px;
+    color: var(--text-primary);
+}
+
+.kb-graph-svg {
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+.kb-list {
+    height: 100%;
+    overflow: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.kb-list-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: background var(--transition-fast);
+}
+
+.kb-list-item:hover {
+    background: var(--bg-hover);
+}
+
+.kb-list-item-title {
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.kb-list-item-meta {
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.kb-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 9px;
+    text-transform: uppercase;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    letter-spacing: 0.4px;
+}
+
+.kb-badge-warn {
+    background: var(--warning-bg, rgba(245, 158, 11, 0.15));
+    color: var(--warning-text, #b45309);
+}
+
+.kb-reader {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-primary);
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+}
+
+.kb-reader-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.kb-reader-title {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.kb-reader-slug {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-tertiary);
+}
+
+.kb-reader-body {
+    flex: 1;
+    overflow: auto;
+    padding: 24px 36px 60px;
+    max-width: 760px;
+    margin: 0 auto;
+    width: 100%;
+    line-height: 1.65;
+}

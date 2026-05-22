@@ -9,6 +9,7 @@ import { useUIStore } from '@/stores/uiStore';
 import SchedulesPanel from '@/components/RightPanel/SchedulesPanel';
 import MeetingPanel from '@/components/RightPanel/MeetingPanel';
 import RecordingCanvasPanel from '@/components/RightPanel/RecordingCanvasPanel';
+import KBGraphPanel from '@/components/RightPanel/KBGraphPanel';
 import Markdown from '@/components/common/Markdown';
 
 /**
@@ -95,6 +96,7 @@ function InternalRenderer({ component }: { component: InternalComponentId }) {
     case 'schedules': return <SchedulesPanel />;
     case 'meeting': return <MeetingPanel />;
     case 'recording': return <RecordingCanvasPanel />;
+    case 'kb-graph': return <KBGraphPanel />;
     default: return null;
   }
 }

@@ -455,7 +455,10 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
 
 // ─── Background Tasks Section ───
 
-function openInternalPanel(component: 'tasks' | 'schedules' | 'meeting' | 'recording', title: string) {
+function openInternalPanel(
+  component: 'tasks' | 'schedules' | 'meeting' | 'recording' | 'kb-graph',
+  title: string,
+) {
   useUnifiedArtifactStore.getState().openInternal(component, title);
 }
 
@@ -497,6 +500,35 @@ function ToolsSection({
             active={activeArtifact?.internalComponent === 'schedules'}
             onClick={() => openInternalPanel('schedules', 'Schedules')}
           />
+          <div className="nav-item-with-action">
+            <NavItem
+              icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>}
+              label="Knowledge"
+              active={activeArtifact?.internalComponent === 'kb-graph'}
+              onClick={() => openInternalPanel('kb-graph', 'Knowledge Base')}
+            />
+            <button
+              className="nav-item-pin-toggle"
+              title="Ingest text into KB"
+              onClick={async (e) => {
+                e.stopPropagation();
+                const title = window.prompt('KB ingest — title for this snippet:');
+                if (!title || !title.trim()) return;
+                const content = window.prompt('Paste content (will be saved to ~/.springo/kb/raw/):');
+                if (!content || !content.trim()) return;
+                const { useKBStore } = await import('@/stores/kbStore');
+                const r = await useKBStore.getState().ingestText({ title: title.trim(), content: content.trim() });
+                if (r) {
+                  useUIStore.getState().showToast(`Ingested → ${r.raw_path}`, 'success');
+                  openInternalPanel('kb-graph', 'Knowledge Base');
+                }
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          </div>
           <NavItem
             icon={<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0"/><line x1="12" y1="19" x2="12" y2="22"/></svg>}
             label="Meeting Notes"

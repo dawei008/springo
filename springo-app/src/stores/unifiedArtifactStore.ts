@@ -19,7 +19,7 @@ export type UnifiedArtifactType = 'app' | 'component' | 'document' | 'template';
  * iframe. These artifacts never round-trip to the backend; they are
  * local-only singletons keyed by stable IDs (`internal-${id}`).
  */
-export type InternalComponentId = 'tasks' | 'schedules' | 'meeting' | 'recording';
+export type InternalComponentId = 'tasks' | 'schedules' | 'meeting' | 'recording' | 'kb-graph';
 
 /**
  * Registered artifact icon names. Runtime icon renderers live in
