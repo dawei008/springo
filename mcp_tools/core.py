@@ -37,6 +37,9 @@ from .handlers import (
     lsp_document_symbols, lsp_workspace_symbol, lsp_diagnostics,
     # Memory tools
     memory_search, memory_get, memory_write,
+    # Knowledge base tools
+    kb_list, kb_search, kb_read_page, kb_write_page,
+    kb_ingest_text, kb_ingest_file, kb_ingest_pdf, kb_lint, kb_stats,
     # ACP agent tools
     acp_prompt, acp_list_agents, acp_new_session,
     # Computer use
@@ -127,6 +130,16 @@ TOOL_HANDLERS = {
     "memory_search": memory_search,
     "memory_get": memory_get,
     "memory_write": memory_write,
+    # Knowledge base tools
+    "kb_list": kb_list,
+    "kb_search": kb_search,
+    "kb_read_page": kb_read_page,
+    "kb_write_page": kb_write_page,
+    "kb_ingest_text": kb_ingest_text,
+    "kb_ingest_file": kb_ingest_file,
+    "kb_ingest_pdf": kb_ingest_pdf,
+    "kb_lint": kb_lint,
+    "kb_stats": kb_stats,
     # ACP agent tools
     "acp_prompt": acp_prompt,
     "acp_list_agents": acp_list_agents,

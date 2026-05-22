@@ -68,6 +68,9 @@ from .handlers import (
     scheduler,
     # Memory tools
     memory_search, memory_get,
+    # Knowledge base tools
+    kb_list, kb_search, kb_read_page, kb_write_page,
+    kb_ingest_text, kb_ingest_file, kb_ingest_pdf, kb_lint, kb_stats,
     # ACP agent tools
     acp_prompt, acp_list_agents, acp_new_session,
 )
@@ -106,6 +109,9 @@ __all__ = [
     "scheduler",
     # Memory tools
     "memory_search", "memory_get",
+    # Knowledge base tools
+    "kb_list", "kb_search", "kb_read_page", "kb_write_page",
+    "kb_ingest_text", "kb_ingest_file", "kb_ingest_pdf", "kb_lint", "kb_stats",
     # ACP agent tools
     "acp_prompt", "acp_list_agents", "acp_new_session",
 ]

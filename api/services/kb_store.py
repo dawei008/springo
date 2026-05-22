@@ -46,7 +46,12 @@ RAW_BUDGET_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB warn threshold
 # ---------------------------------------------------------------------------
 
 def ensure_kb() -> None:
-    """Idempotently create directory tree + seed CLAUDE.md / AGENTS.md."""
+    """Idempotently create directory tree + seed CLAUDE.md / AGENTS.md.
+
+    Also seeds the bundled `kb-ingest` skill into ~/.springo/skills/ on
+    first run so the AI knows how to add documents to the KB without the
+    user manually copying anything.
+    """
     for d in (KB_ROOT, RAW_DIR, WIKI_DIR):
         d.mkdir(parents=True, exist_ok=True)
     if not CLAUDE_FILE.exists():
@@ -62,6 +67,29 @@ def ensure_kb() -> None:
         )
     if not LOG_FILE.exists():
         LOG_FILE.write_text("# KB Event Log\n\n_Append-only. Newest first._\n\n", encoding="utf-8")
+    _seed_bundled_skills()
+
+
+def _seed_bundled_skills() -> None:
+    """Copy `api/services/seed_skills/*` into ~/.springo/skills/ if not
+    already present. Idempotent — never overwrites a user-edited skill."""
+    src_root = Path(__file__).parent / "seed_skills"
+    if not src_root.exists():
+        return
+    skills_dir = Path.home() / ".springo" / "skills"
+    skills_dir.mkdir(parents=True, exist_ok=True)
+    for skill_dir in src_root.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        dst = skills_dir / skill_dir.name
+        if dst.exists():
+            continue
+        try:
+            shutil.copytree(skill_dir, dst)
+            # Mark as bundled-but-eligible-for-reseed-on-update if missing.
+            logger.info(f"[kb] seeded bundled skill → {dst}")
+        except Exception as e:
+            logger.warning(f"[kb] failed to seed skill {skill_dir.name}: {e}")
 
 
 # ---------------------------------------------------------------------------

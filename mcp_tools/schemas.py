@@ -818,4 +818,120 @@ Use this when you need the agent to remember previous conversation turns.""",
             "required": ["action"],
         },
     },
+    # ──────── Knowledge Base Tools ────────
+    {
+        "name": "kb_list",
+        "description": """List wiki pages in the local knowledge base.
+
+The KB lives at `~/.springo/kb/` and follows the schema in CLAUDE.md
+(every page has frontmatter + summary + key claims with source pointers).
+
+scope:
+- 'all' (default) — all pages
+- 'orphans' — pages with no inbound `[[link]]`s
+- 'stale' — pages whose `last_updated` is > 180 days
+
+Returns: { ok, pages: [{slug, title, tags, claim_count, source_count, orphan, stale, last_updated}], stats }""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "scope": {"type": "string", "enum": ["all", "orphans", "stale"], "default": "all"},
+            },
+        },
+    },
+    {
+        "name": "kb_search",
+        "description": """Plain-text grep across KB wiki pages. No vector index, no chunks — exactly per the design (CLAUDE.md "Storage substrate"). Use this to find relevant pages, then call kb_read_page on the matches you want to read in full.
+
+Returns: { ok, results: [{slug, title, tags, snippet}], total }""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search text. Case-insensitive substring match."},
+                "max_results": {"type": "integer", "default": 10},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "kb_read_page",
+        "description": """Read one wiki page by slug. Always read the full page — don't try to chunk. The body is markdown with the schema's standard sections (Summary / Key claims / Open questions / See also).""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string", "description": "The page slug (kebab-case, matches filename without .md)"},
+            },
+            "required": ["slug"],
+        },
+    },
+    {
+        "name": "kb_write_page",
+        "description": """Create or replace a wiki page. The content MUST start with the schema's frontmatter (see ~/.springo/kb/CLAUDE.md). Required fields: title, slug, tags, sources, created_at, last_updated. Body sections: Summary, Key claims (each fact ends with a source pointer), Open questions, See also (with [[other-slug]] links).
+
+If you're updating an existing page, kb_read_page it first, edit the body, write the whole thing back. Don't replace `sources:` — append.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "slug": {"type": "string"},
+                "content": {"type": "string", "description": "Full markdown including frontmatter."},
+            },
+            "required": ["slug", "content"],
+        },
+    },
+    {
+        "name": "kb_ingest_text",
+        "description": """Ingest a text snippet (pasted content, extracted webpage, email body) into ~/.springo/kb/raw/ as a markdown file. Always tier=full because it's small.
+
+Returns the raw_path which you should reference in the wiki page's `sources:` list. Typical flow: kb_ingest_text → kb_write_page (with raw_path in frontmatter sources).""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short title — used in the raw filename"},
+                "content": {"type": "string", "description": "The text to ingest"},
+                "source_url": {"type": "string", "description": "Optional original URL"},
+            },
+            "required": ["title", "content"],
+        },
+    },
+    {
+        "name": "kb_ingest_file",
+        "description": """Ingest a file from disk into ~/.springo/kb/raw/. Tier is auto-decided by size:
+- < 50 MB → full (file copied)
+- 50 MB – 1 GB → returns a plan; user must confirm before commit
+- > 1 GB → REFUSED (use kb_ingest_external or extract a transcript and call kb_ingest_text)
+
+Returns { ok, committed, raw_path, sha256, size_bytes } on success, or { ok, needs_user_confirmation: true, plan } when the file is between 50 MB and 1 GB.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_path": {"type": "string", "description": "Absolute or expandable path"},
+                "slug_hint": {"type": "string", "description": "Optional kebab-case slug for the raw filename"},
+            },
+            "required": ["source_path"],
+        },
+    },
+    {
+        "name": "kb_ingest_pdf",
+        "description": """Ingest a PDF: copies the file into raw/ AND returns extracted text in one call so you can immediately distill it into wiki pages without a second tool round-trip.
+
+Returns { ok, committed, raw_path, page_count, text_excerpt, text_truncated, text_length, next_step }. The text_excerpt is capped at 50000 chars; if truncated, read the full file from raw_path with read_file. Then call kb_write_page once per topic with the raw_path as your source pointer.""",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_path": {"type": "string"},
+                "slug_hint": {"type": "string"},
+            },
+            "required": ["source_path"],
+        },
+    },
+    {
+        "name": "kb_lint",
+        "description": """Run the KB lint pass: find orphan pages (no inbound links), stale pages (last_updated > 180 days), missing tags, pages with no sources, dead source files, and schema drift. Read-only — never deletes or rewrites. Use to find what to clean up, then apply fixes via kb_write_page.""",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "kb_stats",
+        "description": """Top-level KB metrics: page_count, edge_count, orphan_count, stale_count, raw_count, raw_total_bytes. Cheap.""",
+        "input_schema": {"type": "object", "properties": {}},
+    },
 ]

@@ -93,6 +93,18 @@ from .memory_tools import (
     memory_write,
 )
 
+from .kb_tools import (
+    kb_list,
+    kb_search,
+    kb_read_page,
+    kb_write_page,
+    kb_ingest_text,
+    kb_ingest_file,
+    kb_ingest_pdf,
+    kb_lint,
+    kb_stats,
+)
+
 from .acp_tools import (
     acp_prompt,
     acp_list_agents,

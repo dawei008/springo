@@ -344,6 +344,16 @@ async def run_distill_pass(force: bool = False) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"[Distiller] GC failed: {e}")
 
+    # KB lint pass — piggyback on the daily loop. Read-only analysis; the
+    # findings get written to ~/.springo/kb/log.md so users / the AI can
+    # see what's drifting without manually clicking Lint in the panel.
+    try:
+        from . import kb_store
+        kb_summary = kb_store.lint().get("summary", {})
+        summary["kb_lint"] = kb_summary
+    except Exception as e:
+        logger.debug(f"[Distiller] KB lint skipped: {e}")
+
     summary["elapsed_sec"] = round(time.time() - started, 2)
     summary["finished_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
