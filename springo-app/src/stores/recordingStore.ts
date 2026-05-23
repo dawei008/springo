@@ -8,6 +8,10 @@ interface RecordingState {
   mediaRecorder: MediaRecorder | null;
   stream: MediaStream | null;
   chunks: Blob[];
+  /** Absolute path of the most recent successful save. Persists across reloads. */
+  lastSavedPath: string | null;
+  /** Timestamp (ms) of the most recent save. */
+  lastSavedAt: number | null;
 
   // Actions
   startRecording: () => Promise<boolean>;
@@ -16,9 +20,35 @@ interface RecordingState {
   resumeRecording: () => void;
   tick: () => void;
   reset: () => void;
+  clearLastSaved: () => void;
 }
 
-export const useRecordingStore = create<RecordingState>()((set, get) => ({
+const LAST_SAVED_KEY = 'springo-recording-last-saved';
+
+function readLastSaved(): { path: string | null; at: number | null } {
+  try {
+    const raw = localStorage.getItem(LAST_SAVED_KEY);
+    if (!raw) return { path: null, at: null };
+    const parsed = JSON.parse(raw);
+    return { path: parsed.path ?? null, at: parsed.at ?? null };
+  } catch {
+    return { path: null, at: null };
+  }
+}
+
+function writeLastSaved(path: string | null, at: number | null): void {
+  try {
+    if (path) {
+      localStorage.setItem(LAST_SAVED_KEY, JSON.stringify({ path, at }));
+    } else {
+      localStorage.removeItem(LAST_SAVED_KEY);
+    }
+  } catch { /* ignore quota */ }
+}
+
+export const useRecordingStore = create<RecordingState>()((set, get) => {
+  const initial = readLastSaved();
+  return {
   isRecording: false,
   isPaused: false,
   startTime: null,
@@ -26,6 +56,8 @@ export const useRecordingStore = create<RecordingState>()((set, get) => ({
   mediaRecorder: null,
   stream: null,
   chunks: [],
+  lastSavedPath: initial.path,
+  lastSavedAt: initial.at,
 
   startRecording: async () => {
     try {
@@ -112,6 +144,11 @@ export const useRecordingStore = create<RecordingState>()((set, get) => ({
           console.error('[Recording] Failed to save:', err);
         }
 
+        const now = Date.now();
+        if (savedPath) {
+          // Persist so the panel can show "open last recording" across reloads.
+          writeLastSaved(savedPath, now);
+        }
         set({
           isRecording: false,
           isPaused: false,
@@ -120,6 +157,8 @@ export const useRecordingStore = create<RecordingState>()((set, get) => ({
           mediaRecorder: null,
           stream: null,
           chunks: [],
+          lastSavedPath: savedPath ?? get().lastSavedPath,
+          lastSavedAt: savedPath ? now : get().lastSavedAt,
         });
 
         resolve(savedPath);
@@ -168,4 +207,10 @@ export const useRecordingStore = create<RecordingState>()((set, get) => ({
       chunks: [],
     });
   },
-}));
+
+  clearLastSaved: () => {
+    writeLastSaved(null, null);
+    set({ lastSavedPath: null, lastSavedAt: null });
+  },
+  };
+});

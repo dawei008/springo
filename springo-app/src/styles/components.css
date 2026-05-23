@@ -13252,3 +13252,77 @@
     background: var(--bg-tertiary);
     font-family: var(--font-mono, monospace);
 }
+
+/* ─── Last-saved recording row ─── */
+.recording-last-saved {
+    margin-top: 18px;
+    padding: 10px 14px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    max-width: 360px;
+    width: 100%;
+    text-align: left;
+}
+
+.recording-last-saved-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-tertiary);
+    margin-bottom: 4px;
+}
+
+.recording-last-saved-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.recording-last-saved-link {
+    flex: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 0;
+    border: none;
+    background: transparent;
+    color: var(--accent);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+    min-width: 0;
+}
+
+.recording-last-saved-link:hover {
+    text-decoration: underline;
+}
+
+.recording-last-saved-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--font-mono, monospace);
+}
+
+.recording-last-saved-clear {
+    flex-shrink: 0;
+    padding: 0 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.recording-last-saved-clear:hover {
+    color: var(--text-primary);
+}
+
+.recording-last-saved-path {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

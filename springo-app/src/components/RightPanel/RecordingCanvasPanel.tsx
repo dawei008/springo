@@ -95,6 +95,7 @@ export default function RecordingCanvasPanel() {
           >
             Replay &amp; Record
           </button>
+          <LastSavedLink />
         </div>
         <RecordingSettings />
       </div>
@@ -232,9 +233,20 @@ function RecordingSettings() {
                   void save({ outputDir: e.target.value });
                 }}
               />
-              <button onClick={browseDir} className="browse-btn" title="Browse…">
+              <button onClick={browseDir} className="browse-btn" title="Browse for a folder…">
                 <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
                   <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                </svg>
+              </button>
+              <button
+                onClick={() => window.electronAPI?.openFolder?.(recordingDir)}
+                className="browse-btn"
+                title="Open this folder in Finder"
+              >
+                <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                  <polyline points="15 3 21 3 21 9" />
+                  <line x1="10" y1="14" x2="21" y2="3" />
                 </svg>
               </button>
             </div>
@@ -297,6 +309,63 @@ function RecordingSettings() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Last-saved recording surfacing ─────────────────────────────────────
+//
+// After stopRecording resolves, we persist the saved file path to
+// localStorage so this row keeps showing across reloads. Click the path
+// to open the file's parent folder in Finder; ✕ to forget the entry
+// (file stays on disk, just no longer surfaced).
+
+function LastSavedLink() {
+  const lastSavedPath = useRecordingStore((s) => s.lastSavedPath);
+  const lastSavedAt = useRecordingStore((s) => s.lastSavedAt);
+  const clearLastSaved = useRecordingStore((s) => s.clearLastSaved);
+
+  if (!lastSavedPath) return null;
+
+  const fileName = lastSavedPath.split('/').pop() || lastSavedPath;
+  const parentDir = lastSavedPath.replace(/\/[^/]+$/, '');
+  const ageLabel = (() => {
+    if (!lastSavedAt) return '';
+    const sec = Math.floor((Date.now() - lastSavedAt) / 1000);
+    if (sec < 60) return 'just now';
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    return `${day}d ago`;
+  })();
+
+  return (
+    <div className="recording-last-saved">
+      <div className="recording-last-saved-label">Last saved {ageLabel}</div>
+      <div className="recording-last-saved-row">
+        <button
+          className="recording-last-saved-link"
+          onClick={() => window.electronAPI?.openFolder?.(parentDir)}
+          title={`Reveal ${lastSavedPath} in Finder`}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+            <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+          </svg>
+          <span className="recording-last-saved-name">{fileName}</span>
+        </button>
+        <button
+          className="recording-last-saved-clear"
+          onClick={clearLastSaved}
+          title="Forget this entry (file stays on disk)"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="recording-last-saved-path" title={lastSavedPath}>
+        {parentDir}
+      </div>
     </div>
   );
 }
