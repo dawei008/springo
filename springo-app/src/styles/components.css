@@ -8694,6 +8694,13 @@
     color: var(--text-primary);
     z-index: 10;
     flex-shrink: 0;
+    /* Stay visible while the chat list below scrolls under us. Without
+       this the bar (and its Stop button) scroll out of view in long
+       sessions and the user can't bail. */
+    position: sticky;
+    top: 0;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
 }
 
 .replay-icon {

@@ -13,6 +13,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { useToolsStore } from '@/stores/toolsStore'
 import { useScheduleStore } from '@/stores/scheduleStore'
 import { useRecordingStore } from '@/stores/recordingStore'
+import { useReplayStore } from '@/stores/replayStore'
 import Toast from '@/components/common/Toast'
 import { startCanvasBridgeClient, stopCanvasBridgeClient } from '@/services/canvasBridge'
 
@@ -88,7 +89,6 @@ export default function App() {
         const recStore = useRecordingStore.getState()
         if (recStore.isRecording) {
           // Stop: also stop replay if active
-          const { useReplayStore } = await import('@/stores/replayStore')
           if (useReplayStore.getState().isReplaying) {
             useReplayStore.getState().stopReplay()
           }
@@ -106,7 +106,6 @@ export default function App() {
           if (replayMode && currentSessionId) {
             const ok = await recStore.startRecording()
             if (!ok) { useUIStore.getState().showToast('Failed to start recording', 'error'); return }
-            const { useReplayStore } = await import('@/stores/replayStore')
             const replaySessionId = useSessionStore.getState().createSession('Replay', 'recording')
             useReplayStore.getState().startReplay(currentSessionId, replaySessionId)
           } else {
@@ -163,6 +162,13 @@ export default function App() {
         // Close image preview
         if (ui.imagePreview) {
           ui.setImagePreview(null)
+          return
+        }
+
+        // Stop in-progress session replay. stopReplay also tears down
+        // the companion screen recording started by Replay & Record.
+        if (useReplayStore.getState().isReplaying) {
+          useReplayStore.getState().stopReplay()
           return
         }
 
