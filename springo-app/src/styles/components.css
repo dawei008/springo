@@ -2775,25 +2775,114 @@
         }
 
         /* Image Preview Modal */
-        .image-preview-modal {
+        /* Fullscreen image preview modal.
+           The component renders a fixed full-viewport backdrop with an
+           absolutely-centered <img>. The image's natural size flows
+           through CSS transform (set inline by the React component) so we
+           can scale + pan around the cursor. The backdrop clicks close;
+           the stage clicks don't. */
+        .image-preview-backdrop {
             position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.9);
+            inset: 0;
+            background: rgba(0, 0, 0, 0.92);
+            z-index: 10000;
+            overflow: hidden;
             display: flex;
             align-items: center;
             justify-content: center;
-            z-index: 10000;
             cursor: zoom-out;
         }
 
-        .image-preview-modal img {
-            max-width: 95%;
-            max-height: 95%;
-            object-fit: contain;
-            border-radius: 4px;
+        .image-preview-stage {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .image-preview-img {
+            max-width: none;
+            max-height: none;
+            transform-origin: center center;
+            transition: transform 0.05s linear;
+            will-change: transform;
+            display: block;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-user-drag: none;
+        }
+
+        .image-preview-toolbar {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 6px;
+            background: rgba(20, 20, 20, 0.85);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 999px;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            z-index: 10001;
+        }
+
+        .image-preview-toolbar button {
+            min-width: 36px;
+            height: 32px;
+            padding: 0 12px;
+            border: none;
+            border-radius: 999px;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.85);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+
+        .image-preview-toolbar button:hover {
+            background: rgba(255, 255, 255, 0.12);
+            color: white;
+        }
+
+        .image-preview-zoom-label {
+            min-width: 56px;
+            text-align: center;
+            font-family: var(--font-mono, monospace);
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .image-preview-close {
+            position: fixed;
+            top: 16px;
+            right: 16px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: none;
+            border-radius: 999px;
+            background: rgba(20, 20, 20, 0.7);
+            color: rgba(255, 255, 255, 0.85);
+            cursor: pointer;
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 10001;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .image-preview-close:hover {
+            background: rgba(20, 20, 20, 0.9);
+            color: white;
         }
 
         /* Welcome Screen */
