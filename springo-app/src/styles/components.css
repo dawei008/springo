@@ -13195,3 +13195,60 @@
     width: 100%;
     line-height: 1.65;
 }
+
+/* ─── Recording settings (collapsed within RecordingCanvasPanel) ─── */
+.recording-settings {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
+    margin-top: 16px;
+    padding-top: 12px;
+    overflow-y: auto;
+    max-height: 50vh;
+}
+
+.recording-settings-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    padding: 4px 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.recording-settings-toggle:hover {
+    color: var(--text-primary);
+}
+
+.recording-settings-body {
+    padding-top: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.recording-settings-body .setting-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.recording-settings-body label:not(.setting-checkbox-label) {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.recording-settings-kbd {
+    padding: 1px 5px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    font-size: 11px;
+    background: var(--bg-tertiary);
+    font-family: var(--font-mono, monospace);
+}

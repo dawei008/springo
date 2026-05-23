@@ -35,12 +35,8 @@ export default function SettingsModal() {
     }
   }, [defaultWorkingFolder])
 
-  // Recording settings (General tab)
-  const [recordTarget, setRecordTarget] = useState<'window' | 'screen' | 'screen-ext'>('window')
-  const [recordingDir, setRecordingDir] = useState('~/.springo/recordings')
-  const [replayMode, setReplayMode] = useState(false)
-  const [replaySpeed, setReplaySpeed] = useState(1)
-  const [typingAnimation, setTypingAnimation] = useState(true)
+  // Recording settings have moved into the Screen Recording canvas panel
+  // (RecordingCanvasPanel). Configuration lives next to the feature now.
 
   // ACP Agents state (General tab)
   const [acpAgents, setAcpAgents] = useState<Array<{
@@ -150,7 +146,6 @@ export default function SettingsModal() {
     loadSkills()
     loadMcpServers()
     loadAcpAgents()
-    loadRecordingSettings()
   }, [])
 
   // Clamp maxTokens when model changes
@@ -492,38 +487,10 @@ export default function SettingsModal() {
     } catch { /* ignore */ }
   }
 
-  // --- General tab: Recording Settings ---
-  async function loadRecordingSettings() {
-    if (window.electronAPI?.cache) {
-      try {
-        const raw = await window.electronAPI.cache.get('recording') as Record<string, unknown> | null
-        if (raw) {
-          setRecordTarget((raw.recordTarget as 'window' | 'screen' | 'screen-ext') || 'window')
-          setRecordingDir((raw.outputDir as string) || '~/.springo/recordings')
-          setReplayMode(raw.replayMode === true)
-          setReplaySpeed((raw.replaySpeed as number) || 1)
-          setTypingAnimation(raw.typingAnimation !== false)
-        }
-      } catch { /* ignore */ }
-    }
-  }
+  // Recording settings load/save/browse helpers moved into
+  // RecordingCanvasPanel.RecordingSettings — they live next to the
+  // feature now.
 
-  async function saveRecordingSettings(partial: Record<string, unknown>) {
-    if (window.electronAPI?.cache) {
-      const raw = (await window.electronAPI.cache.get('recording') as Record<string, unknown>) || {}
-      await window.electronAPI.cache.set('recording', { ...raw, ...partial })
-    }
-  }
-
-  async function browseRecordingDir() {
-    if (window.electronAPI?.recording) {
-      const dir = await window.electronAPI.recording.selectDir()
-      if (dir) {
-        setRecordingDir(dir)
-        saveRecordingSettings({ outputDir: dir })
-      }
-    }
-  }
 
   // --- General tab: ACP Agents ---
   async function loadAcpAgents() {
@@ -900,110 +867,6 @@ export default function SettingsModal() {
                 </div>
               )}
               <div className="hint">Config file: <code>~/.springo/acp_agents.json</code></div>
-
-              <div className="setting-divider"></div>
-
-              {/* ---- Screen Recording ---- */}
-              <div className="settings-section-header">
-                <h3>Screen Recording</h3>
-              </div>
-              <div className="hint" style={{ marginBottom: '10px' }}>
-                Record the Springo window as video.
-                Use <kbd style={{ padding: '1px 5px', borderRadius: '3px', border: '1px solid var(--border)', fontSize: '11px', background: 'var(--bg-tertiary)' }}>Cmd+Shift+R</kbd> or the record button in the title bar.
-              </div>
-
-              <div className="setting-group">
-                <label>Record Target</label>
-                <select
-                  value={recordTarget}
-                  onChange={(e) => {
-                    const v = e.target.value as 'window' | 'screen' | 'screen-ext'
-                    setRecordTarget(v)
-                    saveRecordingSettings({ recordTarget: v })
-                  }}
-                >
-                  <option value="window">Springo Window</option>
-                  <option value="screen">Current Screen</option>
-                  <option value="screen-ext">Extended Screen</option>
-                </select>
-              </div>
-
-              <div className="setting-group">
-                <label>Output Directory</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <input
-                    type="text"
-                    placeholder="~/.springo/recordings"
-                    style={{ flex: 1 }}
-                    value={recordingDir}
-                    onChange={(e) => {
-                      setRecordingDir(e.target.value)
-                      saveRecordingSettings({ outputDir: e.target.value })
-                    }}
-                  />
-                  <button onClick={browseRecordingDir} className="browse-btn">
-                    <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                      <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                    </svg>
-                  </button>
-                </div>
-                <div className="hint">Where video files are saved</div>
-              </div>
-
-              <div className="setting-group" style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                <label className="setting-checkbox-label">
-                  <input
-                    type="checkbox"
-                    checked={replayMode}
-                    onChange={(e) => {
-                      setReplayMode(e.target.checked)
-                      saveRecordingSettings({ replayMode: e.target.checked })
-                    }}
-                  />
-                  <span>Replay Mode</span>
-                </label>
-                <div className="hint" style={{ marginTop: '-6px' }}>
-                  When enabled, starting a recording will replay the current session's messages with typing animation, then auto-stop when complete.
-                </div>
-              </div>
-
-              {replayMode && (
-                <>
-                  <div className="setting-group">
-                    <label>Replay Speed</label>
-                    <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-                      <input
-                        type="range"
-                        min={1}
-                        max={8}
-                        step={1}
-                        value={replaySpeed}
-                        onChange={(e) => {
-                          const v = Number(e.target.value)
-                          setReplaySpeed(v)
-                          saveRecordingSettings({ replaySpeed: v })
-                        }}
-                        style={{ flex: 1 }}
-                      />
-                      <span style={{ minWidth: '30px', textAlign: 'right', fontSize: '13px', fontFamily: 'var(--font-mono, monospace)' }}>{replaySpeed}x</span>
-                    </div>
-                  </div>
-                  <div className="setting-group">
-                    <label className="setting-checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={typingAnimation}
-                        onChange={(e) => {
-                          setTypingAnimation(e.target.checked)
-                          saveRecordingSettings({ typingAnimation: e.target.checked })
-                        }}
-                      />
-                      <span>Typing Animation</span>
-                      <span className="hint" style={{ marginLeft: '4px' }}> — AI replies appear character-by-character</span>
-                    </label>
-                  </div>
-                </>
-              )}
             </div>
 
             {/* ====== Models Tab ====== */}
