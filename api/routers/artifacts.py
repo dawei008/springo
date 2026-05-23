@@ -4,9 +4,12 @@ Artifacts Router — REST API over filesystem-backed Canvas artifacts.
 from __future__ import annotations
 
 import logging
+import mimetypes
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from ..services import artifact_store
@@ -110,6 +113,31 @@ async def read_file(artifact_id: str, path: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/artifacts/{artifact_id}/raw/{path:path}")
+async def read_file_raw(artifact_id: str, path: str):
+    """
+    Stream a file's raw bytes back. Used by canvas viewers that need binary
+    content (PDFs, images embedded as <img>, etc.) — the JSON read_file
+    endpoint can't carry binary because it does ``read_text("utf-8")``.
+
+    Path resolution and traversal guards mirror artifact_store.read_file.
+    """
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="Unsafe path")
+    try:
+        artifact_store._read_meta(artifact_id)  # ensure artifact exists
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    files_root = (artifact_store._artifact_dir(artifact_id) / "files").resolve()
+    target = (files_root / path).resolve()
+    if files_root not in target.parents and target != files_root:
+        raise HTTPException(status_code=400, detail="Path escapes artifact dir")
+    if not target.exists() or not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    media_type, _ = mimetypes.guess_type(str(target))
+    return FileResponse(str(target), media_type=media_type or "application/octet-stream")
 
 
 @router.patch("/artifacts/{artifact_id}")

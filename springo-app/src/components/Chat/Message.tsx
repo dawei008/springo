@@ -628,6 +628,15 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
       // but would still round-trip to the backend uselessly.
       if (!uStore.artifacts[parsed.id]) return;
       uStore.deleteArtifact(parsed.id);
+      return;
+    }
+
+    if (parsed.op === 'finalize') {
+      // Model is announcing "I'm done editing this artifact". Flip it out
+      // of live mode so the canvas badge clears immediately instead of
+      // waiting for the 5s auto-finalize timer.
+      if (!uStore.artifacts[parsed.id]) return;
+      uStore.finalizeArtifact(parsed.id);
     }
   }, [message.role, rawText, message.timestamp]);
 

@@ -3,7 +3,6 @@ import Header from './Header';
 import ChatArea from '@/components/Chat/ChatArea';
 import MessageInput from '@/components/Chat/MessageInput';
 import SkillProposalBanner from '@/components/Chat/SkillProposalBanner';
-import PlanPanel from '@/components/PlanPanel/PlanPanel';
 import { useUIStore } from '@/stores/uiStore';
 import { useSettingsStore } from '@/stores/settingsStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -465,6 +464,22 @@ export default function MainContent() {
 
   const hasActiveArtifact = useUnifiedArtifactStore((s) => s.activeArtifactId !== null);
 
+  // Auto-open the plan as a Canvas internal artifact whenever the plan
+  // store has content. Replaces the standalone <PlanPanel /> mount; now
+  // plans get session tabs, fullscreen, the "Building…" badge, etc.
+  // We only re-open if the user isn't already looking at it (don't yank
+  // them away from another tab).
+  useEffect(() => {
+    const unsub = usePlanStore.subscribe((state, prev) => {
+      const had = !!prev?.currentPlan;
+      const has = !!state.currentPlan;
+      if (!had && has) {
+        useUnifiedArtifactStore.getState().openInternal('plan', 'Plan');
+      }
+    });
+    return unsub;
+  }, []);
+
   return (
     <div className="main-content">
       <Header />
@@ -476,7 +491,11 @@ export default function MainContent() {
           <StatusBar />
         </div>
         {hasActiveArtifact && <Canvas />}
-        <PlanPanel />
+        {/* PlanPanel is now rendered inside Canvas as the 'plan' internal
+            artifact (see Canvas.tsx InternalRenderer). The standalone mount
+            here would double-render whenever a plan was active and an
+            artifact was open. Opening is driven by usePlanStore subscribers
+            below. */}
       </div>
     </div>
   );

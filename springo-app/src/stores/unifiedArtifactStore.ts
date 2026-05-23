@@ -19,7 +19,7 @@ export type UnifiedArtifactType = 'app' | 'component' | 'document' | 'template';
  * iframe. These artifacts never round-trip to the backend; they are
  * local-only singletons keyed by stable IDs (`internal-${id}`).
  */
-export type InternalComponentId = 'tasks' | 'schedules' | 'meeting' | 'recording' | 'kb-graph';
+export type InternalComponentId = 'tasks' | 'schedules' | 'meeting' | 'recording' | 'kb-graph' | 'plan';
 
 /**
  * Registered artifact icon names. Runtime icon renderers live in
@@ -79,6 +79,17 @@ export interface Artifact {
    * and are filtered out of the Apps sidebar section.
    */
   internalComponent?: InternalComponentId;
+  /**
+   * Whether the artifact is currently being actively built by the model.
+   * Inspired by Quick's `live=True/False` pattern. While `live` is true:
+   *   - the canvas header shows a "Building…" badge
+   *   - patches arriving in quick succession are expected
+   *   - the user is informed not to edit (but we don't lock the iframe;
+   *     the AI is the author and can clobber)
+   * Auto-flips to false 5 seconds after the last patch lands, or on
+   * explicit op="finalize". `createArtifact` defaults to true.
+   */
+  live?: boolean;
 }
 
 export interface PinnedElement {
@@ -143,6 +154,12 @@ export interface UnifiedArtifactState {
     fileType: string;
   }>) => void;
   updateFiles: (id: string, files: ArtifactFile[]) => void;
+  /**
+   * Mark an artifact as no longer being actively built. Called automatically
+   * 5s after the last patch settles, OR explicitly when the model emits
+   * <springo-artifact op="finalize" id="...">.
+   */
+  finalizeArtifact: (id: string) => void;
 
   // State updates
   updateState: (id: string, state: Record<string, unknown>) => void;
@@ -253,6 +270,26 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
 // (any artifact that calls setState on every keystroke) coalesce into one
 // round-trip per ~500ms.
 const _stateTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+
+// Per-artifact "auto-finalize" timer. While the model is mid-build, every
+// applyPatch call resets this timer; if no patch lands within FINALIZE_MS,
+// the artifact transitions to live=false. Inspired by Quick's `live=False`
+// hand-off semantic — the user knows it's safe to read/edit when the badge
+// disappears, instead of guessing whether more patches are coming.
+const _finalizeTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+const FINALIZE_MS = 5000;
+
+function _scheduleAutoFinalize(id: string): void {
+  if (_finalizeTimers[id]) clearTimeout(_finalizeTimers[id]);
+  _finalizeTimers[id] = setTimeout(() => {
+    delete _finalizeTimers[id];
+    const cur = useUnifiedArtifactStore.getState().artifacts[id];
+    if (!cur || cur.live === false) return;
+    useUnifiedArtifactStore.setState((s) => ({
+      artifacts: { ...s.artifacts, [id]: { ...cur, live: false } },
+    }));
+  }, FINALIZE_MS);
+}
 function flushState(id: string, state: Record<string, unknown>) {
   if (_stateTimers[id]) clearTimeout(_stateTimers[id]);
   _stateTimers[id] = setTimeout(() => {
@@ -396,6 +433,10 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       createdAt: now,
       updatedAt: now,
       pinned: false,
+      // Born "live" — the model just created me and may immediately patch
+      // me. The applyPatch path resets the auto-finalize timer; if no
+      // patch arrives within 5s the artifact transitions to live=false.
+      live: true,
     };
 
     set((s) => ({
@@ -403,6 +444,7 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       activeArtifactId: id,
       sessionArtifactIds: [...s.sessionArtifactIds, id],
     }));
+    _scheduleAutoFinalize(id);
 
     // Server create, then refresh to pick up canonical meta (real version id
     // etc). If the backend is offline we keep retrying so the artifact is not
@@ -563,9 +605,13 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
           versions,
           activeVersionIndex: versions.length - 1,
           updatedAt: now,
+          // A patch arrived → re-enter "live" mode and reset the
+          // auto-finalize timer. Quick-style live preview semantics.
+          live: true,
         },
       },
     }));
+    _scheduleAutoFinalize(id);
 
     // Server patch; refresh afterward to pick up canonical version id. The
     // queue retries if the backend is offline, so the local optimistic state
@@ -601,6 +647,18 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
     }));
     // updateFiles is intentionally local-only (used by selectVersion);
     // the server already has the authoritative file tree.
+  },
+
+  finalizeArtifact: (id) => {
+    if (_finalizeTimers[id]) {
+      clearTimeout(_finalizeTimers[id]);
+      delete _finalizeTimers[id];
+    }
+    const cur = get().artifacts[id];
+    if (!cur || cur.live === false) return;
+    set((s) => ({
+      artifacts: { ...s.artifacts, [id]: { ...cur, live: false } },
+    }));
   },
 
   // ---- State updates -------------------------------------------------------

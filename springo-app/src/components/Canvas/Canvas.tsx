@@ -10,6 +10,7 @@ import SchedulesPanel from '@/components/RightPanel/SchedulesPanel';
 import MeetingPanel from '@/components/RightPanel/MeetingPanel';
 import RecordingCanvasPanel from '@/components/RightPanel/RecordingCanvasPanel';
 import KBGraphPanel from '@/components/RightPanel/KBGraphPanel';
+import PlanPanel from '@/components/PlanPanel/PlanPanel';
 import Markdown from '@/components/common/Markdown';
 
 /**
@@ -47,6 +48,72 @@ function isDocumentArtifact(a: Artifact): boolean {
   const hasMd = a.files.some((f) => /\.(md|markdown|mdx)$/i.test(f.path));
   const hasCode = a.files.some((f) => f.type === 'jsx' || (f.type === 'html' && /\.(html?)$/i.test(f.path)));
   return hasMd && !hasCode;
+}
+
+/**
+ * Detect single-file artifacts that have a better viewer than the generic
+ * iframe. Inspired by Quick's `doc_type` routing — they avoid the iframe
+ * for known formats and ship a native viewer per type. We piggyback on the
+ * existing iframe path for everything else, so adding a new type is
+ * additive and never breaks unrecognized content.
+ */
+type SpecialDocKind = 'svg' | 'json' | 'pdf';
+
+function detectSpecialKind(a: Artifact): { kind: SpecialDocKind; content: string; path: string } | null {
+  // Only single-file artifacts of these types get the native viewer.
+  // Multi-file projects always go through the iframe (might reference other
+  // files via relative paths).
+  if (a.files.length !== 1) return null;
+  const f = a.files[0];
+  if (/\.svg$/i.test(f.path)) return { kind: 'svg', content: f.content, path: f.path };
+  if (/\.json$/i.test(f.path) || f.type === 'json') return { kind: 'json', content: f.content, path: f.path };
+  if (/\.pdf$/i.test(f.path)) return { kind: 'pdf', content: f.content, path: f.path };
+  return null;
+}
+
+function SvgRenderer({ content, path }: { content: string; path: string }) {
+  // Serve the raw SVG inside an <object> so it executes its own scripts in a
+  // sandboxed context AND we can crisp-zoom without rasterizing. Using
+  // dangerouslySetInnerHTML on a wrapper would also work for static SVGs but
+  // risks XSS via <script> in user content; <object> respects the SVG's own
+  // sandbox semantics.
+  const url = `data:image/svg+xml;utf8,${encodeURIComponent(content)}`;
+  return (
+    <div className="canvas-svg-stage">
+      <img className="canvas-svg-img" src={url} alt={path} />
+    </div>
+  );
+}
+
+function JsonRenderer({ content, path }: { content: string; path: string }) {
+  let pretty = content;
+  let parseError: string | null = null;
+  try {
+    pretty = JSON.stringify(JSON.parse(content), null, 2);
+  } catch (e) {
+    parseError = (e as Error).message;
+  }
+  return (
+    <div className="canvas-json-stage">
+      <div className="canvas-json-header">
+        <span className="canvas-json-path">{path}</span>
+        {parseError && <span className="canvas-json-err">⚠ {parseError}</span>}
+      </div>
+      <pre className="canvas-json-body">{pretty}</pre>
+    </div>
+  );
+}
+
+function PdfRenderer({ artifactId, path }: { artifactId: string; path: string }) {
+  // Backend's /raw/{path} endpoint streams the file with the right
+  // mimetype, so Electron's bundled PDF viewer takes over. The JSON
+  // /files/{path} endpoint can't carry binary content (it reads as utf-8).
+  const url = `http://127.0.0.1:8081/v1/artifacts/${encodeURIComponent(artifactId)}/raw/${path.split('/').map(encodeURIComponent).join('/')}`;
+  return (
+    <div className="canvas-pdf-stage">
+      <embed src={url} type="application/pdf" className="canvas-pdf-embed" />
+    </div>
+  );
 }
 
 function TasksCanvasPanel() {
@@ -97,6 +164,7 @@ function InternalRenderer({ component }: { component: InternalComponentId }) {
     case 'meeting': return <MeetingPanel />;
     case 'recording': return <RecordingCanvasPanel />;
     case 'kb-graph': return <KBGraphPanel />;
+    case 'plan': return <PlanPanel />;
     default: return null;
   }
 }
@@ -491,6 +559,7 @@ export default function Canvas() {
 
   const isInternal = !!activeArtifact.internalComponent;
   const isDocument = !isInternal && isDocumentArtifact(activeArtifact);
+  const specialKind = !isInternal && !isDocument ? detectSpecialKind(activeArtifact) : null;
 
   return (
     <div className={`canvas-panel${isFullscreen ? ' fullscreen' : ''}`} ref={canvasRef}>
@@ -517,6 +586,12 @@ export default function Canvas() {
           <InternalRenderer component={activeArtifact.internalComponent!} />
         ) : isDocument ? (
           <DocumentRenderer artifact={activeArtifact} />
+        ) : specialKind?.kind === 'svg' ? (
+          <SvgRenderer content={specialKind.content} path={specialKind.path} />
+        ) : specialKind?.kind === 'json' ? (
+          <JsonRenderer content={specialKind.content} path={specialKind.path} />
+        ) : specialKind?.kind === 'pdf' ? (
+          <PdfRenderer artifactId={activeArtifactId} path={specialKind.path} />
         ) : (
           <ArtifactIframe
             artifactId={activeArtifactId}
@@ -531,47 +606,45 @@ export default function Canvas() {
 }
 
 /**
- * "Live" pulse — like Quick's live=True panel. Shows for ~1.5s after every
- * applyPatch/updateState burst, then fades. Tells the user "this artifact is
- * being actively rewritten by the model right now" without flooding the UI.
+ * Building / Ready badge — driven by the artifact's explicit `live` flag.
+ *
+ * Quick uses live=True/False as a contract: live means "AI may keep
+ * patching; user shouldn't edit". We render a dot+label that stays as long
+ * as live is true, and clears when:
+ *  - 5 seconds pass without a new patch (auto-finalize, set in store)
+ *  - model emits <springo-artifact op="finalize" id=...> (immediate)
+ *
+ * No more time-window guessing.
  */
 function LiveIndicator({ artifact }: { artifact: Artifact }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 500);
-    return () => clearInterval(t);
-  }, []);
-  const ageMs = now - (artifact.updatedAt || 0);
   if (artifact.internalComponent) return null;
-  if (ageMs < 1500) {
-    return (
+  if (!artifact.live) return null;
+  return (
+    <span
+      className="canvas-live-indicator"
+      title="The model is actively building this artifact. It'll clear when 5 seconds pass with no patches, or the model marks it finalized."
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '4px',
+        fontSize: '11px',
+        color: 'var(--accent)',
+        marginLeft: '6px',
+        flexShrink: 0,
+      }}
+    >
       <span
-        className="canvas-live-indicator"
-        title="Artifact updated just now"
         style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: '4px',
-          fontSize: '11px',
-          color: 'var(--accent)',
-          marginLeft: '6px',
-          flexShrink: 0,
+          width: '6px',
+          height: '6px',
+          borderRadius: '50%',
+          background: 'var(--accent)',
+          animation: 'pulse 1.2s ease-in-out infinite',
         }}
-      >
-        <span
-          style={{
-            width: '6px',
-            height: '6px',
-            borderRadius: '50%',
-            background: 'var(--accent)',
-            animation: 'pulse 1.2s ease-in-out infinite',
-          }}
-        />
-        Live
-      </span>
-    );
-  }
-  return null;
+      />
+      Building…
+    </span>
+  );
 }
 
 function SyncIndicator() {
