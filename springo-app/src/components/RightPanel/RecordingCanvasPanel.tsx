@@ -50,7 +50,28 @@ export default function RecordingCanvasPanel() {
     }
   };
 
+  // If the user has Replay Mode checked in the recording settings, the
+  // plain "Start Recording" button should honor it: behave like
+  // Replay & Record. Otherwise it's a plain screen capture.
+  // Without this, ticking the checkbox visibly does nothing — which is
+  // exactly the "I checked replay but it just recorded" bug.
   const handleStart = async () => {
+    let replayMode = false;
+    try {
+      const raw = (await window.electronAPI?.cache?.get('recording')) as Record<string, unknown> | null;
+      replayMode = raw?.replayMode === true;
+    } catch { /* ignore */ }
+
+    if (replayMode && currentSessionId && sourceMessageCount > 0) {
+      await handleReplayAndRecord();
+      return;
+    }
+    if (replayMode && (!currentSessionId || sourceMessageCount === 0)) {
+      useUIStore.getState().showToast(
+        'Replay Mode is on but the current session has no messages — recording without replay',
+        'warning',
+      );
+    }
     await useRecordingStore.getState().startRecording();
   };
 
