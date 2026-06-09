@@ -5,8 +5,6 @@ import { useUIStore } from '@/stores/uiStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useChatStore } from '@/stores/chatStore';
 
-const BASE_URL = 'http://127.0.0.1:8081';
-
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60).toString().padStart(2, '0');
   const s = (seconds % 60).toString().padStart(2, '0');
@@ -21,7 +19,7 @@ export default function RecordingCanvasPanel() {
   const sourceMessageCount = useChatStore((s) =>
     currentSessionId ? s.runtimes[currentSessionId]?.messages.length ?? 0 : 0,
   );
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (isRecording && !isPaused) {
@@ -29,7 +27,9 @@ export default function RecordingCanvasPanel() {
         useRecordingStore.getState().tick();
       }, 1000);
     }
-    return () => clearInterval(timerRef.current);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
   }, [isRecording, isPaused]);
 
   const handlePauseResume = () => {
@@ -50,11 +50,9 @@ export default function RecordingCanvasPanel() {
     }
   };
 
-  // If the user has Replay Mode checked in the recording settings, the
-  // plain "Start Recording" button should honor it: behave like
-  // Replay & Record. Otherwise it's a plain screen capture.
-  // Without this, ticking the checkbox visibly does nothing — which is
-  // exactly the "I checked replay but it just recorded" bug.
+  // The "Start Recording" button respects the Replay Mode checkbox in
+  // recording settings: with it ticked, behave like Replay & Record;
+  // otherwise plain screen capture.
   const handleStart = async () => {
     let replayMode = false;
     try {

@@ -17,6 +17,9 @@ export const BRIDGE_MESSAGE_TYPES = {
 
 export function generateBridgeSdk(initialState: Record<string, unknown>): string {
   const serializedState = JSON.stringify(initialState).replace(/<\//g, '<\\/');
+  const STATE_UPDATE = JSON.stringify(BRIDGE_MESSAGE_TYPES.STATE_UPDATE);
+  const CHAT_ACTION = JSON.stringify(BRIDGE_MESSAGE_TYPES.CHAT_ACTION);
+  const TOOL_RESULT = JSON.stringify(BRIDGE_MESSAGE_TYPES.TOOL_RESULT);
 
   return '<script>' +
     '(function() {' +
@@ -145,22 +148,22 @@ export function generateBridgeSdk(initialState: Record<string, unknown>): string
         'var data = event.data;' +
         'if (!data || typeof data.type !== "string") { return; }' +
         // Allowlist host→iframe message types.
-        'if (data.type !== "springo:state-update" && data.type !== "springo:chat-action" && data.type !== "springo:tool-result") { return; }' +
+        'if (data.type !== ' + STATE_UPDATE + ' && data.type !== ' + CHAT_ACTION + ' && data.type !== ' + TOOL_RESULT + ') { return; }' +
 
-        'if (data.type === "springo:state-update") {' +
+        'if (data.type === ' + STATE_UPDATE + ') {' +
           'state = JSON.parse(JSON.stringify(data.payload));' +
           'for (var i = 0; i < stateUpdateHandlers.length; i++) {' +
             'try { stateUpdateHandlers[i](window.springo.getState()); } catch (e) { console.error("[springo-bridge]", e); }' +
           '}' +
         '}' +
 
-        'if (data.type === "springo:chat-action") {' +
+        'if (data.type === ' + CHAT_ACTION + ') {' +
           'for (var j = 0; j < chatActionHandlers.length; j++) {' +
             'try { chatActionHandlers[j](data.payload); } catch (e) { console.error("[springo-bridge]", e); }' +
           '}' +
         '}' +
 
-        'if (data.type === "springo:tool-result") {' +
+        'if (data.type === ' + TOOL_RESULT + ') {' +
           'var payload = data.payload;' +
           'if (payload && payload.id && pendingToolCalls[payload.id]) {' +
             'var pending = pendingToolCalls[payload.id];' +

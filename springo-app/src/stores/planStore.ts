@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import type { PlanStructure, PlanSection } from '../types';
 import { api } from '../services/api';
+import { readSseEvents } from '../utils/sseReader';
 
 export type PlanPhase = 'analysis' | 'planning' | null;
 
@@ -67,60 +68,32 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
 
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') continue;
-
-            try {
-              const event = JSON.parse(data);
-
-              if (event.type === 'plan_phase') {
-                const phase = event.phase as string;
-                const status = event.status as string;
-                if (status === 'tool_call') {
-                  set({
-                    currentPhase: phase as PlanPhase,
-                    analysisTool: { toolName: event.tool_name || '', toolCount: event.tool_count || 0 },
-                  });
-                } else if (status === 'tool_result') {
-                  // Keep phase, clear tool after brief display
-                } else {
-                  set({ currentPhase: phase as PlanPhase, analysisTool: null });
-                }
-              } else if (event.type === 'plan_generated' && event.plan) {
-                const plan = event.plan as PlanStructure;
-                set((s) => ({
-                  currentPlan: plan,
-                  activeSection: plan.sections[0]?.id || null,
-                  currentPhase: null,
-                  sessionPlanMap: sessionId
-                    ? { ...s.sessionPlanMap, [sessionId]: plan }
-                    : s.sessionPlanMap,
-                }));
-              } else if (event.type === 'error') {
-                set({ error: event.error?.message || 'Plan generation failed' });
-              }
-            } catch {
-              // skip unparseable lines
-            }
+      await readSseEvents(response, (event) => {
+        if (event.type === 'plan_phase') {
+          const phase = event.phase as string;
+          const status = event.status as string;
+          if (status === 'tool_call') {
+            set({
+              currentPhase: phase as PlanPhase,
+              analysisTool: { toolName: (event.tool_name as string) || '', toolCount: (event.tool_count as number) || 0 },
+            });
+          } else if (status !== 'tool_result') {
+            set({ currentPhase: phase as PlanPhase, analysisTool: null });
           }
+        } else if (event.type === 'plan_generated' && event.plan) {
+          const plan = event.plan as PlanStructure;
+          set((s) => ({
+            currentPlan: plan,
+            activeSection: plan.sections[0]?.id || null,
+            currentPhase: null,
+            sessionPlanMap: sessionId
+              ? { ...s.sessionPlanMap, [sessionId]: plan }
+              : s.sessionPlanMap,
+          }));
+        } else if (event.type === 'error') {
+          set({ error: (event.error as { message?: string })?.message || 'Plan generation failed' });
         }
-      }
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       set({ error: msg });
@@ -261,65 +234,37 @@ export const usePlanStore = create<PlanStoreState>((set, get) => ({
       const response = await api.plans.execute(plan.id, sessionId);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No response body');
-
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
-            if (data === '[DONE]') continue;
-
-            try {
-              const event = JSON.parse(data);
-
-              if (event.type === 'plan_section_start') {
-                get().updateSection(event.section_id, { status: 'in_progress', result: '' });
-              } else if (event.type === 'plan_section_delta') {
-                // Accumulate execution output for the section
-                const plan = get().currentPlan;
-                if (plan) {
-                  const sec = plan.sections.find((s) => s.id === event.section_id);
-                  const prev = sec?.result || '';
-                  if (event.delta_type === 'text') {
-                    get().updateSection(event.section_id, { result: prev + (event.content || '') });
-                  } else if (event.delta_type === 'tool_call') {
-                    get().updateSection(event.section_id, { result: prev + `\n🔧 ${event.tool_name}\n` });
-                  } else if (event.delta_type === 'tool_result') {
-                    const snippet = (event.content || '').slice(0, 300);
-                    const suffix = event.is_error ? ' ❌' : ' ✓';
-                    get().updateSection(event.section_id, { result: prev + snippet + suffix + '\n' });
-                  }
-                }
-              } else if (event.type === 'plan_section_complete') {
-                get().updateSection(event.section_id, {
-                  status: event.success ? 'completed' : 'failed',
-                  result: event.result || event.error || 'Completed',
-                });
-              } else if (event.type === 'plan_execution_complete') {
-                const updated = get().currentPlan;
-                if (updated) {
-                  set({
-                    currentPlan: { ...updated, status: event.success ? 'completed' : 'failed' },
-                  });
-                }
-              }
-            } catch {
-              // skip
-            }
+      await readSseEvents(response, (event) => {
+        if (event.type === 'plan_section_start') {
+          get().updateSection(event.section_id as string, { status: 'in_progress', result: '' });
+        } else if (event.type === 'plan_section_delta') {
+          const cur = get().currentPlan;
+          if (!cur) return;
+          const sec = cur.sections.find((s) => s.id === event.section_id);
+          const prev = sec?.result || '';
+          if (event.delta_type === 'text') {
+            get().updateSection(event.section_id as string, { result: prev + ((event.content as string) || '') });
+          } else if (event.delta_type === 'tool_call') {
+            get().updateSection(event.section_id as string, { result: prev + `\n🔧 ${event.tool_name}\n` });
+          } else if (event.delta_type === 'tool_result') {
+            const snippet = ((event.content as string) || '').slice(0, 300);
+            const suffix = event.is_error ? ' ❌' : ' ✓';
+            get().updateSection(event.section_id as string, { result: prev + snippet + suffix + '\n' });
+          }
+        } else if (event.type === 'plan_section_complete') {
+          get().updateSection(event.section_id as string, {
+            status: event.success ? 'completed' : 'failed',
+            result: (event.result as string) || (event.error as string) || 'Completed',
+          });
+        } else if (event.type === 'plan_execution_complete') {
+          const updated = get().currentPlan;
+          if (updated) {
+            set({
+              currentPlan: { ...updated, status: event.success ? 'completed' : 'failed' },
+            });
           }
         }
-      }
+      });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       set({ error: msg });

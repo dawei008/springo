@@ -194,6 +194,22 @@ def execute_tool(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
 
 def _execute_tool_inner(tool_name: str, tool_input: Dict[str, Any]) -> Dict[str, Any]:
     """Core tool execution logic (MCP + built-in)."""
+    # Generic MCP entry: collapses 99 cached MCP tool schemas into one
+    # prompt-side tool. The model picks (server, tool, args); we forward to
+    # the server__tool path that already handles lazy server start + caching.
+    if tool_name == "mcp_call":
+        server = (tool_input or {}).get("server", "")
+        tool = (tool_input or {}).get("tool", "")
+        args = (tool_input or {}).get("args") or {}
+        if not server or not tool:
+            return {"error": "mcp_call requires both 'server' and 'tool' parameters"}
+        # Allow either bare tool name or full "server__tool" — be forgiving.
+        if "__" in tool:
+            full_name = tool
+        else:
+            full_name = f"{server}__{tool}"
+        return _execute_tool_inner(full_name, args)
+
     # Check if it's an MCP tool (format: server__toolname)
     if "__" in tool_name:
         try:
@@ -340,7 +356,10 @@ Note: MEMORY.md and the last 2 days of daily logs are already injected into your
                 }
             break
 
-    # Add MCP tools (lazy loading pattern with caching)
+    # MCP tools — single mcp_call entry instead of 100s of placeholder schemas.
+    # Active tools (server already running this turn) keep their full schema
+    # because the model needs them ready for the next call; everything else
+    # is summarized in mcp_call's description and tool_search's index.
     try:
         from api.services.tool_registry import get_tool_registry
         from api.services.mcp_client import get_external_mcp_manager
@@ -348,75 +367,62 @@ Note: MEMORY.md and the last 2 days of daily logs are already injected into your
         registry = get_tool_registry()
         manager = get_external_mcp_manager()
 
-        # Get active tools (already loaded from running servers)
-        active_mcp_tools = registry.get_active_tools()
-        active_tool_names = {t['name'] for t in active_mcp_tools} if active_mcp_tools else set()
-
+        active_mcp_tools = registry.get_active_tools() or []
+        active_tool_names = {t['name'] for t in active_mcp_tools}
         if active_mcp_tools:
             tools.extend(active_mcp_tools)
 
-        # Add cached MCP tool placeholders for enabled servers (lazy loading)
-        # These allow Claude to call MCP tools directly without needing to search first
         configured_servers = manager.get_configured_servers()
-        enabled_server_names = {
-            s['name'] for s in configured_servers
+        enabled_servers = [
+            s for s in configured_servers
             if s.get('enabled', True) and s.get('status') != 'disabled'
-        }
-
-        # Get cached tools from previous server discoveries
+        ]
         cached_tools = manager.get_cached_tools()
 
-        for tool_def in cached_tools:
-            tool_name = tool_def.get('name', '')
-            # Extract server name from tool name (format: server__toolname)
-            server_name = tool_name.split('__')[0] if '__' in tool_name else ''
-            if server_name in enabled_server_names:
-                # Don't add if already active (server is running and tool is loaded)
-                if tool_name not in active_tool_names:
-                    # Add note that this tool will auto-activate
-                    placeholder_tool = copy.deepcopy(tool_def)
-                    if "(Auto-loads" not in placeholder_tool.get('description', ''):
-                        placeholder_tool['description'] = placeholder_tool.get('description', '') + " (Auto-loads on first use)"
-                    tools.append(placeholder_tool)
-                    active_tool_names.add(tool_name)  # Prevent duplicates
+        # Build the dynamic mcp_call description: one bullet per server +
+        # comma-separated cached tool names so the model can pick without
+        # paying for each schema.
+        server_blocks: List[str] = []
+        for s in enabled_servers:
+            name = s['name']
+            desc = s.get('description', '') or ''
+            srv_cached = [
+                t.get('name', '').split('__', 1)[1]
+                for t in cached_tools
+                if t.get('name', '').startswith(name + '__') and t.get('name') not in active_tool_names
+            ]
+            srv_cached.sort()
+            if srv_cached:
+                tool_list = ', '.join(srv_cached[:50])
+                more = '' if len(srv_cached) <= 50 else f' (+{len(srv_cached) - 50} more — call tool_search)'
+                server_blocks.append(f"- **{name}**: {desc}\n    tools: {tool_list}{more}")
+            else:
+                server_blocks.append(f"- **{name}**: {desc} (no cached tools yet — call tool_search to discover)")
+        server_listing = "\n".join(server_blocks) if server_blocks else "(no MCP servers configured)"
 
-        # Also list all available servers in tool_search for discovery of other tools
+        for tool in tools:
+            if tool["name"] == "mcp_call":
+                tool["description"] = tool["description"].replace("{MCP_SERVER_LIST}", server_listing)
+                break
+
+        # tool_search description gets a compact list of currently-activated
+        # MCP tools (already in the prompt above as full schemas) so the
+        # model knows what it can call without going through mcp_call.
         deferred = registry.get_deferred_tools()
-        enabled_servers = [s for s in configured_servers if s.get('enabled', True) and s.get('status') != 'disabled']
-
-        mcp_info_parts = []
-
         if deferred:
             deferred_list = "\n".join([f"- {t['name']}" for t in deferred[:30]])
-            mcp_info_parts.append(f"**Activated MCP tools:**\n{deferred_list}")
-
-        if enabled_servers:
-            server_list = []
-            for s in enabled_servers:
-                name = s['name']
-                desc = s.get('description', '')
-                running = s.get('running', False)
-                tools_count = s.get('tools', 0)
-                cached_count = sum(1 for t in cached_tools if t.get('name', '').startswith(name + '__'))
-                if running:
-                    status = f"({tools_count} tools)"
-                elif cached_count > 0:
-                    status = f"({cached_count} cached tools, auto-loads)"
-                else:
-                    status = "(not loaded yet)"
-                server_list.append(f"- {name}: {desc} {status}")
-
-            mcp_info_parts.append(f"**Available MCP servers:**\n" + "\n".join(server_list))
-            mcp_info_parts.append("Use tool_search to discover more tools from these servers.")
-
-        if mcp_info_parts:
             for tool in tools:
                 if tool["name"] == "tool_search":
-                    tool["description"] += "\n\n" + "\n\n".join(mcp_info_parts)
+                    tool["description"] += f"\n\n**Activated MCP tools (full schema in prompt):**\n{deferred_list}"
                     break
 
     except Exception as e:
         logger.warning(f"Failed to load tool registry: {e}")
+        # Even on failure, drop the placeholder marker so the description is sane.
+        for tool in tools:
+            if tool["name"] == "mcp_call":
+                tool["description"] = tool["description"].replace("{MCP_SERVER_LIST}", "(MCP unavailable)")
+                break
 
     return tools
 

@@ -95,19 +95,19 @@ export default function MessageList({ messages, isStreaming = false }: Props) {
     return result;
   }, [messages]);
 
-  // Find the last assistant message index — only it should show the tool panel
-  const lastAssistantIdx = (() => {
+  // Only the last assistant message shows the tool panel.
+  const lastAssistantIdx = useMemo(() => {
     for (let i = displayMessages.length - 1; i >= 0; i--) {
       if (displayMessages[i].role === 'assistant') return i;
     }
     return -1;
-  })();
+  }, [displayMessages]);
 
   return (
     <>
       {displayMessages.map((msg, i) => (
         <Message
-          key={`${msg.timestamp || i}-${i}`}
+          key={`${msg.role}-${msg.timestamp ?? i}`}
           message={msg}
           showToolPanel={i === lastAssistantIdx}
           isStreaming={i === lastAssistantIdx ? isStreaming : false}

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import logging
 
 from ..services.tool_manager import get_tool_manager, ToolManager
+from ..models.requests import ToolExecuteRequest
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +18,6 @@ router = APIRouter()
 
 
 # ============ Request/Response Models ============
-
-class ToolExecuteRequest(BaseModel):
-    """工具执行请求"""
-    name: str = Field(..., description="Tool name")
-    input: Dict[str, Any] = Field(default_factory=dict, description="Tool input parameters")
-
 
 class ToolExecuteResponse(BaseModel):
     """工具执行响应"""

@@ -5,7 +5,6 @@ type ArtifactFileType = ArtifactFile['type'];
 // ── Types ──────────────────────────────────────────────────────
 
 export type FileAction = 'replace' | 'create' | 'delete';
-export type ArtifactOp = 'create' | 'patch' | 'action' | 'delete' | 'finalize';
 
 export interface FilePatch {
   path: string;
@@ -76,9 +75,21 @@ function isValidFileAction(value: string): value is FileAction {
   return VALID_FILE_ACTIONS.includes(value as FileAction);
 }
 
+type Op = ParsedArtifactOp['op'];
+const VALID_OPS: readonly Op[] = ['create', 'patch', 'action', 'delete', 'finalize'];
+
+function isValidOp(value: string): value is Op {
+  return (VALID_OPS as readonly string[]).includes(value);
+}
+
+const _attrCache = new Map<string, RegExp>();
 function getAttr(attrs: string, name: string): string | undefined {
-  const m = attrs.match(new RegExp(`${name}="([^"]*)"`));
-  return m?.[1];
+  let re = _attrCache.get(name);
+  if (!re) {
+    re = new RegExp(`${name}="([^"]*)"`);
+    _attrCache.set(name, re);
+  }
+  return attrs.match(re)?.[1];
 }
 
 function parseFiles(body: string, defaultAction: FileAction = 'replace'): FilePatch[] {
@@ -142,12 +153,8 @@ export function parseArtifactOp(raw: string): ParsedArtifactOp | null {
   const titleAttr = getAttr(attrs, 'title') ?? 'Artifact';
   const iconAttr = getAttr(attrs, 'icon');
 
-  // Resolve op. If not specified, infer: `type=` → create, otherwise skip.
-  let op: ArtifactOp;
-  if (
-    opAttr === 'create' || opAttr === 'patch' || opAttr === 'action' ||
-    opAttr === 'delete' || opAttr === 'finalize'
-  ) {
+  let op: Op;
+  if (opAttr && isValidOp(opAttr)) {
     op = opAttr;
   } else if (getAttr(attrs, 'type')) {
     op = 'create';
@@ -155,14 +162,9 @@ export function parseArtifactOp(raw: string): ParsedArtifactOp | null {
     return null;
   }
 
-  if (op === 'delete') {
+  if (op === 'delete' || op === 'finalize') {
     if (!idAttr) return null;
-    return { op: 'delete', id: idAttr };
-  }
-
-  if (op === 'finalize') {
-    if (!idAttr) return null;
-    return { op: 'finalize', id: idAttr };
+    return { op, id: idAttr };
   }
 
   if (op === 'action') {

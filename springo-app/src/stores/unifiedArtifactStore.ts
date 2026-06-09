@@ -7,6 +7,7 @@
  * to the backend; background reads keep the mirror fresh.
  */
 import { create } from 'zustand';
+import { genId } from '@/utils/genId';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -195,6 +196,7 @@ export interface UnifiedArtifactState {
 // ---------------------------------------------------------------------------
 
 const BASE_URL = 'http://127.0.0.1:8081';
+export const BACKEND_BASE_URL = BASE_URL;
 
 interface BackendArtifact {
   id: string;
@@ -407,7 +409,7 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
 
   createArtifact: (props) => {
     const now = Date.now();
-    const id = props.id ?? `art-${now}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = props.id ?? genId('art');
     const type: UnifiedArtifactType = props.type ?? 'app';
     const icon = resolveIconName(props.icon, type);
     const state = props.state ?? {};
@@ -544,6 +546,10 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
   },
 
   deleteArtifact: (id) => {
+    // Clear any pending timers so a recreated artifact with the same id
+    // doesn't get stomped by a stale auto-finalize / state flush.
+    if (_finalizeTimers[id]) { clearTimeout(_finalizeTimers[id]); delete _finalizeTimers[id]; }
+    if (_stateTimers[id]) { clearTimeout(_stateTimers[id]); delete _stateTimers[id]; }
     set((s) => {
       const { [id]: _, ...rest } = s.artifacts;
       return {
@@ -605,8 +611,6 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
           versions,
           activeVersionIndex: versions.length - 1,
           updatedAt: now,
-          // A patch arrived → re-enter "live" mode and reset the
-          // auto-finalize timer. Quick-style live preview semantics.
           live: true,
         },
       },
@@ -879,6 +883,5 @@ if (typeof window !== 'undefined') {
   try { localStorage.removeItem('springo-unified-artifacts'); } catch { /* noop */ }
   // Fire-and-forget initial sync.
   void useUnifiedArtifactStore.getState().loadFromBackend();
-  // Expose for debugging.
-  (window as any).__unifiedArtifactStore = useUnifiedArtifactStore;
+  if (import.meta.env.DEV) (window as any).__unifiedArtifactStore = useUnifiedArtifactStore;
 }

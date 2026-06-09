@@ -54,7 +54,7 @@ interface SettingsState {
 }
 
 const DEFAULT_SETTINGS: Settings = {
-  model: 'claude-opus-4-7',
+  model: 'claude-opus-4-8',
   maxTokens: 16384,
   temperature: 0.7,
   compactModel: 'claude-haiku-4-5-20251001',
@@ -68,7 +68,7 @@ export const useSettingsStore = create<SettingsState>()(
       settings: { ...DEFAULT_SETTINGS },
       models: [],
       modelsByProvider: {},
-      defaultModel: 'claude-opus-4-7',
+      defaultModel: 'claude-opus-4-8',
       defaultCompactModel: 'claude-haiku-4-5-20251001',
 
       workingDir: '',

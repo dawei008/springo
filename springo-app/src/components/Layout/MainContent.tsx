@@ -12,8 +12,9 @@ import { usePlanStore } from '@/stores/planStore';
 import Canvas from '@/components/Canvas/Canvas';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { UsageData } from '@/types';
+import { BACKEND_BASE_URL } from '@/stores/unifiedArtifactStore';
 
-const BASE_URL = 'http://127.0.0.1:8081';
+const BASE_URL = BACKEND_BASE_URL;
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -68,30 +69,37 @@ function StatusBar() {
   // Model for context stats
   const currentModel = settings.model || useSettingsStore((s) => s.defaultModel);
 
-  // Health polling state
+  // Health polling state. Single chained setTimeout with adaptive interval —
+  // poll every 3s while disconnected, every 30s while healthy. setState is
+  // gated on actual change so subscribers (StatusBar) don't churn.
   const [serverHealthy, setServerHealthy] = useState(false);
   useEffect(() => {
     let mounted = true;
-    const checkHealth = async () => {
+    let healthy = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const tick = async () => {
       try {
         const res = await fetch(`${BASE_URL}/health`);
         const data = await res.json();
-        if (mounted) setServerHealthy(data.status === 'healthy');
+        const next = data.status === 'healthy';
+        if (mounted && next !== healthy) {
+          healthy = next;
+          setServerHealthy(next);
+        }
       } catch {
-        if (mounted) setServerHealthy(false);
+        if (mounted && healthy) {
+          healthy = false;
+          setServerHealthy(false);
+        }
       }
+      if (mounted) timer = setTimeout(tick, healthy ? 30_000 : 3000);
     };
-    checkHealth();
-    const fastInterval = setInterval(() => {
-      if (!serverHealthy) checkHealth();
-    }, 3000);
-    const slowInterval = setInterval(checkHealth, 30000);
+    void tick();
     return () => {
       mounted = false;
-      clearInterval(fastInterval);
-      clearInterval(slowInterval);
+      if (timer) clearTimeout(timer);
     };
-  }, [serverHealthy]);
+  }, []);
 
   // Derive status from health + session + streaming state
   const status = !serverHealthy ? 'error' : isStreaming ? 'running' : session?.status || 'idle';
@@ -112,66 +120,68 @@ function StatusBar() {
     compacting: 'status-running',
   };
 
-  // Memory sync status polling
+  // Memory sync status polling — only commits state when the displayed
+  // values actually change so StatusBar doesn't re-render every 10s.
   useEffect(() => {
-    const updateMemorySyncStatus = async () => {
+    let lastStatus: typeof syncStatus | null = null;
+    let lastText = '';
+    let lastTitle = '';
+    const formatSyncTime = (iso: string) => {
+      if (!iso) return '';
+      const diff = Date.now() - new Date(iso + 'Z').getTime();
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+      if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+      return `${Math.floor(diff / 86400000)}d ago`;
+    };
+    const tick = async () => {
+      let nextStatus: typeof syncStatus = 'disabled';
+      let nextText = 'Memory: --';
+      let nextTitle = lastTitle;
       try {
         const res = await fetch(`${BASE_URL}/v1/memory/status`);
         const data = await res.json();
-
-        const formatSyncTime = (iso: string) => {
-          if (!iso) return '';
-          const d = new Date(iso + 'Z');
-          const now = Date.now();
-          const diff = now - d.getTime();
-          if (diff < 60000) return 'just now';
-          if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-          if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-          return `${Math.floor(diff / 86400000)}d ago`;
-        };
-
         const syncTime = data.last_file_sync ? formatSyncTime(data.last_file_sync) : '';
         const filesCount = data.files_synced || 0;
-
         switch (data.status) {
           case 'synced':
-            setSyncStatus('synced');
-            setSyncText(syncTime ? `Synced ${syncTime}` : `Synced: ${filesCount} files`);
+            nextStatus = 'synced';
+            nextText = syncTime ? `Synced ${syncTime}` : `Synced: ${filesCount} files`;
             break;
           case 'syncing':
-            setSyncStatus('syncing');
-            setSyncText(`Syncing... (${data.pending} pending)`);
+            nextStatus = 'syncing';
+            nextText = `Syncing... (${data.pending} pending)`;
             break;
           case 'disabled':
           case 'not_running':
-            setSyncStatus('disabled');
-            setSyncText(syncTime ? `Synced ${syncTime}` : 'Memory: off');
+            nextStatus = 'disabled';
+            nextText = syncTime ? `Synced ${syncTime}` : 'Memory: off';
             break;
           case 'error':
-            setSyncStatus('error');
-            setSyncText(syncTime ? `Synced ${syncTime}` : 'Sync paused');
+            nextStatus = 'error';
+            nextText = syncTime ? `Synced ${syncTime}` : 'Sync paused';
             break;
           default:
-            setSyncStatus('disabled');
-            setSyncText(syncTime ? `Synced ${syncTime}` : 'Memory: --');
+            nextStatus = 'disabled';
+            nextText = syncTime ? `Synced ${syncTime}` : 'Memory: --';
         }
-
-        setSyncTitle(
+        nextTitle =
           `Memory Sync (${data.memory_backend || 'agentcore'})\n` +
           `Status: ${data.status || 'unknown'}\n` +
           `Memory ID: ${data.memory_id || 'N/A'}\n` +
           `Region: ${data.region || 'N/A'}\n` +
           `Files synced: ${filesCount}\n` +
-          (syncTime ? `Last sync: ${syncTime}` : ''),
-        );
+          (syncTime ? `Last sync: ${syncTime}` : '');
       } catch {
-        setSyncStatus('disabled');
-        setSyncText('Memory: --');
+        nextStatus = 'disabled';
+        nextText = 'Memory: --';
       }
+      if (nextStatus !== lastStatus) { lastStatus = nextStatus; setSyncStatus(nextStatus); }
+      if (nextText !== lastText) { lastText = nextText; setSyncText(nextText); }
+      if (nextTitle !== lastTitle) { lastTitle = nextTitle; setSyncTitle(nextTitle); }
     };
-
-    updateMemorySyncStatus();
-    const interval = setInterval(updateMemorySyncStatus, 10000);
+    void tick();
+    const interval = setInterval(tick, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -491,11 +501,6 @@ export default function MainContent() {
           <StatusBar />
         </div>
         {hasActiveArtifact && <Canvas />}
-        {/* PlanPanel is now rendered inside Canvas as the 'plan' internal
-            artifact (see Canvas.tsx InternalRenderer). The standalone mount
-            here would double-render whenever a plan was active and an
-            artifact was open. Opening is driven by usePlanStore subscribers
-            below. */}
       </div>
     </div>
   );

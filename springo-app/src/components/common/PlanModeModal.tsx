@@ -2,10 +2,7 @@ import { useCallback } from 'react';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtml } from '@/utils/escapeHtml';
 
 export function PlanModeIndicator() {
   const planModeActive = useUIStore((s) => s.planModeActive);

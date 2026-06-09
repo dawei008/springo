@@ -181,17 +181,6 @@ const PinIcon = () => (
   </svg>
 )
 
-/** Save artifact content to a temp file and open with system app */
-async function openWithSystemApp(artifact: ArtifactItem) {
-  // If artifact has a filePath, open that directly
-  if (artifact.filePath) {
-    window.electronAPI?.openPath(artifact.filePath)
-    return
-  }
-  // Otherwise save to temp and open
-  saveArtifact(artifact)
-}
-
 function ContextMenu({ x, y, artifact, onClose }: { x: number; y: number; artifact: ArtifactItem; onClose: () => void }) {
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -271,11 +260,6 @@ export default function ArtifactCard({ artifact, onClickOverride, defaultCollaps
     useUnifiedArtifactStore.getState().openArtifact(id)
   }
 
-  // No reliable "is this card the currently-open Canvas artifact" mapping
-  // for inline cards (they're created on demand from chat content), so we
-  // skip the active-highlight state.
-  const isActive = false
-
   // Collapsed view: compact single-line header
   if (collapsed) {
     return (
@@ -300,7 +284,7 @@ export default function ArtifactCard({ artifact, onClickOverride, defaultCollaps
   return (
     <>
       <div
-        className={`artifact-card${isActive ? ' active' : ''}`}
+        className="artifact-card"
         onClick={onClickOverride ?? defaultClick}
         onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setCtxMenu({ x: e.clientX, y: e.clientY }) }}
       >

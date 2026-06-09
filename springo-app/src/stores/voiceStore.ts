@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { api } from '../services/api';
 
 const WS_BASE = 'ws://127.0.0.1:8081/v1/transcribe';
 
@@ -57,7 +58,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
     }),
 
   stopTranscription: () => {
-    const { _audioCtx, _streams, _ws } = get();
+    const { _audioCtx, _streams, _ws, activeSessionId, transcripts, language } = get();
     try { _audioCtx?.close(); } catch {}
     _streams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
     if (_ws && _ws.readyState <= WebSocket.OPEN) _ws.close();
@@ -68,6 +69,18 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
       _streams: [],
       _audioCtx: null,
     });
+
+    // Auto-save the meeting transcript to disk. Fire-and-forget — the
+    // backend writes one Markdown file per session under ~/.springo/meetings/.
+    // Empty transcripts are skipped server-side.
+    if (activeSessionId) {
+      const text = transcripts[activeSessionId] || '';
+      if (text.trim()) {
+        void api.meetings
+          .save({ session_id: activeSessionId, transcript: text, language })
+          .catch((e) => console.warn('[voice] meeting auto-save failed:', e));
+      }
+    }
   },
 
   startTranscription: async (sessionId) => {

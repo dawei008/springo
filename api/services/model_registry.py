@@ -61,6 +61,18 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude models  (api_format = "anthropic")
     # -----------------------------------------------------------------------
+    "claude-opus-4-8": {
+        "vendor": "bedrock",
+        "bedrock_id": "us.anthropic.claude-opus-4-8",
+        "provider": "anthropic",
+        "display_name": "Claude Opus 4.8",
+        "context_window": 1000000,
+        "max_output": 64000,
+        "supports_vision": True,
+        "supports_thinking": False,
+        "supports_tools": True,
+        "api_format": "anthropic",
+    },
     "claude-opus-4-7": {
         "vendor": "bedrock",
         "bedrock_id": "us.anthropic.claude-opus-4-7",
@@ -265,6 +277,13 @@ BEDROCK_MODEL_MAPPING: Dict[str, str] = {
 def get_model_info(model_name: str) -> Optional[ModelInfo]:
     """Look up a model by short name. Returns None if not found."""
     return MODEL_REGISTRY.get(model_name)
+
+
+def get_api_format(model_name: str) -> str:
+    """Return the api_format ('anthropic' or 'converse') for *model_name*.
+    Defaults to 'anthropic' when the model is not registered."""
+    info = MODEL_REGISTRY.get(model_name)
+    return info.get("api_format", "anthropic") if info else "anthropic"
 
 
 def model_supports_tools(model_name: str) -> bool:

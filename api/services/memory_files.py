@@ -208,23 +208,15 @@ class MemoryFileManager:
     def get_context_for_prompt(self) -> str:
         """Build memory context to inject into system prompt.
 
-        Returns MEMORY.md + recent 2 days of daily logs (with staleness markers),
-        formatted for injection. Returns empty string if no memory files exist.
+        Only MEMORY.md (long-term, organized by type) goes into the static
+        cache prefix. Daily logs are kept out — they change every day, would
+        bust the cache, and are reachable via memory_search RAG anyway.
         """
         parts = []
 
-        # MEMORY.md (long-term, organized by type)
         memory_md = self.read_memory_md()
         if memory_md.strip():
             parts.append(f"## Long-term Memory (MEMORY.md)\n\n{memory_md.strip()}")
-
-        # Recent daily logs (today + yesterday) with staleness indicators
-        recent = self.read_recent_dailies(days=2, with_staleness=True)
-        if recent.strip():
-            trimmed = recent.strip()
-            if len(trimmed) > 2000:
-                trimmed = "... (earlier entries truncated)\n\n" + trimmed[-2000:]
-            parts.append(f"## Recent Memory Notes\n\n{trimmed}")
 
         if not parts:
             return ""

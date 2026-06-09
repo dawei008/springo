@@ -13179,6 +13179,168 @@
     min-height: 0;
     position: relative;
     overflow: hidden;
+    display: flex;
+}
+
+.kb-body-canvas {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+    overflow: hidden;
+}
+
+/* ─── Quick-style entity sidebar ─── */
+
+.kb-entity-sidebar {
+    width: 220px;
+    flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg-primary);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.kb-entity-search {
+    padding: 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.kb-entity-search input {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+}
+
+.kb-entity-search input:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: var(--bg-primary);
+}
+
+.kb-entity-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px 6px;
+    font-size: var(--font-size-xs);
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.kb-entity-section-label { flex: 1; }
+
+.kb-entity-counts {
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: normal;
+    font-variant-numeric: tabular-nums;
+}
+
+.kb-entity-clear {
+    background: none;
+    border: none;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 4px;
+}
+
+.kb-entity-clear:hover { color: var(--text-primary); }
+
+.kb-entity-list {
+    flex: 1;
+    overflow-y: auto;
+    list-style: none;
+    margin: 0;
+    padding: 0 4px 8px;
+}
+
+.kb-entity-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+}
+
+.kb-entity-row:hover { background: var(--bg-hover); }
+
+.kb-entity-row.active {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+.kb-entity-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.kb-entity-label {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kb-entity-count {
+    font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary);
+    font-size: var(--font-size-xs);
+}
+
+.kb-entity-row.active .kb-entity-count { color: var(--accent); }
+
+/* Source filter chips above the entity list. */
+.kb-entity-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.kb-entity-chip {
+    border: 1px solid var(--border-strong);
+    background: var(--bg-secondary);
+    color: var(--text-secondary);
+    border-radius: var(--radius-full);
+    padding: 3px 10px;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition: var(--transition-fast);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.kb-entity-chip:hover {
+    border-color: var(--accent);
+    color: var(--text-primary);
+}
+
+.kb-entity-chip.active {
+    background: var(--accent-light);
+    color: var(--accent);
+    border-color: var(--accent);
+    opacity: 1 !important;
+}
+
+.kb-chip-count {
+    font-variant-numeric: tabular-nums;
+    color: inherit;
+    opacity: 0.7;
 }
 
 .kb-empty {
@@ -13423,67 +13585,7 @@
     white-space: nowrap;
 }
 
-/* ─── Specialized doc viewers (SVG / JSON / PDF native) ─── */
-
-.canvas-svg-stage {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 20px;
-    background:
-        repeating-conic-gradient(var(--bg-secondary) 0 25%, transparent 0 50%) 50% / 20px 20px;
-}
-
-.canvas-svg-img {
-    max-width: 100%;
-    max-height: 100%;
-    object-fit: contain;
-    display: block;
-}
-
-.canvas-json-stage {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-primary);
-}
-
-.canvas-json-header {
-    flex-shrink: 0;
-    padding: 8px 16px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: var(--font-size-sm);
-}
-
-.canvas-json-path {
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-}
-
-.canvas-json-err {
-    color: var(--error-text, var(--error));
-}
-
-.canvas-json-body {
-    flex: 1;
-    margin: 0;
-    padding: 16px 24px 60px;
-    font-family: var(--font-mono);
-    font-size: 12.5px;
-    line-height: 1.55;
-    color: var(--text-primary);
-    overflow: auto;
-    white-space: pre;
-    tab-size: 2;
-}
+/* ─── PDF native viewer ─── */
 
 .canvas-pdf-stage {
     flex: 1;

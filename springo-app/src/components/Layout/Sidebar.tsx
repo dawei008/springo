@@ -7,8 +7,11 @@ import { useVoiceStore } from '@/stores/voiceStore';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { useFoldersStore } from '@/stores/foldersStore';
 import { ArtifactIcon } from '@/components/Canvas/ArtifactIcon';
-import { getCleanupSuggestions, countActionableSuggestions } from '@/utils/cleanupSuggestions';
+import { getCleanupSuggestions, countActionableSuggestions, DEFAULT_SESSION_TITLES } from '@/utils/cleanupSuggestions';
+import { getArtifactCleanupSuggestions, countActionableArtifactSuggestions } from '@/utils/artifactCleanup';
+import { api } from '@/services/api';
 import CleanupModal from '@/components/Layout/CleanupModal';
+import ArtifactCleanupModal from '@/components/Layout/ArtifactCleanupModal';
 import type { SessionMode } from '@/types';
 
 // ─── Section Header (collapsible) ───
@@ -362,6 +365,8 @@ function PinnedSection({
 
 // ─── Apps Section (session-only artifacts; pinned ones moved to PINNED) ───
 
+const APP_CLEANUP_DISMISSED_KEY = 'springo-app-cleanup-dismissed';
+
 function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   const sessionIds = useUnifiedArtifactStore((s) => s.sessionArtifactIds);
   const pinnedIds = useUnifiedArtifactStore((s) => s.pinnedArtifactIds);
@@ -370,6 +375,64 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
   const openUnifiedArtifact = useUnifiedArtifactStore((s) => s.openArtifact);
   const pinUnifiedArtifact = useUnifiedArtifactStore((s) => s.pinArtifact);
   const deleteArtifact = useUnifiedArtifactStore((s) => s.deleteArtifact);
+
+  // Cleanup heuristic state (parallels the chats cleanup banner).
+  const [appCleanupDismissed, setAppCleanupDismissed] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(APP_CLEANUP_DISMISSED_KEY);
+      return raw ? new Set<string>(JSON.parse(raw)) : new Set();
+    } catch { return new Set(); }
+  });
+  const [appCleanupModalOpen, setAppCleanupModalOpen] = useState(false);
+  // Re-evaluate suggestions every 30 minutes so age-based rules cross the
+  // ABANDONED_MS / STALE_MS thresholds without an external store update.
+  const [appCleanupTick, setAppCleanupTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setAppCleanupTick((n) => n + 1), 30 * 60 * 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const appCleanupSuggestions = useMemo(
+    () => getArtifactCleanupSuggestions(artifactMap, sessionIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [artifactMap, sessionIds, appCleanupTick],
+  );
+  const actionableAppCleanupCount = useMemo(
+    () => countActionableArtifactSuggestions(appCleanupSuggestions, appCleanupDismissed),
+    [appCleanupSuggestions, appCleanupDismissed],
+  );
+
+  if (import.meta.env.DEV) {
+    (window as any).__appCleanup = {
+      total: Object.keys(artifactMap).length,
+      sessionIds: sessionIds.length,
+      suggestions: appCleanupSuggestions,
+      actionable: actionableAppCleanupCount,
+      dismissed: Array.from(appCleanupDismissed),
+    };
+  }
+
+  const persistAppDismissed = useCallback((next: Set<string>) => {
+    setAppCleanupDismissed(next);
+    try {
+      localStorage.setItem(APP_CLEANUP_DISMISSED_KEY, JSON.stringify(Array.from(next)));
+    } catch { /* quota — ignore */ }
+  }, []);
+
+  const dismissAppCleanup = useCallback((ids: string[]) => {
+    const next = new Set(appCleanupDismissed);
+    for (const id of ids) next.add(id);
+    persistAppDismissed(next);
+  }, [appCleanupDismissed, persistAppDismissed]);
+
+  const bulkDeleteApps = useCallback(async (ids: string[]) => {
+    const next = new Set(appCleanupDismissed);
+    for (const id of ids) {
+      next.delete(id);
+      deleteArtifact(id);
+    }
+    persistAppDismissed(next);
+  }, [appCleanupDismissed, persistAppDismissed, deleteArtifact]);
 
   // Artifacts belonging to the current session that the user hasn't pinned yet.
   // Pinned artifacts live in the dedicated PINNED section at the top of the sidebar.
@@ -398,7 +461,14 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     }
   }, [deleteArtifact]);
 
-  if (sessionArtifacts.length === 0 && unattachedArtifacts.length === 0) return null;
+  // Hide section entirely only when there's nothing to render — including
+  // the cleanup banner. If the only thing here would be the banner (rare),
+  // still let it surface.
+  if (
+    sessionArtifacts.length === 0 &&
+    unattachedArtifacts.length === 0 &&
+    actionableAppCleanupCount === 0
+  ) return null;
 
   const showSubheaders = sessionArtifacts.length > 0 && unattachedArtifacts.length > 0;
 
@@ -439,6 +509,35 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
       <SectionHeader title="Apps" collapsed={collapsed} onToggle={onToggle} />
       {!collapsed && (
         <>
+          {actionableAppCleanupCount > 0 && (
+            <div className="cleanup-banner">
+              <div className="cleanup-banner-icon" aria-hidden="true">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                  <path d="M10 11v6M14 11v6" />
+                </svg>
+              </div>
+              <div className="cleanup-banner-text">
+                <strong>{actionableAppCleanupCount}</strong> app{actionableAppCleanupCount === 1 ? '' : 's'} look disposable
+              </div>
+              <button
+                className="cleanup-banner-action"
+                onClick={() => setAppCleanupModalOpen(true)}
+              >
+                Review
+              </button>
+              <button
+                className="cleanup-banner-dismiss"
+                title="Dismiss until new apps qualify"
+                onClick={() => dismissAppCleanup(appCleanupSuggestions.map((s) => s.artifact.id))}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M18 6 6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
           {showSubheaders && sessionArtifacts.length > 0 && (
             <div className="nav-subheader">This session</div>
           )}
@@ -448,6 +547,14 @@ function AppsSection({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
           )}
           {unattachedArtifacts.map((art) => renderArtifactRow(art, true))}
         </>
+      )}
+      {appCleanupModalOpen && (
+        <ArtifactCleanupModal
+          suggestions={appCleanupSuggestions}
+          onDelete={bulkDeleteApps}
+          onDismissIds={dismissAppCleanup}
+          onClose={() => setAppCleanupModalOpen(false)}
+        />
       )}
     </div>
   );
@@ -682,18 +789,13 @@ export default function Sidebar() {
               }
             }
 
-            const defaultTitles = ['New Chat', 'New Design', 'New Plan', 'Team Chat', 'Meeting Notes', 'Screen Recording', 'Untitled'];
-            if (newTitle && !defaultTitles.includes(newTitle)) {
+            if (newTitle && !DEFAULT_SESSION_TITLES.has(newTitle)) {
               useSessionStore.setState((s) => ({
                 sessions: s.sessions.map((sess) =>
                   sess.id === id ? { ...sess, title: newTitle } : sess,
                 ),
               }));
-              fetch(`http://127.0.0.1:8081/v1/sessions/${id}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ metadata: { title: newTitle } }),
-              }).catch(() => {});
+              api.sessions.updateMetadata(id, { title: newTitle }).catch(() => {});
             }
           }, 500);
         }
@@ -805,10 +907,9 @@ export default function Sidebar() {
     const id = contextMenu.sessionId;
     closeContextMenu();
     try {
-      const res = await fetch(`http://127.0.0.1:8081/v1/sessions/${id}`);
-      if (!res.ok) return;
-      const data = await res.json();
-      const blob = new Blob([JSON.stringify(data, null, 2)], {
+      const res = await api.sessions.get(id);
+      if (!res.ok || !res.data) return;
+      const blob = new Blob([JSON.stringify(res.data, null, 2)], {
         type: 'application/json',
       });
       const url = URL.createObjectURL(blob);

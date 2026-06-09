@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { ModelInfo } from '@/types'
+import { BACKEND_BASE_URL } from '@/stores/unifiedArtifactStore'
 
 type SettingsTab = 'general' | 'models' | 'tools' | 'memory' | 'integrations'
 
-const BASE_URL = 'http://127.0.0.1:8081'
+const BASE_URL = BACKEND_BASE_URL
 
 export default function SettingsModal() {
   const setSettingsOpen = useUIStore((s) => s.setSettingsOpen)
@@ -34,9 +35,6 @@ export default function SettingsModal() {
       setLocalDefaultWorkdir(defaultWorkingFolder)
     }
   }, [defaultWorkingFolder])
-
-  // Recording settings have moved into the Screen Recording canvas panel
-  // (RecordingCanvasPanel). Configuration lives next to the feature now.
 
   // ACP Agents state (General tab)
   const [acpAgents, setAcpAgents] = useState<Array<{
@@ -115,12 +113,13 @@ export default function SettingsModal() {
 
   const backdropRef = useRef<HTMLDivElement>(null)
 
-  // Close on Escape key
+  // Close on Escape key — closeSettings reads many local-state values, so the
+  // listener must call the latest version every render rather than a stale
+  // closure captured at mount.
+  const closeSettingsRef = useRef<() => void>(() => {})
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === 'Escape') {
-        closeSettings()
-      }
+      if (e.key === 'Escape') closeSettingsRef.current()
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
@@ -215,6 +214,10 @@ export default function SettingsModal() {
   }
 
   // --- Close (saves settings) ---
+  // The Escape-handler effect runs once at mount, so it captures the initial
+  // version of this function. Sync the latest closure into a ref each render
+  // so Esc always saves current values.
+  closeSettingsRef.current = closeSettings
   function closeSettings() {
     // Save all settings synchronously BEFORE closing the modal
     try {
@@ -486,11 +489,6 @@ export default function SettingsModal() {
       showToast(`Removed MCP server: ${name}`, 'info')
     } catch { /* ignore */ }
   }
-
-  // Recording settings load/save/browse helpers moved into
-  // RecordingCanvasPanel.RecordingSettings — they live next to the
-  // feature now.
-
 
   // --- General tab: ACP Agents ---
   async function loadAcpAgents() {
@@ -979,7 +977,7 @@ export default function SettingsModal() {
                 </div>
                 <div
                   className="setting-group"
-                  style={{ display: localModel === 'claude-opus-4-7' ? undefined : 'none' }}
+                  style={{ display: (localModel === 'claude-opus-4-7' || localModel === 'claude-opus-4-8') ? undefined : 'none' }}
                 >
                   <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                     <input
@@ -990,11 +988,11 @@ export default function SettingsModal() {
                     />
                     Enable Extended Thinking (Adaptive)
                   </label>
-                  <div className="hint">Opus 4.7 decides when to think deeply. Summary shown in chat.</div>
+                  <div className="hint">Opus 4.7+ decides when to think deeply. Summary shown in chat.</div>
                 </div>
                 <div
                   className="setting-group"
-                  style={{ display: localModel === 'claude-opus-4-7' && localThinkingEnabled ? undefined : 'none' }}
+                  style={{ display: (localModel === 'claude-opus-4-7' || localModel === 'claude-opus-4-8') && localThinkingEnabled ? undefined : 'none' }}
                 >
                   <label>Thinking Effort</label>
                   <select
@@ -1004,7 +1002,7 @@ export default function SettingsModal() {
                     <option value="low">Low — minimal thinking, fastest</option>
                     <option value="medium">Medium — may skip simple queries</option>
                     <option value="high">High — always thinks (API default)</option>
-                    <option value="xhigh">XHigh — deep exploration (Opus 4.7 only)</option>
+                    <option value="xhigh">XHigh — deep exploration (Opus 4.7+)</option>
                     <option value="max">Max — no depth limit</option>
                   </select>
                   <div className="hint">Higher effort = deeper reasoning but slower and more tokens.</div>
@@ -1440,7 +1438,7 @@ interface UsageEntry {
 }
 
 function SkillDistillSection() {
-  const BASE = 'http://127.0.0.1:8081'
+  const BASE = BACKEND_BASE_URL
   const [status, setStatus] = useState<DistillStatus | null>(null)
   const [usage, setUsage] = useState<Record<string, UsageEntry>>({})
   const [running, setRunning] = useState<'distill' | 'gc' | null>(null)

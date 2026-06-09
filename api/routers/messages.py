@@ -3,6 +3,7 @@ Springo Messages Router
 消息 API 路由 - /v1/messages 和 /v1/messages-auto
 """
 import json
+import re
 import uuid
 import logging
 import asyncio
@@ -18,7 +19,7 @@ from ..models.requests import MessageRequest, MessageAutoRequest
 from ..models.responses import MessageResponse, ErrorResponse, Usage
 from ..services.bedrock import get_bedrock_service, BedrockService, get_model_limits
 from ..services.vendor_router import get_vendor_router, VendorRouter
-from ..services.model_registry import MODEL_REGISTRY
+from ..services.model_registry import MODEL_REGISTRY, get_api_format
 from ..services.tool_manager import get_tool_manager, ToolManager
 from ..services.context_manager import (
     count_messages_tokens, should_summarize, summarize_context,
@@ -39,13 +40,74 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def _build_tool_result_content(tool_name: str, result: dict) -> Any:
-    """Build tool_result content, handling special cases like computer screenshots.
+def _validate_model(model: str, *, field: str = "model") -> None:
+    """Raise 400 if *model* is not registered. Shared by all message endpoints."""
+    if model in MODEL_REGISTRY:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "type": "error",
+            "error": {
+                "type": "invalid_request",
+                "message": f"Unknown {field}: {model}. Valid models: {sorted(MODEL_REGISTRY.keys())}",
+            },
+        },
+    )
 
-    For computer use tool results containing screenshots, returns a list of
-    content blocks (image + optional text). For all other tools, returns a
-    JSON string as before.
-    """
+
+# Greetings that don't need Opus. Match a single-line, short opener with no
+# substance. We're conservative — false negatives are fine (user just gets
+# the bigger model), false positives lose useful context.
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|yo|嗨|你好|在吗|早|晚安)[\s!?。.,，。]*$",
+    re.IGNORECASE,
+)
+_HAIKU_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _maybe_downsize_model(req_model: str, messages: List[Any]) -> str:
+    """Return a smaller model id if the user just said hi (and nothing else).
+    Otherwise return *req_model* unchanged. Only triggers on the first turn —
+    once history exists, we trust the user picked Opus on purpose. Accepts
+    either dicts or Pydantic Message instances."""
+    if req_model == _HAIKU_MODEL or _HAIKU_MODEL not in MODEL_REGISTRY:
+        return req_model
+    if len(messages) > 2:
+        return req_model
+    last = messages[-1] if messages else None
+    if last is None:
+        return req_model
+    role = getattr(last, "role", None) or (last.get("role") if isinstance(last, dict) else None)
+    if role != "user":
+        return req_model
+    content = getattr(last, "content", None)
+    if content is None and isinstance(last, dict):
+        content = last.get("content")
+    text = content if isinstance(content, str) else ""
+    if isinstance(content, list):
+        for b in content:
+            if isinstance(b, dict) and b.get("type") == "text":
+                text = b.get("text", "")
+                break
+            # Non-dict (e.g. Pydantic) content block — dict blocks are
+            # already handled above, so only the object path remains.
+            t = getattr(b, "text", None)
+            if t and getattr(b, "type", None) == "text":
+                text = t
+                break
+    text = (text or "").strip()
+    if len(text) > 20:
+        return req_model
+    if not _GREETING_RE.match(text):
+        return req_model
+    logger.info(f"[router] downsizing {req_model} → {_HAIKU_MODEL} for greeting: {text!r}")
+    return _HAIKU_MODEL
+
+
+def _build_tool_result_content(tool_name: str, result: dict) -> Any:
+    """Build tool_result content. Computer-use screenshots become an image
+    content block; all other tools serialize to a JSON string."""
     if tool_name == "computer" and isinstance(result, dict) and result.get("type") == "computer_screenshot":
         # Build image content block for Anthropic API
         image_data = result.get("image", {})
@@ -113,19 +175,7 @@ async def messages_api(
                 "error": {"type": "invalid_request", "message": str(ve)}
             })
         
-        # Validate model against registry
-        if msg_request.model not in MODEL_REGISTRY:
-            valid_models = sorted(MODEL_REGISTRY.keys())
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request",
-                        "message": f"Unknown model: {msg_request.model}. Valid models: {valid_models}"
-                    }
-                }
-            )
+        _validate_model(msg_request.model)
 
         logger.info(f"Messages API: model={msg_request.model}, stream={msg_request.stream}, messages={len(msg_request.messages)}")
 
@@ -133,9 +183,8 @@ async def messages_api(
         from ..services.session_state import get_working_dir
         working_dir = get_working_dir() or None
         
-        # Get tools if available
-        tools = msg_request.tools or []  # TODO: Get from MCP manager
-        
+        tools = msg_request.tools or []
+
         # Convert to Bedrock format
         model_id, bedrock_body = bedrock.convert_request_to_bedrock(
             body,
@@ -145,7 +194,9 @@ async def messages_api(
         )
         
         original_model = msg_request.model
-        api_format = bedrock.get_api_format(original_model)
+        # get_api_format is a plain registry lookup (module-level helper), whereas
+        # get_bedrock_model_id lives on the service because it needs vendor routing.
+        api_format = get_api_format(original_model)
 
         if msg_request.stream:
             # Streaming response
@@ -217,19 +268,11 @@ async def messages_auto_api(
                 "error": {"type": "invalid_request", "message": str(ve)}
             })
         
-        # Validate model against registry
-        if msg_request.model not in MODEL_REGISTRY:
-            valid_models = sorted(MODEL_REGISTRY.keys())
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request",
-                        "message": f"Unknown model: {msg_request.model}. Valid models: {valid_models}"
-                    }
-                }
-            )
+        _validate_model(msg_request.model)
+
+        # Greeting fast-path: tiny first-turn messages don't need Opus. The
+        # user's selected model still wins for any real exchange.
+        msg_request.model = _maybe_downsize_model(msg_request.model, msg_request.messages)
 
         logger.info(f"Messages Auto API: model={msg_request.model}, max_iterations={msg_request.max_tool_iterations}")
 
@@ -237,19 +280,8 @@ async def messages_auto_api(
         session_id = x_session_id or body.get("session_id")
         compact_model = msg_request.compact_model
 
-        # Validate compact_model if provided
-        if compact_model and compact_model not in MODEL_REGISTRY:
-            valid_models = sorted(MODEL_REGISTRY.keys())
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "type": "error",
-                    "error": {
-                        "type": "invalid_request",
-                        "message": f"Unknown compact_model: {compact_model}. Valid models: {valid_models}"
-                    }
-                }
-            )
+        if compact_model:
+            _validate_model(compact_model, field="compact_model")
 
         # Get working directory: request override > session state
         from ..services.session_state import get_working_dir
@@ -569,7 +601,7 @@ async def messages_auto_api(
                     )
 
                     model_id = bedrock.get_bedrock_model_id(original_model)
-                    api_format = bedrock.get_api_format(original_model)
+                    api_format = get_api_format(original_model)
 
                     # Collect response — track ALL content blocks (text + tool_use)
                     content_blocks = []  # All blocks in order
@@ -1178,7 +1210,7 @@ async def messages_auto_api(
                 )
 
                 model_id = bedrock.get_bedrock_model_id(original_model)
-                ns_api_format = bedrock.get_api_format(original_model)
+                ns_api_format = get_api_format(original_model)
                 bedrock_response = await bedrock.invoke_model(model_id, bedrock_body, api_format=ns_api_format)
 
                 stop_reason = bedrock_response.get("stop_reason")

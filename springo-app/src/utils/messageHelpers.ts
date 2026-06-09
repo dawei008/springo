@@ -9,7 +9,7 @@ export function extractTextContent(content: string | ContentBlock[] | undefined)
       .map((c) => {
         if (typeof c === 'string') return c;
         if (c.type === 'text') return c.text || '';
-        if (c.type === 'image') return '[Image]';
+        if (c.type === 'image') return '';
         if (c.type === 'tool_use') return '';
         if (c.type === 'tool_result') return '';
         return '';

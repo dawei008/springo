@@ -3,6 +3,7 @@ import { useToolsStore } from '@/stores/toolsStore';
 import { useUIStore } from '@/stores/uiStore';
 import type { Skill } from '@/types';
 import type { McpServer, PluginInfo } from '@/stores/toolsStore';
+import { prefillMessageInput } from '@/utils/prefillMessageInput';
 
 export default function ToolsPanel() {
   const plugins = useToolsStore((s) => s.plugins);
@@ -45,25 +46,9 @@ export default function ToolsPanel() {
     useUIStore.getState().setActiveSkill({ name: skill.name, description: skill.description });
   }, []);
 
-  const insertTextToInput = useCallback((text: string) => {
-    const input = document.getElementById('message-input') as HTMLTextAreaElement | null;
-    if (input) {
-      input.focus();
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLTextAreaElement.prototype,
-        'value',
-      )?.set;
-      if (nativeSetter) {
-        nativeSetter.call(input, text);
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-      }
-      input.selectionStart = input.selectionEnd = text.length;
-    }
-  }, []);
-
   const handleServerClick = useCallback((server: McpServer) => {
-    insertTextToInput(`Use the ${server.name} MCP server to `);
-  }, [insertTextToInput]);
+    prefillMessageInput(`Use the ${server.name} MCP server to `);
+  }, []);
 
   // Double-click: open the SKILL.md file in the system editor
   const handleSkillDoubleClick = useCallback((skill: Skill) => {
@@ -73,13 +58,13 @@ export default function ToolsPanel() {
   }, []);
 
   const handleServerDoubleClick = useCallback((server: McpServer) => {
-    insertTextToInput(`Use the ${server.name} MCP server to `);
+    prefillMessageInput(`Use the ${server.name} MCP server to `);
     const wrapper = document.querySelector('.input-area');
     if (wrapper) {
       wrapper.classList.add('drag-over');
       setTimeout(() => wrapper.classList.remove('drag-over'), 400);
     }
-  }, [insertTextToInput]);
+  }, []);
 
   const handlePluginDoubleClick = useCallback((plugin: PluginInfo) => {
     if (plugin.path && window.electronAPI?.openPath) {

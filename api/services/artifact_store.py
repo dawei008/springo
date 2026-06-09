@@ -201,14 +201,24 @@ def read_files(artifact_id: str) -> List[Dict[str, Any]]:
     return out
 
 
-def read_file(artifact_id: str, path: str) -> Dict[str, Any]:
-    """Return a single file's content. Nested paths permitted under files/."""
+def _resolve_file_path(artifact_id: str, path: str) -> Path:
+    """Validate ``path`` and resolve it under the artifact's ``files/`` dir.
+
+    Raises ValueError on traversal attempts or paths that escape the dir.
+    Does NOT check existence — callers should follow with their own check.
+    """
     if ".." in path.split("/"):
         raise ValueError(f"Unsafe file path: {path!r}")
-    files_root = _artifact_dir(artifact_id) / "files"
-    f = (files_root / path).resolve()
-    if files_root.resolve() not in f.parents and f != files_root:
+    files_root = (_artifact_dir(artifact_id) / "files").resolve()
+    target = (files_root / path).resolve()
+    if files_root not in target.parents and target != files_root:
         raise ValueError(f"Path escapes artifact files dir: {path!r}")
+    return target
+
+
+def read_file(artifact_id: str, path: str) -> Dict[str, Any]:
+    """Return a single file's content. Nested paths permitted under files/."""
+    f = _resolve_file_path(artifact_id, path)
     if not f.exists():
         raise FileNotFoundError(f"File not found in {artifact_id}: {path}")
     return {

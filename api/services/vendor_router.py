@@ -2,12 +2,29 @@
 Vendor Router — dispatches model calls to the correct backend service
 (BedrockService or DeepSeekService) based on the model's vendor field.
 """
+import inspect
 import logging
 from typing import AsyncGenerator, Dict, Any, Optional
 
-from .model_registry import get_vendor, get_vendor_model_id, get_model_info
+from .model_registry import get_vendor, get_vendor_model_id, get_model_info, get_api_format as _registry_get_api_format
 
 logger = logging.getLogger(__name__)
+
+
+def get_vendor_default_bases() -> Dict[str, str]:
+    """Default base URL per vendor, sourced from each vendor module's
+    ``init_*_service`` signature default so the URL is defined in exactly
+    one place (the vendor file)."""
+    from .deepseek import init_deepseek_service
+    from .minimax import init_minimax_service
+
+    def _default_base(fn) -> str:
+        return inspect.signature(fn).parameters["base_url"].default
+
+    return {
+        "deepseek": _default_base(init_deepseek_service),
+        "minimax": _default_base(init_minimax_service),
+    }
 
 
 class VendorRouter:
@@ -99,8 +116,10 @@ class VendorRouter:
         return service.get_bedrock_model_id(model)
 
     def get_api_format(self, model: str) -> str:
-        service = self.get_service(model)
-        return service.get_api_format(model)
+        # The api_format is a registry property, not a service-level concern;
+        # delegating to a vendor service used to work via a Bedrock static
+        # method that was removed during simplification.
+        return _registry_get_api_format(model)
 
     async def invoke_model(
         self,

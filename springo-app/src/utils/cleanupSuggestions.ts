@@ -34,7 +34,7 @@ const GRACE_MS = 5 * 60 * 1000;      // 5 minutes — newly created sessions are
 const ABANDONED_MS = 3 * 24 * 3600 * 1000;  // 3 days
 const STALE_MS = 14 * 24 * 3600 * 1000;     // 14 days
 
-const DEFAULT_TITLES = new Set([
+export const DEFAULT_SESSION_TITLES: ReadonlySet<string> = new Set([
   'New Chat', 'New Design', 'New Plan', 'Team Chat',
   'Meeting Notes', 'Screen Recording', 'Untitled',
 ]);
@@ -71,40 +71,19 @@ export function getCleanupSuggestions(
     const ageMs = now - updated;
     const age = daysAgo(updated, now);
     const count = messageCountFor(s, runtimes);
-    const titleLooksDefault = DEFAULT_TITLES.has(s.title) || !s.isCustomTitle;
+    const titleLooksDefault = DEFAULT_SESSION_TITLES.has(s.title) || !s.isCustomTitle;
 
+    const add = (reason: string, confidence: CleanupSuggestion['confidence']) => {
+      out.push({ session: s, reason, confidence, ageDays: age, messageCount: count });
+    };
     if (count === 0) {
-      out.push({
-        session: s,
-        reason: 'Never used — no messages sent',
-        confidence: 'high',
-        ageDays: age,
-        messageCount: 0,
-      });
+      add('Never used — no messages sent', 'high');
     } else if (count <= 2 && ageMs >= ABANDONED_MS && titleLooksDefault) {
-      out.push({
-        session: s,
-        reason: `Abandoned — only ${count} message${count === 1 ? '' : 's'} and still titled "${s.title}"`,
-        confidence: 'high',
-        ageDays: age,
-        messageCount: count,
-      });
+      add(`Abandoned — only ${count} message${count === 1 ? '' : 's'} and still titled "${s.title}"`, 'high');
     } else if (count <= 2 && ageMs >= STALE_MS) {
-      out.push({
-        session: s,
-        reason: `Short and stale — ${count} message${count === 1 ? '' : 's'}, ${age}d old`,
-        confidence: 'medium',
-        ageDays: age,
-        messageCount: count,
-      });
+      add(`Short and stale — ${count} message${count === 1 ? '' : 's'}, ${age}d old`, 'medium');
     } else if (count <= 4 && ageMs >= STALE_MS && titleLooksDefault) {
-      out.push({
-        session: s,
-        reason: `Old default-titled chat — ${count} messages, ${age}d old`,
-        confidence: 'low',
-        ageDays: age,
-        messageCount: count,
-      });
+      add(`Old default-titled chat — ${count} messages, ${age}d old`, 'low');
     }
   }
 

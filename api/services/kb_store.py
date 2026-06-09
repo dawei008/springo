@@ -41,6 +41,31 @@ SIZE_1GB = 1024 * 1024 * 1024
 RAW_BUDGET_BYTES = 5 * 1024 * 1024 * 1024  # 5 GB warn threshold
 
 
+# Quick-aligned entity vocabulary. Frontmatter `node_type:` accepts any of
+# these (case/space insensitive). Pages without a node_type fall back to
+# "creative_work" so existing KB content keeps working.
+NODE_TYPES: tuple = (
+    "person", "organization", "place", "event",
+    "product", "service", "project", "dataset",
+    "creative_work", "defined_term", "instruction",
+    "action", "channel", "observation", "decision",
+    "occupation", "dashboard", "message", "visual",
+)
+DEFAULT_NODE_TYPE = "creative_work"
+
+
+def normalize_node_type(value: Any) -> str:
+    """Coerce a frontmatter ``node_type`` value into the canonical vocabulary.
+
+    Accepts ``Person`` / ``defined-term`` / ``Defined Term`` / etc. Unknown
+    values fall back to DEFAULT_NODE_TYPE so the graph never breaks on a typo.
+    """
+    if not value:
+        return DEFAULT_NODE_TYPE
+    s = str(value).strip().lower().replace(" ", "_").replace("-", "_")
+    return s if s in NODE_TYPES else DEFAULT_NODE_TYPE
+
+
 # ---------------------------------------------------------------------------
 # Bootstrap
 # ---------------------------------------------------------------------------
@@ -481,6 +506,8 @@ def _regenerate_graph() -> Dict[str, Any]:
             "id": slug,
             "title": fm.get("title") or slug,
             "tags": fm.get("tags") or [],
+            "node_type": normalize_node_type(fm.get("node_type")),
+            "source": "kb",
             "claim_count": claim_count,
             "source_count": len(sources) if isinstance(sources, list) else 0,
             "last_updated": last_str or None,
@@ -488,7 +515,26 @@ def _regenerate_graph() -> Dict[str, Any]:
             "orphan": False,  # filled below
         })
 
-        # see-also: parse `[[slug]]` from "## See also" section, fall back to whole body
+        # Typed relations: optional ``relations:`` frontmatter list lets a page
+        # declare semantic edges, e.g.
+        #   relations:
+        #     - { to: "anthropic", kind: "works_at" }
+        #     - { to: "claude", kind: "created" }
+        # We collect those slugs first so they win over the fallback see-also.
+        explicit_targets: set = set()
+        rels = fm.get("relations")
+        if isinstance(rels, list):
+            for r in rels:
+                if not isinstance(r, dict):
+                    continue
+                target = (r.get("to") or "").strip()
+                kind = (r.get("kind") or "see-also").strip() or "see-also"
+                if target and target != slug:
+                    edges.append({"from": slug, "to": target, "kind": kind})
+                    explicit_targets.add(target)
+
+        # see-also fallback: parse `[[slug]]` from "## See also" section,
+        # then whole body. Skip targets already covered by typed relations.
         see_also_section = ""
         in_see = False
         for line in body.split("\n"):
@@ -502,12 +548,30 @@ def _regenerate_graph() -> Dict[str, Any]:
         link_targets = set(_LINK_RE.findall(see_also_section or body))
         for target in link_targets:
             target_slug = target.strip().split("|")[0].strip()
-            if target_slug != slug:
+            if target_slug and target_slug != slug and target_slug not in explicit_targets:
                 edges.append({"from": slug, "to": target_slug, "kind": "see-also"})
 
-    # Mark orphans (no inbound edges)
+    # Multi-source aggregation: pull memory files + chat sessions in as
+    # additional nodes. They share the schema so they merge cleanly. Failures
+    # never bubble up — the wiki KB stays usable even if memory dirs are
+    # weird.
+    try:
+        from .kb_sources import list_memory_nodes, list_chat_nodes
+        mem_nodes, mem_edges = list_memory_nodes(now=now)
+        chat_nodes, chat_edges = list_chat_nodes(now=now)
+        nodes.extend(mem_nodes)
+        nodes.extend(chat_nodes)
+        edges.extend(mem_edges)
+        edges.extend(chat_edges)
+    except Exception as e:
+        logger.warning(f"[kb] multi-source aggregation failed: {e}")
+
+    # Mark orphans (no inbound edges) — applies to KB wiki nodes only;
+    # memory/chat nodes are stand-alone islands by construction.
     inbound = {e["to"] for e in edges}
     for node in nodes:
+        if node.get("source") != "kb":
+            continue
         if node["id"] not in inbound and node["id"] in seen_slugs:
             node["orphan"] = True
 

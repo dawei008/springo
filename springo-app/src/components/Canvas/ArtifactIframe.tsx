@@ -4,6 +4,7 @@ import { generateBridgeSdk, BRIDGE_MESSAGE_TYPES } from '@/utils/bridgeSdk';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { ArtifactFile } from '@/stores/unifiedArtifactStore';
 import { api } from '@/services/api';
+import { prefillMessageInput } from '@/utils/prefillMessageInput';
 
 interface SelectionInfo {
   text: string;
@@ -11,18 +12,9 @@ interface SelectionInfo {
 }
 
 function injectAsContext(text: string) {
-  const el = document.getElementById('message-input') as HTMLTextAreaElement | null;
-  if (!el) return;
   const quoted = text.split('\n').map((l) => '> ' + l).join('\n') + '\n\n';
-  const current = el.value || '';
-  const next = quoted + current;
-  const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-  nativeSet?.call(el, next);
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  // Place caret right after the quoted block so the user can keep typing.
-  const caret = quoted.length;
-  el.focus();
-  try { el.setSelectionRange(caret, caret); } catch { /* ignore */ }
+  // Caret right after the quoted block so the user can keep typing.
+  prefillMessageInput(quoted, { prepend: true, caret: quoted.length });
 }
 
 const TOOL_ALLOWLIST = new Set([
@@ -93,16 +85,9 @@ export default function ArtifactIframe({ artifactId, files, state }: ArtifactIfr
         }
         break;
 
-      case BRIDGE_MESSAGE_TYPES.SEND_TO_CHAT: {
-        const el = document.getElementById('message-input') as HTMLTextAreaElement | null;
-        if (el) {
-          const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-          nativeSet?.call(el, payload.message);
-          el.dispatchEvent(new Event('input', { bubbles: true }));
-          el.focus();
-        }
+      case BRIDGE_MESSAGE_TYPES.SEND_TO_CHAT:
+        prefillMessageInput(payload.message);
         break;
-      }
 
       case BRIDGE_MESSAGE_TYPES.CALL_TOOL: {
         const { id, name, input } = payload;

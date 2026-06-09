@@ -753,7 +753,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         session_id: options.sessionId || convId,
         compact_model: options.compactModel || settingsState.getEffectiveCompactModel(),
         ...(effectiveWorkingDir ? { working_directory: effectiveWorkingDir } : {}),
-        ...(options.thinkingEnabled !== false && model === 'claude-opus-4-7' ? {
+        ...(options.thinkingEnabled !== false && (model === 'claude-opus-4-7' || model === 'claude-opus-4-8') ? {
           thinking_enabled: true,
           thinking_effort: options.thinkingEffort || 'xhigh',
         } : {}),
@@ -893,10 +893,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           useTeamStore.getState().setTeamSynthesizing(evt.team_id);
         },
         onTeamComplete: (evt) => {
-          useTeamStore.getState().setTeamComplete(evt.team_id, evt.result);
+          useTeamStore.getState().setTeamComplete(evt.team_id);
         },
         onTeamError: (evt) => {
-          useTeamStore.getState().setTeamError(evt.team_id, evt.error);
+          useTeamStore.getState().setTeamError(evt.team_id);
         },
         onTeamTaskCreated: (evt) => {
           useTeamStore.getState().updateTaskCreated(evt.team_id, evt.task_id, evt.title, evt.owner);
@@ -1300,11 +1300,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
               useTeamStore.getState().setTeamSynthesizing(evt.team_id);
             },
             onTeamComplete: (evt) => {
-              useTeamStore.getState().setTeamComplete(evt.team_id, evt.result);
+              useTeamStore.getState().setTeamComplete(evt.team_id);
               streamDone = true;
             },
             onTeamError: (evt) => {
-              useTeamStore.getState().setTeamError(evt.team_id, evt.error);
+              useTeamStore.getState().setTeamError(evt.team_id);
               streamDone = true;
             },
             onTeamTaskCreated: (evt) => {
@@ -1649,5 +1649,5 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 }));
 
-if (typeof window !== 'undefined') (window as any).__chatStore = useChatStore;
+if (typeof window !== 'undefined' && import.meta.env.DEV) (window as any).__chatStore = useChatStore;
 

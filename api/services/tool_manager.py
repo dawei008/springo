@@ -129,7 +129,9 @@ class ToolManager:
         def write_file(path: str, content: str, encoding: str = "utf-8") -> Dict[str, Any]:
             try:
                 full_path = os.path.expanduser(path)
-                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+                parent = os.path.dirname(full_path)
+                if parent and not os.path.isdir(parent):
+                    os.makedirs(parent, exist_ok=True)
                 with open(full_path, 'w', encoding=encoding) as f:
                     f.write(content)
                 return {"success": True, "path": path, "size": len(content)}

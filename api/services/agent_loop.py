@@ -22,7 +22,7 @@ from ..config import settings
 from .message_bus import AgentMailbox, AgentMessage, TeamMessageBus
 from .team_task_manager import TeamTaskManager
 from .bedrock import BedrockService
-from .model_registry import get_model_info, get_model_limits
+from .model_registry import get_api_format, get_model_info, get_model_limits
 from .session_state import get_working_dir
 from .tool_manager import get_tool_manager
 from .context_manager import (
@@ -45,13 +45,6 @@ TEAM_TOOL_NAMES = {"send_message", "task_create", "task_update", "task_list", "t
 # task completion, idle between turns, task-list coordination); we add
 # an explicit budget as an extra guardrail.
 PEER_MSG_BUDGET_PER_TURN = 2
-
-
-def _get_api_format(model_name: str) -> str:
-    info = get_model_info(model_name)
-    return info.get("api_format", "anthropic") if info else "anthropic"
-
-
 
 
 def _with_working_dir(system_prompt: str) -> str:
@@ -120,7 +113,7 @@ async def run_agent_loop(
     agent_name = agent.name or agent.agent_id
     model_name = agent.role.model
     model_id = bedrock.get_bedrock_model_id(model_name)
-    api_format = _get_api_format(model_name)
+    api_format = get_api_format(model_name)
 
     # Build system prompt with team context
     system_base = agent.role.system_prompt

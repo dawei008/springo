@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useToolsStore } from '@/stores/toolsStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useSettingsStore } from '@/stores/settingsStore';
+import { DEFAULT_SESSION_TITLES } from '@/utils/cleanupSuggestions';
 
 function SessionModeIconSmall({ mode }: { mode?: string }) {
   const props = { width: '14', height: '14', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: '2', strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -98,9 +99,8 @@ function RecentSessions() {
   const switchSession = useSessionStore((s) => s.switchSession);
 
   const recent = useMemo(() => {
-    const defaultTitles = new Set(['New Chat', 'New Design', 'New Plan', 'Team Chat', 'Meeting Notes', 'Screen Recording']);
     return sessions
-      .filter((s) => s.title && !defaultTitles.has(s.title))
+      .filter((s) => s.title && !DEFAULT_SESSION_TITLES.has(s.title))
       .slice(0, 3);
   }, [sessions]);
 

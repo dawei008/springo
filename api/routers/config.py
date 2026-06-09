@@ -19,6 +19,12 @@ router = APIRouter()
 # 全局工作目录存储
 _working_dir: str = os.getcwd()
 
+def _vendor_default_bases() -> Dict[str, str]:
+    """Default base URL per vendor, sourced from the vendor modules so the
+    URLs live in exactly one place (see vendor_router.get_vendor_default_bases)."""
+    from ..services.vendor_router import get_vendor_default_bases
+    return get_vendor_default_bases()
+
 
 def _sync_working_dir(path: str):
     """Sync working directory to session_state and mcp_tools modules"""
@@ -756,17 +762,14 @@ async def set_vendor_key(request: VendorKeyRequest) -> Dict[str, Any]:
                 from ..services.vendor_router import get_vendor_router
                 from ..services.bedrock import get_bedrock_service
                 router_svc = get_vendor_router()
+                base_url = request.base_url or _vendor_default_bases().get(request.vendor)
                 if request.vendor == "deepseek":
                     from ..services.deepseek import init_deepseek_service
-                    base_url = request.base_url or "https://api.deepseek.com"
-                    ds = init_deepseek_service(request.api_key, base_url)
-                    router_svc.deepseek = ds
+                    router_svc.deepseek = init_deepseek_service(request.api_key, base_url)
                     logger.info("DeepSeek service reinitialized with new API key")
                 elif request.vendor == "minimax":
                     from ..services.minimax import init_minimax_service
-                    base_url = request.base_url or "https://api.minimax.chat/v1"
-                    mm = init_minimax_service(request.api_key, base_url)
-                    router_svc.minimax = mm
+                    router_svc.minimax = init_minimax_service(request.api_key, base_url)
                     logger.info("MiniMax service reinitialized with new API key")
             except Exception as e:
                 logger.warning(f"Failed to reinitialize {request.vendor} service: {e}")
@@ -780,20 +783,15 @@ async def set_vendor_key(request: VendorKeyRequest) -> Dict[str, Any]:
 @router.post("/config/vendor-keys/test")
 async def test_vendor_key(request: VendorKeyRequest) -> Dict[str, Any]:
     """Test a vendor API key by making a lightweight API call."""
-    # Vendor-specific defaults
-    _vendor_defaults = {
-        "deepseek": "https://api.deepseek.com",
-        "minimax": "https://api.minimax.chat/v1",
-    }
-
-    if request.vendor not in _vendor_defaults:
+    _default_bases = _vendor_default_bases()
+    if request.vendor not in _default_bases:
         return {"success": False, "error": f"Unsupported vendor: {request.vendor}"}
 
     import httpx
     import json as json_module
 
     api_key = request.api_key
-    default_base = _vendor_defaults[request.vendor]
+    default_base = _default_bases[request.vendor]
     base_url = (request.base_url or default_base).rstrip("/")
 
     # If api_key is a placeholder, read from stored config

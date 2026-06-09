@@ -193,7 +193,7 @@ export interface Settings {
   systemPrompt?: string;
   /** Compact model used for context summarization */
   compactModel?: string;
-  /** Enable adaptive thinking for Opus 4.7 */
+  /** Enable adaptive thinking for Opus 4.7+ */
   thinkingEnabled?: boolean;
   /** Thinking effort level: low | medium | high | xhigh | max */
   thinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -697,6 +697,7 @@ export interface TeamInfo {
 export interface TeamMessageRequest {
   content: string;
   sender?: string;
+  recipient?: string;
 }
 
 // ==================== Context API shapes ====================

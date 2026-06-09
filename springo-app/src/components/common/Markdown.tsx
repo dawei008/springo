@@ -177,9 +177,8 @@ function CollapsibleImage({ src, alt, ...props }: React.ImgHTMLAttributes<HTMLIm
   );
 }
 
-export default function Markdown({ content }: Props) {
-  const components: Components = {
-    pre({ children, ...props }) {
+const MARKDOWN_COMPONENTS: Components = {
+  pre({ children, ...props }) {
       // Extract code text from children for the copy button
       const codeText = extractText(children);
 
@@ -281,16 +280,17 @@ export default function Markdown({ content }: Props) {
       return <code {...props}>{children}</code>;
     },
 
-    img({ src, alt, ...props }) {
-      return <CollapsibleImage src={src} alt={alt} {...props} />;
-    },
-  };
+  img({ src, alt, ...props }) {
+    return <CollapsibleImage src={src} alt={alt} {...props} />;
+  },
+};
 
+export default function Markdown({ content }: Props) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkBreaks, remarkLinkify]}
       rehypePlugins={[rehypeHighlight]}
-      components={components}
+      components={MARKDOWN_COMPONENTS}
     >
       {content}
     </ReactMarkdown>

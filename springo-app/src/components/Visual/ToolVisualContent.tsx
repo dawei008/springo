@@ -1,15 +1,12 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useUIStore } from '@/stores/uiStore'
 import { api } from '@/services/api'
 import type { ToolUse } from '@/types'
+import { escapeHtml } from '@/utils/escapeHtml'
 
 interface ToolVisualContentProps {
   toolUse: ToolUse
   defaultCollapsed?: boolean
-}
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 // Collapsible image container with header bar
@@ -97,14 +94,73 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
   const [failedImages, setFailedImages] = useState<Set<string>>(new Set())
   const containerRef = useRef<HTMLDivElement>(null)
 
-  const resultStr = typeof toolUse.result === 'string'
-    ? toolUse.result
-    : JSON.stringify(toolUse.result || '')
+  // Memoize all parsing: tool results don't change after the tool completes,
+  // but the parent re-renders this on every streaming token of the active turn.
+  const detected = useMemo(() => {
+    const resultStr = typeof toolUse.result === 'string'
+      ? toolUse.result
+      : JSON.stringify(toolUse.result || '')
+    const mcpImages = extractMcpImages(toolUse.result)
+    const base64Match = resultStr.match(/data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/)
+    const imageUrls = resultStr.match(/(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp)(?:\?[^\s"'`]*)?)/gi)
+    const imagePaths = resultStr.match(/(?<!\w)(\/(?!\.\.)[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi)
+    const svgMatch = resultStr.includes('<svg') && resultStr.includes('</svg>')
+      ? resultStr.match(/<svg[\s\S]*?<\/svg>/i)
+      : null
+    return { resultStr, mcpImages, base64Match, imageUrls, imagePaths, svgMatch }
+  }, [toolUse.result])
 
-  // --- Excalidraw is handled by ExcalidrawLinkCard in Message.tsx ---
+  const { mcpImages, base64Match, imageUrls, imagePaths, svgMatch } = detected
+
+  // Fetch any local image paths from the backend.
+  // Hooks must run unconditionally — keep this above the early returns.
+  useEffect(() => {
+    if (!imagePaths) return
+    const paths = [...new Set(imagePaths)].map((p) => p.replace(/["'\\]+$/g, '').trim())
+    // One controller per fetch so a single path's timeout can't cancel the
+    // others; we track them all to abort any in-flight request on cleanup.
+    const controllers = new Set<AbortController>()
+    let cancelled = false
+    paths.forEach(async (filePath) => {
+      if (imageDataUrls[filePath] || failedImages.has(filePath)) return
+      const controller = new AbortController()
+      controllers.add(controller)
+      const timer = setTimeout(() => controller.abort(), 8000)
+      try {
+        const baseUrl = api.getBaseUrl()
+        const res = await fetch(
+          `${baseUrl}/v1/images/file?path=${encodeURIComponent(filePath)}`,
+          { signal: controller.signal },
+        )
+        // Bail out if the effect was cleaned up (stale re-run) while awaiting.
+        if (cancelled) return
+        if (res.ok) {
+          const blob = await res.blob()
+          if (cancelled) return
+          const url = URL.createObjectURL(blob)
+          setImageDataUrls((prev) => ({ ...prev, [filePath]: url }))
+        } else {
+          setFailedImages((prev) => new Set(prev).add(filePath))
+        }
+      } catch (err) {
+        // Ignore aborts (stale effect re-run or timeout); only record real failures.
+        if (cancelled || (err instanceof DOMException && err.name === 'AbortError')) return
+        setFailedImages((prev) => new Set(prev).add(filePath))
+      } finally {
+        clearTimeout(timer)
+        controllers.delete(controller)
+      }
+    })
+    // imageDataUrls/failedImages intentionally omitted: we only want to fetch
+    // when the detected paths change, not on each cache update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => {
+      cancelled = true
+      controllers.forEach((c) => c.abort())
+    }
+  }, [imagePaths])
 
   // --- MCP image content blocks (highest priority — inline base64, always works) ---
-  const mcpImages = extractMcpImages(toolUse.result)
   if (mcpImages.length > 0) {
     return (
       <>
@@ -127,8 +183,6 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
   }
 
   // --- Data URL base64 images (e.g. data:image/png;base64,...) ---
-  const base64Regex = /data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/
-  const base64Match = resultStr.match(base64Regex)
   if (base64Match) {
     return (
       <CollapsibleVisual label="Generated Image" defaultCollapsed={defaultCollapsed}>
@@ -143,8 +197,6 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
   }
 
   // --- Image URLs ---
-  const imageUrlRegex = /(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp)(?:\?[^\s"'`]*)?)/gi
-  const imageUrls = resultStr.match(imageUrlRegex)
   if (imageUrls) {
     const unique = [...new Set(imageUrls)]
     if (unique.length > 0) {
@@ -173,36 +225,6 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
   }
 
   // --- Image file paths (absolute paths only, fetch from backend) ---
-  const imagePathRegex = /(?<!\w)(\/(?!\.\.)[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi
-  const imagePaths = resultStr.match(imagePathRegex)
-
-  useEffect(() => {
-    if (!imagePaths) return
-    const paths = [...new Set(imagePaths)].map((p) => p.replace(/["'\\]+$/g, '').trim())
-    paths.forEach(async (filePath) => {
-      if (imageDataUrls[filePath] || failedImages.has(filePath)) return
-      try {
-        const baseUrl = api.getBaseUrl()
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), 8000)
-        const res = await fetch(
-          `${baseUrl}/v1/images/file?path=${encodeURIComponent(filePath)}`,
-          { signal: controller.signal },
-        )
-        clearTimeout(timer)
-        if (res.ok) {
-          const blob = await res.blob()
-          const url = URL.createObjectURL(blob)
-          setImageDataUrls((prev) => ({ ...prev, [filePath]: url }))
-        } else {
-          setFailedImages((prev) => new Set(prev).add(filePath))
-        }
-      } catch {
-        setFailedImages((prev) => new Set(prev).add(filePath))
-      }
-    })
-  }, [resultStr])
-
   if (imagePaths) {
     const paths = [...new Set(imagePaths)].map((p) => p.replace(/["'\\]+$/g, '').trim())
     if (paths.length > 0) {
@@ -241,18 +263,15 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
   }
 
   // --- SVG content ---
-  if (resultStr.includes('<svg') && resultStr.includes('</svg>')) {
-    const svgMatch = resultStr.match(/<svg[\s\S]*?<\/svg>/i)
-    if (svgMatch) {
-      return (
-        <CollapsibleVisual label="SVG Diagram" defaultCollapsed={defaultCollapsed}>
-          <div
-            className="tool-visual-svg-inner"
-            dangerouslySetInnerHTML={{ __html: svgMatch[0] }}
-          />
-        </CollapsibleVisual>
-      )
-    }
+  if (svgMatch) {
+    return (
+      <CollapsibleVisual label="SVG Diagram" defaultCollapsed={defaultCollapsed}>
+        <div
+          className="tool-visual-svg-inner"
+          dangerouslySetInnerHTML={{ __html: svgMatch[0] }}
+        />
+      </CollapsibleVisual>
+    )
   }
 
   return null

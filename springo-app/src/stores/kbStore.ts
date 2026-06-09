@@ -21,10 +21,27 @@ export interface KBPage {
   modified: number;
 }
 
+/** 19 entity categories aligned with Quick Knowledge Graph. The backend
+ * normalizes any frontmatter ``node_type`` value into this list (or
+ * 'creative_work' as fallback). */
+export type KBNodeType =
+  | 'person' | 'organization' | 'place' | 'event'
+  | 'product' | 'service' | 'project' | 'dataset'
+  | 'creative_work' | 'defined_term' | 'instruction'
+  | 'action' | 'channel' | 'observation' | 'decision'
+  | 'occupation' | 'dashboard' | 'message' | 'visual';
+
+/** Where this entity originates — drives the source filter chips. */
+export type KBNodeSource = 'kb' | 'chat' | 'memory';
+
 export interface KBNode {
   id: string;
   title: string;
   tags: string[];
+  /** Quick-style entity category. Defaults to 'creative_work' for legacy pages. */
+  node_type: KBNodeType;
+  /** Origin store — KB wiki page, derived from chat history, or a memory file. */
+  source: KBNodeSource;
   claim_count: number;
   source_count: number;
   last_updated: string | null;

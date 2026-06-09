@@ -107,18 +107,6 @@ export default function ChatArea() {
   // Track whether user has manually scrolled away during streaming
   const userScrolledAwayRef = useRef(false);
 
-  // Track scroll position to show/hide scroll-to-bottom button
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handleScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      setShowScrollBtn(distanceFromBottom > 300);
-    };
-    el.addEventListener('scroll', handleScroll, { passive: true });
-    return () => el.removeEventListener('scroll', handleScroll);
-  }, []);
-
   const scrollToBottom = useCallback(() => {
     if (containerRef.current) {
       containerRef.current.scrollTo({ top: containerRef.current.scrollHeight, behavior: 'smooth' });
@@ -130,17 +118,16 @@ export default function ChatArea() {
     return runtimes[currentSessionId]?.isStreaming === true;
   }, [currentSessionId, runtimes]);
 
-  // Reset "scrolled away" flag when user scrolls near bottom
+  // Single scroll listener: drives both the scroll-to-bottom button and
+  // the user-scrolled-away flag (used by streaming auto-scroll).
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     const handleScroll = () => {
       const distFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      if (distFromBottom < 150) {
-        userScrolledAwayRef.current = false;
-      } else if (isStreaming) {
-        userScrolledAwayRef.current = true;
-      }
+      setShowScrollBtn(distFromBottom > 300);
+      if (distFromBottom < 150) userScrolledAwayRef.current = false;
+      else if (isStreaming) userScrolledAwayRef.current = true;
     };
     el.addEventListener('scroll', handleScroll, { passive: true });
     return () => el.removeEventListener('scroll', handleScroll);

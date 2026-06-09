@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useUIStore } from '@/stores/uiStore';
-
-const BASE_URL = 'http://127.0.0.1:8081';
+import { api } from '@/services/api';
 
 interface FileEntry {
   name: string;
@@ -332,14 +331,10 @@ export default function FileBrowser() {
 
   // ─── API calls ───
 
-  const execTool = useCallback(async (name: string, input: Record<string, unknown>) => {
-    const res = await fetch(`${BASE_URL}/v1/tools/execute`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, input }),
-    });
-    const data = await res.json();
-    return data.result || data;
+  const execTool = useCallback(async (name: string, input: Record<string, unknown>): Promise<Record<string, any>> => {
+    const res = await api.tools.execute(name, input);
+    const data = (res.data ?? {}) as Record<string, any>;
+    return (data.result as Record<string, any>) || data;
   }, []);
 
   const loadDirectory = useCallback(async (path: string) => {

@@ -41,6 +41,33 @@ class PromptRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, description="Session ID to reuse for multi-turn context")
 
 
+class TaskUpsertRequest(BaseModel):
+    """Create or rename an ACP task (named long-running conversation)."""
+    name: str = Field(..., description="Human-friendly task name, e.g. 'obo-demo'")
+    agent_name: str = Field(..., description="Which configured ACP agent backs this task")
+    description: str = Field(default="", description="Free-form description")
+    cwd: str = Field(default="", description="Working directory for the agent")
+
+
+class DispatchRequest(BaseModel):
+    """Send a prompt to an agent or a named task, including Springo chat context.
+
+    Either ``task`` (resume) or ``agent`` (start fresh) must be set. When both
+    are present, ``task`` wins.
+    """
+    task: Optional[str] = Field(default=None, description="Existing task name to resume")
+    agent: Optional[str] = Field(default=None, description="Agent name for a new task")
+    prompt: str = Field(..., description="User-facing prompt for this turn")
+    cwd: str = Field(default="/tmp", description="Working directory")
+    timeout: float = Field(default=600, description="Timeout in seconds")
+    springo_session_id: Optional[str] = Field(default=None, description="Calling Springo chat session")
+    context_messages: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Recent main-chat messages to forward as context (role+text only)",
+    )
+    new_task_name: Optional[str] = Field(default=None, description="If provided, persist this dispatch as a named task")
+
+
 # ============ Endpoints ============
 
 @router.get("/acp/agents")
@@ -161,3 +188,165 @@ async def install_from_registry(agent_id: str) -> AgentResponse:
     except Exception as e:
         logger.error(f"Install ACP agent error: {e}")
         return AgentResponse(success=False, error=str(e))
+
+
+# ============ Named tasks (long-running @mention threads) ============
+
+@router.get("/acp/tasks")
+async def list_tasks() -> Dict[str, Any]:
+    """All named ACP tasks, most-recently-active first."""
+    from ..services.acp_tasks import list_tasks as _list
+    tasks = _list()
+    return {"tasks": tasks, "total": len(tasks)}
+
+
+@router.post("/acp/tasks")
+async def create_task(request: TaskUpsertRequest) -> Dict[str, Any]:
+    """Create or rename a task. Idempotent — same name updates in place."""
+    from ..services.acp_tasks import upsert_task
+    task = upsert_task(
+        request.name,
+        agent_name=request.agent_name,
+        description=request.description,
+        cwd=request.cwd,
+    )
+    return {"success": True, "task": task}
+
+
+@router.delete("/acp/tasks/{task_name}")
+async def delete_task(task_name: str) -> Dict[str, Any]:
+    from ..services.acp_tasks import delete_task as _delete
+    ok = _delete(task_name)
+    return {"success": ok, "name": task_name}
+
+
+@router.post("/acp/dispatch")
+async def dispatch(request: DispatchRequest) -> Dict[str, Any]:
+    """High-level @mention dispatch. Handles three cases:
+
+    1. ``task=<name>`` → resume the existing task's agent_session_id
+    2. ``agent=<name>`` (no task) → start a fresh thread; persist as a task
+       only if ``new_task_name`` is given
+    3. ``agent=<name>`` + ``new_task_name`` → start a fresh thread AND name it
+
+    Main-chat ``context_messages`` are prepended to the prompt so the @agent
+    sees what was happening in the Springo conversation that called it.
+    """
+    from ..services.acp_client import get_acp_client_manager
+    from ..services.acp_tasks import get_task, upsert_task, touch_task
+
+    if not request.task and not request.agent:
+        raise HTTPException(status_code=400, detail="Either 'task' or 'agent' is required")
+
+    # Resolve agent + agent-side session id from the chosen path.
+    agent_name: str
+    agent_session_id: Optional[str] = None
+    task_name: Optional[str] = request.task
+
+    if request.task:
+        task = get_task(request.task)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"Task not found: {request.task}")
+        agent_name = task["agent_name"]
+        agent_session_id = task.get("agent_session_id")
+    else:
+        agent_name = request.agent  # type: ignore[assignment]
+
+    # Build the contextual prompt. Keep it short — the agent has its own
+    # session memory once we resume, so we only need the *new* main-chat
+    # turns the agent hasn't seen.
+    contextual_prompt = _build_contextual_prompt(
+        request.context_messages, request.prompt, include_header=not agent_session_id,
+    )
+
+    try:
+        manager = get_acp_client_manager()
+        result = await manager.prompt_agent(
+            agent_name,
+            contextual_prompt,
+            cwd=request.cwd,
+            timeout=request.timeout,
+            session_id=agent_session_id,
+        )
+    except Exception as e:
+        logger.error(f"ACP dispatch error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    # The client returns the agent-assigned session_id either as ``session_id``
+    # or buried in ``updates[].sessionId``; pick the first one we find.
+    new_agent_session_id = (
+        result.get("session_id")
+        or _extract_session_id_from_updates(result.get("updates") or [])
+    )
+
+    # Persist as a task if we have a name (existing task or freshly given).
+    if task_name:
+        touch_task(task_name, agent_session_id=new_agent_session_id)
+    elif request.new_task_name:
+        task = upsert_task(
+            request.new_task_name,
+            agent_name=agent_name,
+            agent_session_id=new_agent_session_id,
+            springo_session_id=request.springo_session_id,
+            cwd=request.cwd,
+        )
+        task_name = task["name"]
+
+    return {
+        "success": True,
+        "task": task_name,
+        "agent": agent_name,
+        "agent_session_id": new_agent_session_id,
+        "text": result.get("text") or "",
+        "stop_reason": result.get("stop_reason"),
+        "updates": result.get("updates", []),
+    }
+
+
+def _build_contextual_prompt(
+    context_messages: List[Dict[str, Any]],
+    user_prompt: str,
+    *,
+    include_header: bool,
+) -> str:
+    """Prepend recent main-chat exchanges so the @agent has context.
+
+    On the first turn (no agent session yet) we include a header explaining
+    the situation. On resume we just stream the new user turn unprefixed —
+    the agent already remembers prior context.
+    """
+    if not context_messages:
+        return user_prompt
+    lines: List[str] = []
+    if include_header:
+        lines.append(
+            "[Context from the calling Springo conversation. The user is now "
+            "asking you, an external agent, to take over a sub-task. Treat "
+            "this context as background; the actual request follows the "
+            "marker line.]",
+        )
+        lines.append("")
+    for m in context_messages[-12:]:  # cap at last 12 turns to keep payload sane
+        role = (m.get("role") or "").lower()
+        text = (m.get("content") or "").strip()
+        if not text:
+            continue
+        prefix = {"user": "User", "assistant": "Assistant"}.get(role, role.capitalize() or "Note")
+        lines.append(f"{prefix}: {text}")
+    if include_header:
+        lines.append("")
+        lines.append("--- end of Springo context ---")
+        lines.append("")
+        lines.append(f"User now asks: {user_prompt}")
+    else:
+        lines.append("")
+        lines.append(user_prompt)
+    return "\n".join(lines)
+
+
+def _extract_session_id_from_updates(updates: List[Dict[str, Any]]) -> Optional[str]:
+    for u in updates:
+        sid = u.get("sessionId")
+        if sid:
+            return sid
+    return None

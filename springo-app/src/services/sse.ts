@@ -268,7 +268,6 @@ export async function processStreamingResponse(
             }
             const tool: ToolUse = { ...currentToolUse };
             toolUses.push(tool);
-            console.log(`[SSE] tool_use accumulated: ${tool.name} (total: ${toolUses.length})`);
             callbacks.onToolUse?.(tool);
             currentToolUse = null;
             currentToolInput = '';
@@ -301,7 +300,6 @@ export async function processStreamingResponse(
             for (const t of evt.tools) {
               if (!toolUses.find((tu) => tu.id === t.id)) {
                 toolUses.push({ id: t.id, name: t.name, input: t.input || {}, status: 'running' });
-                console.log(`[SSE] tool_execution_start added: ${t.name} (total: ${toolUses.length})`);
               }
             }
           }
@@ -484,7 +482,6 @@ export async function processStreamingResponse(
     }
 
     streamCompleted = true;
-    console.log(`[SSE] Stream complete: ${toolUses.length} tools accumulated, text length: ${textContent.length}`);
     callbacks.onComplete(textContent, toolUses);
     return { textContent, toolUses };
   } catch (e) {

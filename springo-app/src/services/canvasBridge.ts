@@ -9,8 +9,8 @@
  */
 
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
+import { api } from './api';
 
-const BASE_URL = 'http://127.0.0.1:8081';
 const POLL_INTERVAL_MS = 500;
 
 interface CanvasRequest {
@@ -63,52 +63,48 @@ function handleQuery(artifactId: string, selector: string | undefined): CanvasRe
 
 function execute(req: CanvasRequest): CanvasResult {
   const p = req.payload;
-  const id = p.artifactId || '';
-  if (p.action === 'query') return handleQuery(id, p.selector);
-  return { success: false, error: `Unknown action: ${(p as { action: string }).action}` };
-}
-
-async function postResult(reqId: string, result: CanvasResult): Promise<void> {
-  try {
-    await fetch(`${BASE_URL}/v1/canvas/result/${reqId}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(result),
-    });
-  } catch {
-    /* timeout on backend is the surfaced error */
-  }
+  if (p.action !== 'query') return { success: false, error: `Unknown action: ${(p as { action: string }).action}` };
+  return handleQuery(p.artifactId || '', p.selector);
 }
 
 async function pollOnce(): Promise<void> {
-  try {
-    const res = await fetch(`${BASE_URL}/v1/canvas/pending`);
-    if (!res.ok) return;
-    const data = (await res.json()) as { requests: CanvasRequest[] };
-    for (const req of data.requests || []) {
+  const res = await api.canvas.pending();
+  if (!res.ok || !res.data) return;
+  const requests = res.data.requests || [];
+  // Run all pending requests in parallel — querying the iframe DOM is
+  // synchronous, so the overlap is purely on the postResult round-trip.
+  await Promise.all(
+    requests.map(async (req) => {
       let result: CanvasResult;
       try {
-        result = execute(req);
+        result = execute(req as CanvasRequest);
       } catch (e) {
         result = { success: false, error: (e as Error).message };
       }
-      await postResult(req.id, result);
-    }
-  } catch {
-    /* retry next tick */
-  }
+      await api.canvas.postResult(req.id, result);
+    }),
+  );
 }
 
-let _timer: ReturnType<typeof setInterval> | null = null;
+let _running = false;
+let _timer: ReturnType<typeof setTimeout> | null = null;
+
+// Chain setTimeout instead of setInterval so a slow pollOnce can't stack up
+// behind itself if the backend is sluggish.
+async function tick(): Promise<void> {
+  if (!_running) return;
+  try { await pollOnce(); } catch (e) { console.warn('[canvas] poll failed:', e); /* retry next tick */ }
+  if (!_running) return;
+  _timer = setTimeout(tick, POLL_INTERVAL_MS);
+}
 
 export function startCanvasBridgeClient(): void {
-  if (_timer) return;
-  _timer = setInterval(pollOnce, POLL_INTERVAL_MS);
+  if (_running) return;
+  _running = true;
+  void tick();
 }
 
 export function stopCanvasBridgeClient(): void {
-  if (_timer) {
-    clearInterval(_timer);
-    _timer = null;
-  }
+  _running = false;
+  if (_timer) { clearTimeout(_timer); _timer = null; }
 }

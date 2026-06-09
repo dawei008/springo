@@ -9,12 +9,7 @@ import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { api } from '@/services/api';
 import type { Attachment, Skill } from '@/types';
 import ToolsPicker from './ToolsPicker';
-
-const BASE_URL = 'http://127.0.0.1:8081';
-
-function escXml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtml } from '@/utils/escapeHtml';
 
 function formatRuntimeState(state: Record<string, unknown>): string {
   if (!state || Object.keys(state).length === 0) return '(empty — artifact has not reported any state yet)';
@@ -40,21 +35,21 @@ function buildArtifactContext(): string | undefined {
   const includeFullContent = totalLines < 500;
 
   let ctx = `<artifact-context>\n`;
-  ctx += `  <!-- To edit this artifact, emit <springo-artifact op="patch" id="${escXml(artifact.id)}">. Do NOT rebuild it with op="create". -->\n`;
-  ctx += `  <artifact id="${escXml(artifact.id)}" name="${escXml(artifact.name)}" type="${escXml(artifact.type)}" version="${artifact.versions.length}">\n`;
+  ctx += `  <!-- To edit this artifact, emit <springo-artifact op="patch" id="${escapeHtml(artifact.id)}">. Do NOT rebuild it with op="create". -->\n`;
+  ctx += `  <artifact id="${escapeHtml(artifact.id)}" name="${escapeHtml(artifact.name)}" type="${escapeHtml(artifact.type)}" version="${artifact.versions.length}">\n`;
   ctx += `    <runtime-state>\n${formatRuntimeState(artifact.state)}\n    </runtime-state>\n`;
 
   if (includeFullContent) {
     ctx += `    <files count="${artifact.files.length}">\n`;
     for (const f of artifact.files) {
-      ctx += `<springo-file path="${escXml(f.path)}" type="text/${f.type}">\n${f.content}\n</springo-file>\n`;
+      ctx += `<springo-file path="${escapeHtml(f.path)}" type="text/${f.type}">\n${f.content}\n</springo-file>\n`;
     }
     ctx += `    </files>\n`;
   } else {
     ctx += `    <files count="${artifact.files.length}">\n`;
     for (const f of artifact.files) {
       const lines = f.content.split('\n').length;
-      ctx += `      <file path="${escXml(f.path)}" lines="${lines}" />\n`;
+      ctx += `      <file path="${escapeHtml(f.path)}" lines="${lines}" />\n`;
     }
     ctx += `    </files>\n`;
   }
@@ -129,11 +124,54 @@ const BUILT_IN_COMMANDS = [
   { name: 'design', description: 'Enter design mode — generate visual designs via chat', isBuiltIn: true as const },
 ];
 
+// ─── @-mention picker (ACP agents + named tasks) ───
+
+interface MentionTarget {
+  /** "task" → resume; "agent" → start fresh */
+  kind: 'task' | 'agent';
+  name: string;
+  /** Display label shown in the chip and picker. */
+  label: string;
+  description: string;
+  /** Only set for kind="task". The agent backing this task. */
+  agentName?: string;
+}
+
 export default function MessageInput() {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [showSkillPicker, setShowSkillPicker] = useState(false);
   const [skillPickerIndex, setSkillPickerIndex] = useState(0);
+
+  // @ mention state. ``mention`` is the locked-in target the next send goes
+  // to; while ``showMentionPicker`` is true the user is typing the query.
+  const [mention, setMention] = useState<MentionTarget | null>(null);
+  const [showMentionPicker, setShowMentionPicker] = useState(false);
+  const [mentionPickerIndex, setMentionPickerIndex] = useState(0);
+  const [mentionTasks, setMentionTasks] = useState<Array<{
+    name: string; agent_name: string; description: string;
+  }>>([]);
+  const [mentionAgents, setMentionAgents] = useState<Array<{
+    name: string; description: string; running: boolean;
+  }>>([]);
+
+  // Fetch agents + tasks when picker opens. Cheap calls; no debounce needed
+  // since we cache once per open.
+  const refreshMentionData = useCallback(async () => {
+    try {
+      const [aRes, tRes] = await Promise.all([api.acp.listAgents(), api.acp.listTasks()]);
+      if (aRes.ok && aRes.data) {
+        setMentionAgents(aRes.data.agents.map((a) => ({
+          name: a.name, description: a.description || a.transport, running: a.running,
+        })));
+      }
+      if (tRes.ok && tRes.data) {
+        setMentionTasks(tRes.data.tasks.map((t) => ({
+          name: t.name, agent_name: t.agent_name, description: t.description,
+        })));
+      }
+    } catch { /* ignore — picker shows whatever we already have */ }
+  }, []);
 
   const [showModelPicker, setShowModelPicker] = useState(false);
   const modelPickerRef = useRef<HTMLDivElement>(null);
@@ -257,13 +295,114 @@ export default function MessageInput() {
       } else {
         setShowSkillPicker(false);
       }
+
+      // @-mention picker detection. Only fires before any whitespace —
+      // matches the / picker semantics. While a mention chip is already
+      // active we suppress to avoid double-routing.
+      if (!mention && value.startsWith('@') && !value.includes(' ')) {
+        setShowMentionPicker(true);
+        setMentionPickerIndex(0);
+        void refreshMentionData();
+      } else {
+        setShowMentionPicker(false);
+      }
     },
-    [getFilteredSkillItems],
+    [getFilteredSkillItems, mention, refreshMentionData],
   );
 
   const handleSend = useCallback(async () => {
     const content = text.trim();
     if (!content && attachments.length === 0) return;
+
+    // ─── @mention dispatch: route to ACP agent / task ───
+    // Wins over every other branch (team / queue / plan / design / normal).
+    // Forwards the recent main-chat exchange so the @agent has context.
+    if (mention && content) {
+      const convId = currentSessionId;
+      setText('');
+      if (textareaRef.current) textareaRef.current.style.height = 'auto';
+      // Show the user's message verbatim — the @ chip already conveys
+      // routing. Don't prepend "@name " to the bubble; that confuses users
+      // into thinking the system added text on their behalf.
+      if (convId) {
+        useChatStore.getState().addMessage(convId, {
+          role: 'user',
+          content,
+          timestamp: Date.now(),
+        });
+        // Mark the session as streaming so the input lock + status bar
+        // accurately reflect that the @agent is working. Without this the
+        // UI would let the user fire another send while ACP is still
+        // pending, racing the response back into the wrong place.
+        useChatStore.getState().setStreaming(convId, true);
+      }
+      // Build context: last 8 turns from the runtime, text-only.
+      const runtime = convId ? useChatStore.getState().runtimes[convId] : undefined;
+      const history = runtime?.messages ?? [];
+      const contextMessages = history
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-9, -1) // exclude the just-added user turn
+        .map((m) => ({
+          role: m.role,
+          content: typeof m.content === 'string'
+            ? m.content
+            : Array.isArray(m.content)
+              ? m.content
+                  .map((c: any) => (typeof c === 'string' ? c : c?.text || ''))
+                  .filter(Boolean)
+                  .join('\n')
+              : '',
+        }))
+        .filter((m) => m.content);
+      const cwdForAgent = displayDir || '/tmp';
+      const target = mention.kind === 'task'
+        ? { task: mention.name }
+        : { agent: mention.name };
+      try {
+        const res = await api.acp.dispatch({
+          ...target,
+          prompt: content,
+          cwd: cwdForAgent,
+          springo_session_id: convId || undefined,
+          context_messages: contextMessages,
+          timeout: 600,
+        });
+        if (!res.ok || !res.data) {
+          throw new Error(res.error || 'Dispatch failed');
+        }
+        const text = res.data.text || '(agent returned no text)';
+        // Tag the bubble so it's clear the response came from the @agent,
+        // not from the default Springo model. Compact prefix the user can
+        // scan at a glance.
+        const tagged = `> via @${mention.label}\n\n${text}`;
+        if (convId) {
+          useChatStore.getState().addMessage(convId, {
+            role: 'assistant',
+            content: tagged,
+            timestamp: Date.now(),
+          });
+        }
+        // First turn on a fresh agent → got a task name back? Convert the
+        // mention so subsequent turns resume the same thread.
+        if (mention.kind === 'agent' && res.data.task) {
+          setMention({
+            kind: 'task',
+            name: res.data.task,
+            label: res.data.task,
+            description: `${mention.name} task`,
+            agentName: mention.name,
+          });
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        useUIStore.getState().showToast(`@${mention.label} failed: ${msg}`, 'error');
+      } finally {
+        // Always clear the streaming lock — even on error, otherwise the
+        // input box stays disabled forever after a failed dispatch.
+        if (convId) useChatStore.getState().setStreaming(convId, false);
+      }
+      return;
+    }
 
     // If an active team is running, send to team lead instead of new request
     if (activeTeamId && isStreaming && content) {
@@ -405,7 +544,7 @@ export default function MessageInput() {
     if (useUIStore.getState().activeSkill) {
       useUIStore.getState().clearActiveSkill();
     }
-  }, [text, attachments, isStreaming, currentSessionId, activeTeamId, teamModeEnabled, teamCollaborativeMode]);
+  }, [text, attachments, isStreaming, currentSessionId, activeTeamId, teamModeEnabled, teamCollaborativeMode, mention, displayDir]);
 
   const handleStop = useCallback(() => {
     if (currentSessionId) {
@@ -448,8 +587,77 @@ export default function MessageInput() {
     textareaRef.current?.focus();
   }, []);
 
+  // @-mention picker items + handlers. Defined before handleKeyDown because
+  // the keyboard handler captures them.
+  const filteredMentionItems = useMemo<MentionTarget[]>(() => {
+    if (!showMentionPicker) return [];
+    const q = text.startsWith('@') ? text.substring(1).toLowerCase() : '';
+    const taskItems: MentionTarget[] = mentionTasks
+      .filter((t) => !q || t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q))
+      .map((t) => ({
+        kind: 'task',
+        name: t.name,
+        label: t.name,
+        description: t.description || `${t.agent_name} task`,
+        agentName: t.agent_name,
+      }));
+    const agentItems: MentionTarget[] = mentionAgents
+      .filter((a) => !q || a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q))
+      .map((a) => ({
+        kind: 'agent',
+        name: a.name,
+        label: a.name,
+        description: a.description,
+      }));
+    return [...taskItems, ...agentItems];
+  }, [showMentionPicker, text, mentionTasks, mentionAgents]);
+
+  const selectMention = useCallback((target: MentionTarget) => {
+    setMention(target);
+    setShowMentionPicker(false);
+    setText('');
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.focus();
+    }
+  }, []);
+
+  const clearMention = useCallback(() => setMention(null), []);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // @-mention picker navigation (mirrors skill picker pattern)
+      if (showMentionPicker && filteredMentionItems.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setMentionPickerIndex((prev) => Math.min(prev + 1, filteredMentionItems.length - 1));
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setMentionPickerIndex((prev) => Math.max(prev - 1, 0));
+          return;
+        }
+        if (e.key === 'Enter' && !e.shiftKey && !(e.nativeEvent as KeyboardEvent).isComposing) {
+          e.preventDefault();
+          const item = filteredMentionItems[mentionPickerIndex];
+          if (item) selectMention(item);
+          return;
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setShowMentionPicker(false);
+          return;
+        }
+      }
+
+      // Backspace at empty prompt with active mention → clear chip
+      if (e.key === 'Backspace' && mention && text === '') {
+        e.preventDefault();
+        clearMention();
+        return;
+      }
+
       // Skill picker navigation
       if (showSkillPicker) {
         const query = text.substring(1).toLowerCase();
@@ -499,7 +707,7 @@ export default function MessageInput() {
         handleSend();
       }
     },
-    [showSkillPicker, text, getFilteredSkillItems, skillPickerIndex, selectBuiltInCommand, selectSkill, selectMcpServer, isStreaming, handleStop, handleSend],
+    [showSkillPicker, text, getFilteredSkillItems, skillPickerIndex, selectBuiltInCommand, selectSkill, selectMcpServer, isStreaming, handleStop, handleSend, showMentionPicker, filteredMentionItems, mentionPickerIndex, selectMention, mention, clearMention],
   );
 
   // Handle paste for images
@@ -708,6 +916,8 @@ export default function MessageInput() {
     ? getFilteredSkillItems(text.substring(1).toLowerCase())
     : [];
 
+  // Build the @-mention picker items: tasks first (resume), agents second
+  // (start fresh). Filter on the user's @-prefix query.
   const canSend = (text.trim() || attachments.length > 0) && !isStreaming;
 
 
@@ -724,6 +934,25 @@ export default function MessageInput() {
             {activeSkill.description ? activeSkill.description.substring(0, 60) + '...' : ''}
           </span>
           <button className="skill-clear" onClick={() => useUIStore.getState().clearActiveSkill()}>
+            &times;
+          </button>
+        </div>
+      )}
+
+      {/* Active @mention indicator: locks the next send to the chosen
+          ACP task or agent. Same visual slot as the skill chip. */}
+      {mention && (
+        <div className="active-skill-indicator">
+          <span className="skill-badge" style={{ background: 'var(--accent-soft)' }}>
+            @{mention.label}
+          </span>
+          <span className="skill-desc">
+            {mention.kind === 'task'
+              ? `Resume ${mention.agentName || 'agent'} task`
+              : `New thread on ${mention.name}`}
+            {mention.description ? ` — ${mention.description.slice(0, 60)}` : ''}
+          </span>
+          <button className="skill-clear" onClick={clearMention} title="Clear mention (Backspace)">
             &times;
           </button>
         </div>
@@ -848,19 +1077,21 @@ export default function MessageInput() {
             ref={textareaRef}
             id="message-input"
             placeholder={
-              activeSkill
-                ? `Using /${activeSkill.name} skill - Enter your request...`
-                : isStreaming && !activeTeamId
-                  ? queueItems.length > 0
-                    ? `Type to add to queue (${queueItems.length} queued)...`
-                    : 'Type to queue next message...'
-                  : teamCollaborativeMode
-                    ? 'Team Collaborative Mode - agents work together...'
-                    : teamModeEnabled
-                      ? 'Team Mode - multi-agent collaboration...'
-                      : planModeActive
-                        ? 'Describe your task — UltraPlan will analyze and create a plan...'
-                        : 'Message Springo... (/ for skills)'
+              mention
+                ? `Message @${mention.label}... (Backspace to clear)`
+                : activeSkill
+                  ? `Using /${activeSkill.name} skill - Enter your request...`
+                  : isStreaming && !activeTeamId
+                    ? queueItems.length > 0
+                      ? `Type to add to queue (${queueItems.length} queued)...`
+                      : 'Type to queue next message...'
+                    : teamCollaborativeMode
+                      ? 'Team Collaborative Mode - agents work together...'
+                      : teamModeEnabled
+                        ? 'Team Mode - multi-agent collaboration...'
+                        : planModeActive
+                          ? 'Describe your task — UltraPlan will analyze and create a plan...'
+                          : 'Message Springo... (/ for skills, @ for agents)'
             }
             rows={1}
             value={text}
@@ -983,6 +1214,48 @@ export default function MessageInput() {
           </div>
         </div>
       </div>
+
+      {/* @-mention picker — same visual class as skill picker so it picks
+          up the existing dropdown styling. Two sections: Active Tasks
+          (resume) + Coding Agents (start fresh). */}
+      {showMentionPicker && filteredMentionItems.length > 0 && (
+        <div className="skill-picker" id="mention-picker">
+          {filteredMentionItems.some((i) => i.kind === 'task') && (
+            <div className="skill-picker-group-label" style={{ padding: '6px 12px 2px', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Active Tasks
+            </div>
+          )}
+          {filteredMentionItems.map((item, idx) => {
+            const isFirstAgent = item.kind === 'agent' &&
+              (idx === 0 || filteredMentionItems[idx - 1].kind === 'task');
+            return (
+              <div key={`${item.kind}-${item.name}`}>
+                {isFirstAgent && (
+                  <div className="skill-picker-group-label" style={{ padding: '6px 12px 2px', fontSize: 'var(--font-size-xs)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                    Coding Agents
+                  </div>
+                )}
+                <div
+                  className={`skill-picker-item${idx === mentionPickerIndex ? ' active' : ''}`}
+                  onClick={() => selectMention(item)}
+                >
+                  <div className="skill-picker-name">
+                    @{item.label}
+                    <span className="skill-picker-type-badge skill-badge">
+                      {item.kind === 'task' ? 'task' : 'agent'}
+                    </span>
+                  </div>
+                  <div className="skill-picker-desc">
+                    {item.description.length > 80
+                      ? item.description.substring(0, 80) + '...'
+                      : item.description}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Skill picker (appended to input-area, like legacy) */}
       {showSkillPicker && filteredSkillItems.length > 0 && (

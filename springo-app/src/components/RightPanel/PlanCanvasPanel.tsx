@@ -8,20 +8,10 @@ export default function PlanCanvasPanel() {
   const planApprovalData = useUIStore((s) => s.planApprovalData);
   const hidePlanApproval = useUIStore((s) => s.hidePlanApproval);
 
-  const handleApprove = useCallback(() => {
+  const respondPlan = useCallback((decision: 'APPROVE_PLAN' | 'REJECT_PLAN') => {
     hidePlanApproval();
     const sessionId = useSessionStore.getState().currentSessionId;
-    if (sessionId) {
-      useChatStore.getState().sendMessage(sessionId, 'APPROVE_PLAN');
-    }
-  }, [hidePlanApproval]);
-
-  const handleReject = useCallback(() => {
-    hidePlanApproval();
-    const sessionId = useSessionStore.getState().currentSessionId;
-    if (sessionId) {
-      useChatStore.getState().sendMessage(sessionId, 'REJECT_PLAN');
-    }
+    if (sessionId) useChatStore.getState().sendMessage(sessionId, decision);
   }, [hidePlanApproval]);
 
   return (
@@ -55,8 +45,8 @@ export default function PlanCanvasPanel() {
             </div>
           )}
           <div className="plan-canvas-actions">
-            <button className="plan-reject-btn" onClick={handleReject}>Reject</button>
-            <button className="plan-approve-btn" onClick={handleApprove}>Approve</button>
+            <button className="plan-reject-btn" onClick={() => respondPlan('REJECT_PLAN')}>Reject</button>
+            <button className="plan-approve-btn" onClick={() => respondPlan('APPROVE_PLAN')}>Approve</button>
           </div>
         </div>
       ) : (

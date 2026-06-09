@@ -5,7 +5,7 @@
  * the analysis, review sections (with deps/risks/effort), approve/reject,
  * and execute approved plans.
  */
-import { useCallback, useRef, useEffect, useState } from 'react';
+import { useCallback, useMemo, useRef, useEffect, useState } from 'react';
 import { usePlanStore } from '@/stores/planStore';
 import type { PlanPhase } from '@/stores/planStore';
 import { useSessionStore } from '@/stores/sessionStore';
@@ -320,23 +320,40 @@ export default function PlanPanel() {
     };
   }, [currentPlan]);
 
+  // Single-pass derived stats. Without memoization the parent re-renders this
+  // 6+ times per plan-store update for what's effectively pure computation.
+  const stats = useMemo(() => {
+    const sections = currentPlan?.sections || [];
+    let approvedCount = 0;
+    let completedCount = 0;
+    let hasPending = false;
+    let allDecided = true;
+    let totalEffort = 0;
+    for (const s of sections) {
+      if (s.status === 'approved') approvedCount++;
+      if (s.status === 'completed') completedCount++;
+      if (s.status === 'pending') hasPending = true;
+      if (s.status !== 'approved' && s.status !== 'rejected') allDecided = false;
+      totalEffort += s.effort === 'high' ? 3 : s.effort === 'medium' ? 2 : 1;
+    }
+    const len = sections.length;
+    return {
+      sections,
+      approvedCount,
+      completedCount,
+      hasPending,
+      hasApproved: approvedCount > 0,
+      allDecided: len > 0 && allDecided,
+      progress: len > 0 ? Math.round((completedCount / len) * 100) : 0,
+      totalEffort,
+      effortLabel: totalEffort <= len ? 'Low' : totalEffort >= len * 2.5 ? 'High' : 'Medium',
+    };
+  }, [currentPlan]);
+
   if (!currentPlan && !isGenerating) return null;
 
-  const sections = currentPlan?.sections || [];
+  const { sections, hasApproved, hasPending, allDecided, approvedCount, completedCount, progress, totalEffort, effortLabel } = stats;
   const activeItem = sections.find((s) => s.id === activeSection) || sections[0];
-  const hasApproved = sections.some((s) => s.status === 'approved');
-  const hasPending = sections.some((s) => s.status === 'pending');
-  const allDecided = sections.every((s) => s.status === 'approved' || s.status === 'rejected');
-  const approvedCount = sections.filter((s) => s.status === 'approved').length;
-  const completedCount = sections.filter((s) => s.status === 'completed').length;
-  const progress = sections.length > 0 ? Math.round((completedCount / sections.length) * 100) : 0;
-
-  const totalEffort = sections.reduce((acc, s) => {
-    if (s.effort === 'high') return acc + 3;
-    if (s.effort === 'medium') return acc + 2;
-    return acc + 1;
-  }, 0);
-  const effortLabel = totalEffort <= sections.length ? 'Low' : totalEffort >= sections.length * 2.5 ? 'High' : 'Medium';
 
   return (
     <div className="plan-panel" ref={panelRef}>

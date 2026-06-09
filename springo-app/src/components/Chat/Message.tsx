@@ -7,10 +7,14 @@ import ArtifactCard from '@/components/ArtifactPanel/ArtifactCard';
 import type { ArtifactItemType as ArtifactType } from '@/components/ArtifactPanel/ArtifactCard';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import { openFileInCanvas } from '@/utils/openFileInCanvas';
+import { extractTextContent } from '@/utils/messageHelpers';
+import { renderWithClickablePaths } from '@/utils/clickablePaths';
+import { getPreviewKind } from '@/utils/filePreviewHtml';
 import { useUIStore } from '@/stores/uiStore';
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useTeamStore } from '@/stores/teamStore';
+import { api } from '@/services/api';
 import type { Message as MessageType, ContentBlock, ToolUseBlock } from '@/types';
 
 const PATH_KEYS = ['file_path', 'filePath', 'path', 'output_path', 'outputPath', 'filename'];
@@ -69,24 +73,6 @@ function formatTimestamp(ts?: number): string {
   );
 }
 
-function extractTextContent(content: string | ContentBlock[] | undefined): string {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((c) => {
-        if (typeof c === 'string') return c;
-        if (c.type === 'text') return c.text || '';
-        if (c.type === 'image') return '';
-        if (c.type === 'tool_use') return '';
-        if (c.type === 'tool_result') return '';
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n');
-  }
-  return '';
-}
 
 /**
  * Detect skill-wrapped user messages and extract the user's actual request.
@@ -111,14 +97,6 @@ function extractToolUseBlocks(content: string | ContentBlock[] | undefined): Too
   return content.filter((c): c is ToolUseBlock => c.type === 'tool_use');
 }
 
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 function formatToolInput(input: Record<string, unknown>): string {
   try {
     return JSON.stringify(input, null, 2);
@@ -139,43 +117,6 @@ function formatToolOutput(result: Record<string, unknown> | null | undefined, is
   } catch {
     return String(result);
   }
-}
-
-// ==================== Clickable file paths in pre blocks ====================
-
-const FILE_PATH_RE = /((?:\/[\w.+@-]+){2,}(?:\.[\w]+)?|~\/[\w.+@/-]+)/g;
-
-function renderWithClickablePaths(text: string): React.ReactNode[] {
-  const escaped = escapeHtml(text);
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  // Re-run regex on escaped text — file paths don't contain HTML special chars
-  FILE_PATH_RE.lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = FILE_PATH_RE.exec(escaped)) !== null) {
-    if (match.index > lastIndex) {
-      parts.push(<span key={`t-${lastIndex}`} dangerouslySetInnerHTML={{ __html: escaped.slice(lastIndex, match.index) }} />);
-    }
-    const path = match[1];
-    parts.push(
-      <span
-        key={`p-${match.index}`}
-        className="clickable-path"
-        title={`Open ${path}`}
-        onClick={() => window.electronAPI?.openPath(path)}
-      >
-        {path}
-      </span>,
-    );
-    lastIndex = match.index + match[0].length;
-  }
-  if (parts.length === 0) {
-    return [<span key="all" dangerouslySetInnerHTML={{ __html: escaped }} />];
-  }
-  if (lastIndex < escaped.length) {
-    parts.push(<span key={`t-${lastIndex}`} dangerouslySetInnerHTML={{ __html: escaped.slice(lastIndex) }} />);
-  }
-  return parts;
 }
 
 // ==================== ToolUse type from store ====================
@@ -365,22 +306,13 @@ function ToolContainer({ tools, isStreaming = false }: { tools: ToolUseRuntime[]
 
 // ==================== File Artifact Card (reads fresh from disk on click) ====================
 
-const FILE_PREVIEW_EXTENSIONS: Record<string, ArtifactType> = {
-  '.md': 'markdown', '.markdown': 'markdown', '.mdx': 'markdown',
-  '.html': 'html', '.htm': 'html', '.svg': 'svg',
-  '.txt': 'markdown', '.log': 'markdown',
-  '.json': 'markdown', '.yaml': 'markdown', '.yml': 'markdown',
-  '.xml': 'markdown', '.csv': 'markdown',
-  '.ts': 'markdown', '.tsx': 'markdown', '.js': 'markdown', '.jsx': 'markdown',
-  '.py': 'markdown', '.go': 'markdown', '.rs': 'markdown', '.java': 'markdown',
-  '.css': 'markdown', '.scss': 'markdown',
-  '.sh': 'markdown', '.bash': 'markdown', '.zsh': 'markdown',
-  '.toml': 'markdown', '.ini': 'markdown', '.sql': 'markdown',
-};
-
 function getFilePreviewType(path: string): ArtifactType | null {
-  const ext = path.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase();
-  return ext ? FILE_PREVIEW_EXTENSIONS[ext] ?? null : null;
+  const kind = getPreviewKind(path);
+  // PreviewKind shares its identifier set with ArtifactItemType for the
+  // text/html/svg subset; image/excalidraw/drawio aren't reachable from a path.
+  return kind && kind !== 'image' && kind !== 'excalidraw' && kind !== 'drawio'
+    ? (kind as ArtifactType)
+    : null;
 }
 
 /** Artifact card for tool-modified files. Reads latest content from disk on click. */
@@ -486,13 +418,8 @@ function AskUserOptions({ teamId, agentName, options }: {
       });
     }
 
-    // Send to backend
     try {
-      await fetch(`http://127.0.0.1:8081/v1/teams/${teamId}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: label, recipient: 'team-lead' }),
-      });
+      await api.teams.message(teamId, { content: label, recipient: 'team-lead' });
     } catch (err) {
       console.error('Failed to send ask_user reply:', err);
     }
@@ -585,58 +512,43 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
     const msgId = (message as any).id || message.timestamp || 0;
     const uStore = useUnifiedArtifactStore.getState();
 
-    if (parsed.op === 'create') {
-      const stableId = parsed.id || `art-msg-${msgId}-0`;
-      if (uStore.artifacts[stableId]) return;
-      const files = parsed.files.length > 0
-        ? parsed.files.map(f => ({ path: f.path, type: f.fileType, content: f.content }))
-        : [];
-      if (files.length === 0) return;
-      uStore.createArtifact({
-        id: stableId,
-        name: parsed.title,
-        icon: parsed.icon,
-        type: parsed.artifactType,
-        files,
-      });
-      return;
-    }
-
-    if (parsed.op === 'patch') {
-      const targetId = parsed.id;
-      if (!uStore.artifacts[targetId]) return;
-      const patchKey = `patch-${msgId}`;
-      const art = uStore.artifacts[targetId];
-      if (art.versions.some(v => v.id.includes(patchKey))) return;
-      if (parsed.files.length === 0) return;
-      uStore.applyPatch(targetId, parsed.files);
-      return;
-    }
-
-    if (parsed.op === 'action') {
-      const iframe = document.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
-      iframe?.contentWindow?.postMessage({
-        type: 'springo:chat-action',
-        payload: parsed.payload,
-      }, '*');
-      return;
-    }
-
-    if (parsed.op === 'delete') {
-      // Guard against accidental re-deletion if the user scrolls the same
-      // message back into view — deleteArtifact on an unknown id is a no-op
-      // but would still round-trip to the backend uselessly.
-      if (!uStore.artifacts[parsed.id]) return;
-      uStore.deleteArtifact(parsed.id);
-      return;
-    }
-
-    if (parsed.op === 'finalize') {
-      // Model is announcing "I'm done editing this artifact". Flip it out
-      // of live mode so the canvas badge clears immediately instead of
-      // waiting for the 5s auto-finalize timer.
-      if (!uStore.artifacts[parsed.id]) return;
-      uStore.finalizeArtifact(parsed.id);
+    switch (parsed.op) {
+      case 'create': {
+        const stableId = parsed.id || `art-msg-${msgId}-0`;
+        if (uStore.artifacts[stableId]) return;
+        if (parsed.files.length === 0) return;
+        uStore.createArtifact({
+          id: stableId,
+          name: parsed.title,
+          icon: parsed.icon,
+          type: parsed.artifactType,
+          files: parsed.files.map((f) => ({ path: f.path, type: f.fileType, content: f.content })),
+        });
+        return;
+      }
+      case 'patch': {
+        const art = uStore.artifacts[parsed.id];
+        if (!art) return;
+        const patchKey = `patch-${msgId}`;
+        if (art.versions.some((v) => v.id.includes(patchKey))) return;
+        if (parsed.files.length === 0) return;
+        uStore.applyPatch(parsed.id, parsed.files);
+        return;
+      }
+      case 'action': {
+        const iframe = document.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
+        iframe?.contentWindow?.postMessage({ type: 'springo:chat-action', payload: parsed.payload }, '*');
+        return;
+      }
+      case 'delete':
+        // deleteArtifact on a missing id is harmless but still round-trips to the backend.
+        if (!uStore.artifacts[parsed.id]) return;
+        uStore.deleteArtifact(parsed.id);
+        return;
+      case 'finalize':
+        if (!uStore.artifacts[parsed.id]) return;
+        uStore.finalizeArtifact(parsed.id);
+        return;
     }
   }, [message.role, rawText, message.timestamp]);
 

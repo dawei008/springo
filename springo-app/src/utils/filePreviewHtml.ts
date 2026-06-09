@@ -9,6 +9,8 @@
  * reliable way to display non-executable file previews.
  */
 
+import { escapeHtml } from './escapeHtml';
+
 export type PreviewKind = 'markdown' | 'html' | 'image' | 'svg' | 'excalidraw' | 'drawio';
 
 const PREVIEW_EXTENSIONS: Record<string, PreviewKind> = {
@@ -41,15 +43,6 @@ const HLJS_LANG_BY_EXT: Record<string, string> = {
   '.toml': 'ini', '.ini': 'ini', '.conf': 'plaintext',
   '.sql': 'sql', '.graphql': 'graphql',
 };
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 export function buildFilePreviewHtml(filePath: string, content: string, kind: PreviewKind): string {
   const ext = filePath.match(/\.[a-z0-9]+$/i)?.[0]?.toLowerCase() || '';

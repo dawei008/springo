@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { genId } from '@/utils/genId';
 
 export interface ToolPanelState {
   toolName: string;
@@ -268,7 +269,7 @@ export const useUIStore = create<UIState>((set, get) => ({
   toggleQueue: () => set((state) => ({ queueEnabled: !state.queueEnabled })),
   setQueueEnabled: (enabled) => set({ queueEnabled: enabled }),
   enqueueItem: (sessionId, content, attachments = []) => {
-    const item: QueueItem = { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, content, attachments, addedAt: Date.now() };
+    const item: QueueItem = { id: genId('q'), content, attachments, addedAt: Date.now() };
     set((state) => {
       const map = { ...state.sessionQueueMap };
       map[sessionId] = [...(map[sessionId] || []), item];
@@ -303,4 +304,4 @@ export const useUIStore = create<UIState>((set, get) => ({
   },
 }));
 
-if (typeof window !== 'undefined') (window as any).__uiStore = useUIStore;
+if (typeof window !== 'undefined' && import.meta.env.DEV) (window as any).__uiStore = useUIStore;

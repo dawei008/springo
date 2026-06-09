@@ -78,14 +78,19 @@ _poll_count = 0
 async def drain_queue() -> List[Dict[str, Any]]:
     """Return and clear all pending requests for the renderer."""
     global _poll_count
+    _poll_count += 1
+    # Snapshot-and-clear under the lock so the check/drain is atomic w.r.t.
+    # enqueue_request() (avoids any TOCTOU on _queue). The renderer polls every
+    # 500ms; an uncontended asyncio.Lock acquire here is effectively free.
     async with _lock:
+        if not _queue:
+            if _poll_count % 20 == 1:
+                logger.debug(f"[canvas-bridge] Poll #{_poll_count}: queue empty, pending={len(_pending)}")
+            return []
         items = list(_queue)
         _queue.clear()
-    _poll_count += 1
     if items:
         logger.info(f"[canvas-bridge] Drained {len(items)} request(s): {[i['id'] for i in items]}")
-    elif _poll_count % 20 == 1:  # Log every 10 seconds of empty polls
-        logger.debug(f"[canvas-bridge] Poll #{_poll_count}: queue empty, pending={len(_pending)}")
     return items
 
 

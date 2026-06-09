@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { TeamAgent, TeamTask } from '@/types';
+import { genId } from '@/utils/genId';
 
 // ==================== Role Configuration ====================
 
@@ -99,8 +100,8 @@ interface TeamState {
   setTeamSpawned: (teamId: string, agents: TeamAgent[], userRequest: string) => void;
   setTeamPlanning: (teamId: string) => void;
   setTeamSynthesizing: (teamId: string) => void;
-  setTeamComplete: (teamId: string, result?: string) => void;
-  setTeamError: (teamId: string, error: string) => void;
+  setTeamComplete: (teamId: string) => void;
+  setTeamError: (teamId: string) => void;
   resetTeam: () => void;
 
   // Agent updates
@@ -296,12 +297,12 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     set(setTeamState(get(), teamId, { teamStatus: 'synthesizing' }));
   },
 
-  setTeamComplete: (teamId, _result?) => {
+  setTeamComplete: (teamId) => {
     if (!guardTeam(get(), teamId)) return;
     set(setTeamState(get(), teamId, { teamStatus: 'complete' }));
   },
 
-  setTeamError: (teamId, _error) => {
+  setTeamError: (teamId) => {
     if (!guardTeam(get(), teamId)) return;
     set(setTeamState(get(), teamId, { teamStatus: 'error' }));
   },
@@ -430,7 +431,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
     // Skip user ↔ team-lead messages (they belong in main chat)
     if (sender === 'user' || recipient === 'user') return;
     const msg: StoreMessage = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: genId('msg'),
       sender, recipient, content, summary, isBroadcast, timestamp: Date.now(),
     };
     set((state) => appendTeamMsg(state, teamId, msg));
@@ -520,7 +521,7 @@ export const useTeamStore = create<TeamState>((set, get) => ({
           messagesList = (msgData.messages || [])
             .filter((m: Record<string, unknown>) => m.sender !== 'user' && m.recipient !== 'user')
             .map((m: Record<string, unknown>) => ({
-              id: (m.message_id as string) || `msg-${Math.random().toString(36).slice(2, 8)}`,
+              id: (m.message_id as string) || genId('msg'),
               sender: (m.sender as string) || '',
               recipient: (m.recipient as string) || '',
               content: (m.content as string) || '',

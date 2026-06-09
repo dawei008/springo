@@ -152,13 +152,6 @@ class SSEToolResult(BaseModel):
 
 
 # Plan Mode Models
-class PlanStep(BaseModel):
-    """计划步骤"""
-    description: str
-    tool_name: Optional[str] = None
-    tool_input: Optional[Dict[str, Any]] = None
-
-
 class PlanSection(BaseModel):
     """计划段落"""
     id: str

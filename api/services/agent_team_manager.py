@@ -15,7 +15,7 @@ from ..models.teams import (
 )
 from .bedrock import get_bedrock_service, BedrockService
 from .vendor_router import get_vendor_router
-from .model_registry import get_model_info, get_model_limits
+from .model_registry import get_api_format, get_model_info, get_model_limits
 from .session_state import get_working_dir
 from .tool_manager import get_tool_manager
 from .context_manager import (
@@ -228,10 +228,6 @@ def _build_body(model_name: str, max_tokens: int, system: str, messages: list,
     return body
 
 
-def _get_api_format(model_name: str) -> str:
-    """Return 'anthropic' or 'converse' for *model_name*."""
-    info = get_model_info(model_name)
-    return info["api_format"] if info else "anthropic"
 
 
 class AgentTeamManager:
@@ -815,7 +811,7 @@ class AgentTeamManager:
         )
 
         model_id = self.bedrock.get_bedrock_model_id(orchestrator.role.model)
-        orch_api_format = _get_api_format(orchestrator.role.model)
+        orch_api_format = get_api_format(orchestrator.role.model)
 
         # Load a limited tool set for orchestrator decomposition.
         # Only lightweight tools for memory retrieval and basic project awareness.
@@ -1053,7 +1049,7 @@ class AgentTeamManager:
                 )
 
                 model_id = self.bedrock.get_bedrock_model_id(agent.role.model)
-                agent_api_format = _get_api_format(agent.role.model)
+                agent_api_format = get_api_format(agent.role.model)
 
                 # ---- Stream response & parse SSE events ----
                 content_blocks = []
@@ -1263,7 +1259,7 @@ class AgentTeamManager:
             agent.role.model, 4096,
             _with_working_dir(agent.role.system_prompt), messages,
         )
-        ea_api_format = _get_api_format(agent.role.model)
+        ea_api_format = get_api_format(agent.role.model)
 
         try:
             agent.status = "executing"
@@ -1326,7 +1322,7 @@ class AgentTeamManager:
             orchestrator.role.model, 8192,
             _with_working_dir(orchestrator.role.system_prompt), messages,
         )
-        synth_api_format = _get_api_format(orchestrator.role.model)
+        synth_api_format = get_api_format(orchestrator.role.model)
 
         full_text = ""
         try:
@@ -1381,7 +1377,7 @@ class AgentTeamManager:
             orchestrator.role.model, 8192,
             _with_working_dir(orchestrator.role.system_prompt), messages,
         )
-        synth_ns_api_format = _get_api_format(orchestrator.role.model)
+        synth_ns_api_format = get_api_format(orchestrator.role.model)
 
         try:
             response = await _retry_bedrock_call(

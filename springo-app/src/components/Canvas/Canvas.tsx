@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUnifiedArtifactStore } from '@/stores/unifiedArtifactStore';
 import type { Artifact, InternalComponentId } from '@/stores/unifiedArtifactStore';
 import { ARTIFACT_TEMPLATES } from '@/data/artifactTemplates';
@@ -12,6 +12,9 @@ import RecordingCanvasPanel from '@/components/RightPanel/RecordingCanvasPanel';
 import KBGraphPanel from '@/components/RightPanel/KBGraphPanel';
 import PlanPanel from '@/components/PlanPanel/PlanPanel';
 import Markdown from '@/components/common/Markdown';
+import { buildFilePreviewHtml } from '@/utils/filePreviewHtml';
+import { BACKEND_BASE_URL } from '@/stores/unifiedArtifactStore';
+import { prefillMessageInput } from '@/utils/prefillMessageInput';
 
 /**
  * Native document renderer (Quick-inspired). When an artifact is a `document`
@@ -51,64 +54,17 @@ function isDocumentArtifact(a: Artifact): boolean {
 }
 
 /**
- * Detect single-file artifacts that have a better viewer than the generic
- * iframe. Inspired by Quick's `doc_type` routing — they avoid the iframe
- * for known formats and ship a native viewer per type. We piggyback on the
- * existing iframe path for everything else, so adding a new type is
- * additive and never breaks unrecognized content.
+ * For PDFs we bypass the JSON read_file path (which can't carry binary) and
+ * stream from the backend's /raw endpoint so Electron's bundled PDF viewer
+ * takes over. SVG/JSON go through the standard iframe path via
+ * `buildFilePreviewHtml` (single-file artifact rewritten to index.html).
  */
-type SpecialDocKind = 'svg' | 'json' | 'pdf';
-
-function detectSpecialKind(a: Artifact): { kind: SpecialDocKind; content: string; path: string } | null {
-  // Only single-file artifacts of these types get the native viewer.
-  // Multi-file projects always go through the iframe (might reference other
-  // files via relative paths).
-  if (a.files.length !== 1) return null;
-  const f = a.files[0];
-  if (/\.svg$/i.test(f.path)) return { kind: 'svg', content: f.content, path: f.path };
-  if (/\.json$/i.test(f.path) || f.type === 'json') return { kind: 'json', content: f.content, path: f.path };
-  if (/\.pdf$/i.test(f.path)) return { kind: 'pdf', content: f.content, path: f.path };
-  return null;
-}
-
-function SvgRenderer({ content, path }: { content: string; path: string }) {
-  // Serve the raw SVG inside an <object> so it executes its own scripts in a
-  // sandboxed context AND we can crisp-zoom without rasterizing. Using
-  // dangerouslySetInnerHTML on a wrapper would also work for static SVGs but
-  // risks XSS via <script> in user content; <object> respects the SVG's own
-  // sandbox semantics.
-  const url = `data:image/svg+xml;utf8,${encodeURIComponent(content)}`;
-  return (
-    <div className="canvas-svg-stage">
-      <img className="canvas-svg-img" src={url} alt={path} />
-    </div>
-  );
-}
-
-function JsonRenderer({ content, path }: { content: string; path: string }) {
-  let pretty = content;
-  let parseError: string | null = null;
-  try {
-    pretty = JSON.stringify(JSON.parse(content), null, 2);
-  } catch (e) {
-    parseError = (e as Error).message;
-  }
-  return (
-    <div className="canvas-json-stage">
-      <div className="canvas-json-header">
-        <span className="canvas-json-path">{path}</span>
-        {parseError && <span className="canvas-json-err">⚠ {parseError}</span>}
-      </div>
-      <pre className="canvas-json-body">{pretty}</pre>
-    </div>
-  );
+function isPdfArtifact(a: Artifact): boolean {
+  return a.files.length === 1 && /\.pdf$/i.test(a.files[0].path);
 }
 
 function PdfRenderer({ artifactId, path }: { artifactId: string; path: string }) {
-  // Backend's /raw/{path} endpoint streams the file with the right
-  // mimetype, so Electron's bundled PDF viewer takes over. The JSON
-  // /files/{path} endpoint can't carry binary content (it reads as utf-8).
-  const url = `http://127.0.0.1:8081/v1/artifacts/${encodeURIComponent(artifactId)}/raw/${path.split('/').map(encodeURIComponent).join('/')}`;
+  const url = `${BACKEND_BASE_URL}/v1/artifacts/${encodeURIComponent(artifactId)}/raw/${path.split('/').map(encodeURIComponent).join('/')}`;
   return (
     <div className="canvas-pdf-stage">
       <embed src={url} type="application/pdf" className="canvas-pdf-embed" />
@@ -291,28 +247,25 @@ function ActionBar({ artifact, containerRef, isFullscreen, onToggleFullscreen }:
     setMenuOpen(false);
   }, [artifact.id, artifact.pinned, pinArtifact, unpinArtifact]);
 
+  const getRenderedHtml = useCallback((): string | null => {
+    const iframe = containerRef.current?.querySelector<HTMLIFrameElement>('.artifact-iframe');
+    return iframe?.srcdoc || null;
+  }, []);
+
   const handleOpenExternal = useCallback(() => {
-    if (!window.electronAPI?.openArtifactWindow || !containerRef.current) return;
-    const iframe = containerRef.current.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
-    if (iframe?.srcdoc) window.electronAPI.openArtifactWindow(iframe.srcdoc, artifact.name);
+    if (!window.electronAPI?.openArtifactWindow) return;
+    const html = getRenderedHtml();
+    if (html) window.electronAPI.openArtifactWindow(html, artifact.name);
     setMenuOpen(false);
-  }, [artifact.name, containerRef]);
+  }, [artifact.name, getRenderedHtml]);
 
   const handleEditWithChat = useCallback(() => {
-    const el = document.getElementById('message-input') as HTMLTextAreaElement | null;
-    if (!el) return;
     const placeholder = `修改 artifact「${artifact.name}」(${artifact.id}): `;
-    const nativeSet = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    nativeSet?.call(el, placeholder + (el.value || ''));
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.focus();
-    try { el.setSelectionRange(placeholder.length, placeholder.length); } catch { /* ignore */ }
+    prefillMessageInput(placeholder, { prepend: true, caret: placeholder.length });
   }, [artifact.id, artifact.name]);
 
   const handleDownload = useCallback(() => {
-    if (!containerRef.current) return;
-    const iframe = containerRef.current.querySelector('.artifact-iframe') as HTMLIFrameElement | null;
-    const html = iframe?.srcdoc;
+    const html = getRenderedHtml();
     if (!html) return;
     const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -324,7 +277,7 @@ function ActionBar({ artifact, containerRef, isFullscreen, onToggleFullscreen }:
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }, [artifact.name, containerRef]);
+  }, [artifact.name, getRenderedHtml]);
 
   return (
     <div className="canvas-action-bar">
@@ -559,7 +512,7 @@ export default function Canvas() {
 
   const isInternal = !!activeArtifact.internalComponent;
   const isDocument = !isInternal && isDocumentArtifact(activeArtifact);
-  const specialKind = !isInternal && !isDocument ? detectSpecialKind(activeArtifact) : null;
+  const isPdf = !isInternal && !isDocument && isPdfArtifact(activeArtifact);
 
   return (
     <div className={`canvas-panel${isFullscreen ? ' fullscreen' : ''}`} ref={canvasRef}>
@@ -582,27 +535,54 @@ export default function Canvas() {
         )}
       </div>
       <div className="canvas-body">
-        {isInternal ? (
-          <InternalRenderer component={activeArtifact.internalComponent!} />
-        ) : isDocument ? (
-          <DocumentRenderer artifact={activeArtifact} />
-        ) : specialKind?.kind === 'svg' ? (
-          <SvgRenderer content={specialKind.content} path={specialKind.path} />
-        ) : specialKind?.kind === 'json' ? (
-          <JsonRenderer content={specialKind.content} path={specialKind.path} />
-        ) : specialKind?.kind === 'pdf' ? (
-          <PdfRenderer artifactId={activeArtifactId} path={specialKind.path} />
-        ) : (
-          <ArtifactIframe
-            artifactId={activeArtifactId}
-            files={activeArtifact.files}
-            state={activeArtifact.state}
-          />
-        )}
+        <CanvasBody
+          artifact={activeArtifact}
+          artifactId={activeArtifactId}
+          isInternal={isInternal}
+          isDocument={isDocument}
+          isPdf={isPdf}
+        />
       </div>
       {!isInternal && <VersionTimeline artifact={activeArtifact} />}
     </div>
   );
+}
+
+function CanvasBody({
+  artifact,
+  artifactId,
+  isInternal,
+  isDocument,
+  isPdf,
+}: {
+  artifact: Artifact;
+  artifactId: string;
+  isInternal: boolean;
+  isDocument: boolean;
+  isPdf: boolean;
+}) {
+  const previewFiles = useMemo(() => {
+    if (isInternal || isDocument || isPdf) return null;
+    if (artifact.files.length !== 1) return null;
+    const f = artifact.files[0];
+    let kind: 'svg' | 'markdown' | null = null;
+    if (/\.svg$/i.test(f.path)) kind = 'svg';
+    else if (/\.json$/i.test(f.path) || f.type === 'json') kind = 'markdown';
+    if (!kind) return null;
+    const content = kind === 'markdown' && f.type === 'json'
+      ? (() => { try { return JSON.stringify(JSON.parse(f.content), null, 2); } catch { return f.content; } })()
+      : f.content;
+    const html = buildFilePreviewHtml(f.path, content, kind);
+    return [{ path: 'index.html', type: 'html' as const, content: html }];
+  }, [artifact.files, isInternal, isDocument, isPdf]);
+
+  if (isInternal) return <InternalRenderer component={artifact.internalComponent!} />;
+  if (isDocument) return <DocumentRenderer artifact={artifact} />;
+  if (isPdf) return <PdfRenderer artifactId={artifactId} path={artifact.files[0].path} />;
+  if (previewFiles) {
+    return <ArtifactIframe artifactId={artifactId} files={previewFiles} state={artifact.state} />;
+  }
+  return <ArtifactIframe artifactId={artifactId} files={artifact.files} state={artifact.state} />;
 }
 
 /**

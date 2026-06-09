@@ -3,6 +3,7 @@ import { useTeamStore, getRoleConfig, type AgentStatus, type StoreAgent, type St
 import { useChatStore } from '@/stores/chatStore';
 import { useSessionStore } from '@/stores/sessionStore';
 import { useUIStore } from '@/stores/uiStore';
+import { api } from '@/services/api';
 
 // ─── Role SVG Paths ───
 
@@ -255,13 +256,10 @@ export default function TeamPanel() {
       useChatStore.getState().stopTask(convId);
     }
 
-    // 2. Tell backend to shut down the team (best-effort)
     try {
-      await fetch(`http://127.0.0.1:8081/v1/teams/${activeTeamId}/shutdown`, {
-        method: 'POST',
-      });
+      await api.teams.shutdown(activeTeamId);
     } catch {
-      // Ignore — stream is already aborted
+      // Stream is already aborted; backend cleanup is best-effort.
     }
 
     // 3. Update team panel status
@@ -276,9 +274,7 @@ export default function TeamPanel() {
     // Stop current team if running
     if (running) {
       if (convId) useChatStore.getState().stopTask(convId);
-      try {
-        await fetch(`http://127.0.0.1:8081/v1/teams/${activeTeamId}/shutdown`, { method: 'POST' });
-      } catch { /* ignore */ }
+      try { await api.teams.shutdown(activeTeamId); } catch { /* ignore */ }
     }
 
     // Clear team state so next message spawns a new team
@@ -329,10 +325,9 @@ export default function TeamPanel() {
 
   const loadSavedTeams = useCallback(async () => {
     try {
-      const res = await fetch('http://127.0.0.1:8081/v1/teams');
-      if (!res.ok) return;
-      const data = await res.json();
-      setSavedTeams(data.teams || []);
+      const res = await api.teams.list();
+      if (!res.ok || !res.data) return;
+      setSavedTeams((res.data.teams as unknown as typeof savedTeams) || []);
     } catch { /* ignore */ }
   }, []);
 

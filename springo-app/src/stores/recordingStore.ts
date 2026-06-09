@@ -93,10 +93,7 @@ export const useRecordingStore = create<RecordingState>()((set, get) => {
       });
 
       mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunks.push(e.data);
-          set({ chunks: [...chunks] });
-        }
+        if (e.data.size > 0) chunks.push(e.data);
       };
 
       mediaRecorder.start(1000); // collect data every second

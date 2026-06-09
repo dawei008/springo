@@ -109,9 +109,8 @@ class MessageAutoRequest(MessageRequest):
 
 class ToolExecuteRequest(BaseModel):
     """工具执行请求"""
-    tool_name: str = Field(..., description="Tool name to execute")
-    tool_input: Dict[str, Any] = Field(default_factory=dict, description="Tool input parameters")
-    tool_use_id: Optional[str] = Field(default=None, description="Tool use ID for tracking")
+    name: str = Field(..., description="Tool name")
+    input: Dict[str, Any] = Field(default_factory=dict, description="Tool input parameters")
 
 
 class SessionCreateRequest(BaseModel):

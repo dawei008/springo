@@ -1,4 +1,5 @@
 import { useMemo, useCallback } from 'react'
+import { escapeHtml } from '@/utils/escapeHtml'
 
 interface ExcalidrawElement {
   id?: string
@@ -22,14 +23,6 @@ interface ExcalidrawElement {
 interface ExcalidrawPreviewProps {
   elements: unknown[]
   onOpen?: () => void
-}
-
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
 }
 
 /**

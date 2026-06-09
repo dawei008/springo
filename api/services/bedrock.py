@@ -427,7 +427,7 @@ For complex tasks, use `enter_plan_mode` first:
    - If creating multiple files, do them in separate tool calls, not all at once
 
 8. **Web search (MCP only)**:
-   - Use MCP tool: web-search__brave_web_search (built-in web_search removed)
+   - Use MCP tool: web-search__brave_web_search
    - **IMPORTANT**: When user asks for "最新"/"latest"/"recent" content, ALWAYS use freshness parameter:
      - freshness="pd" (past day) - for breaking news
      - freshness="pw" (past week) - RECOMMENDED for "最新" queries
@@ -719,16 +719,6 @@ class BedrockService:
         """获取 Bedrock 模型 ID"""
         return get_bedrock_id(model)
 
-    @staticmethod
-    def get_api_format(model: str) -> str:
-        """Return the api_format for *model* ('anthropic' or 'converse').
-
-        Defaults to 'anthropic' for backward compatibility when the model
-        is not found in the registry.
-        """
-        info = get_model_info(model)
-        return info["api_format"] if info else "anthropic"
-    
     def convert_request_to_bedrock(
         self,
         request: Dict[str, Any],
@@ -765,22 +755,22 @@ class BedrockService:
             # Beta features
             bedrock_body["anthropic_beta"] = ["fine-grained-tool-streaming-2025-05-14"]
 
-            # Adaptive thinking for Opus 4.7 (only supported mode; Bedrock accepts
+            # Adaptive thinking for Opus 4.7+ (only supported mode; Bedrock accepts
             # the same shape as Anthropic API).  Default: xhigh effort, summarized display.
-            if model == "claude-opus-4-7":
+            if model in ("claude-opus-4-7", "claude-opus-4-8"):
                 if request.get("thinking_enabled"):
                     effort = request.get("thinking_effort") or "xhigh"
                     if effort not in ("low", "medium", "high", "xhigh", "max"):
                         effort = "xhigh"
                     bedrock_body["thinking"] = {"type": "adaptive", "display": "summarized"}
                     bedrock_body["output_config"] = {"effort": effort}
-                    logger.info(f"[Thinking] Opus 4.7 adaptive thinking enabled, effort={effort}")
+                    logger.info(f"[Thinking] {model} adaptive thinking enabled, effort={effort}")
                 else:
-                    logger.info(f"[Thinking] Opus 4.7 thinking DISABLED (thinking_enabled={request.get('thinking_enabled')!r})")
+                    logger.info(f"[Thinking] {model} thinking DISABLED (thinking_enabled={request.get('thinking_enabled')!r})")
 
         # Copy optional parameters
-        # Opus 4.7 does not accept temperature/top_p/top_k
-        _no_sampling = model in ("claude-opus-4-7",)
+        # Opus 4.7+ does not accept temperature/top_p/top_k
+        _no_sampling = model in ("claude-opus-4-7", "claude-opus-4-8")
         for key in ["temperature", "top_p", "top_k", "stop_sequences", "tool_choice"]:
             if _no_sampling and key in ("temperature", "top_p", "top_k"):
                 continue
@@ -796,10 +786,14 @@ class BedrockService:
             system_prompt = system_prompt.replace("{SPRINGO_MD_PLACEHOLDER}", springo_md)
         else:
             system_prompt = system_prompt.replace("{SPRINGO_MD_PLACEHOLDER}", "")
+        # working_dir + design_mode used to be appended to the static system
+        # prompt. They vary per session / per turn and were busting the cache.
+        # We collect them here and inject into the dynamic block below.
+        per_turn_system_parts: list[str] = []
         if working_dir:
             import os
             springo_config_dir = os.path.expanduser("~/.springo")
-            system_prompt += (
+            per_turn_system_parts.append(
                 f"\n\n## Working Directory & Springo Config\n"
                 f"- **Working Directory**: `{working_dir}` — project code lives here\n"
                 f"- **Springo Config**: `{springo_config_dir}/` — settings, skills, sessions, scripts\n"
@@ -809,12 +803,9 @@ class BedrockService:
                 f"  - Project files: `path: \"{working_dir}\"`\n"
                 f"  - Skills/config: `path: \"{springo_config_dir}\"`\n"
             )
-        # Design mode: the user is in the /design flow. Detailed guidelines live in the
-        # `artifacts-design` skill. Artifact context is injected below as a separate
-        # system block so it can be cached independently.
         design_mode = request.get("design_mode", False)
         if design_mode:
-            system_prompt += (
+            per_turn_system_parts.append(
                 "\n\n## Design Mode Active\n\n"
                 "The user is in Springo's design flow. Call the `artifacts-design` skill "
                 "via `use_skill` to load the visual guidelines AND the Springo design tokens "
@@ -869,13 +860,14 @@ class BedrockService:
         except Exception as e:
             logger.debug(f"Memory injection skipped: {e}")
 
-        # Build the dynamic system block (artifact context + matched memory snippets).
-        # These change per-request but are independent of the stable base block — splitting
-        # them lets the base block stay cached while only this small tail gets rebuilt.
-        # Also used by the non-Anthropic (converse) path which doesn't support multi-block
+        # Build the dynamic system block (per-turn parts + artifact context +
+        # matched memory snippets). These change per-request but are independent
+        # of the stable base block — splitting them lets the base block stay
+        # cached while only this small tail gets rebuilt. Also used by the
+        # non-Anthropic (converse) path which doesn't support multi-block
         # system prompts — for those, we concatenate at the end.
         artifact_context = request.get("design_context")
-        dynamic_system_parts: list[str] = []
+        dynamic_system_parts: list[str] = list(per_turn_system_parts)
         if artifact_context:
             truncated = artifact_context[:50000]
             dynamic_system_parts.append(

@@ -5,6 +5,31 @@ JSON schemas for all MCP tools sent to Claude
 
 TOOL_DEFINITIONS = [
     {
+        "name": "mcp_call",
+        "description": (
+            "Invoke any tool on a configured MCP server. The server's full tool "
+            "schema is loaded on first use, so we don't pay the prompt cost for "
+            "all tools up front.\n\n"
+            "**Workflow:**\n"
+            "1. Pick a `server` from the list in this description.\n"
+            "2. If you don't know the exact `tool` name, call `tool_search(query=..., "
+            "auto_activate=true)` first — it lists every cached MCP tool.\n"
+            "3. Call `mcp_call(server=..., tool=..., args={...})` with the JSON "
+            "args the tool expects.\n\n"
+            "Available servers (list filled in dynamically):\n"
+            "{MCP_SERVER_LIST}"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "MCP server name, e.g. 'github'"},
+                "tool":   {"type": "string", "description": "Tool name on the server (without 'server__' prefix)"},
+                "args":   {"type": "object", "description": "JSON arguments forwarded to the tool"},
+            },
+            "required": ["server", "tool"],
+        },
+    },
+    {
         "name": "tool_search",
         "description": """Search for deferred tools and optionally auto-activate the best match.
 

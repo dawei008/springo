@@ -13,15 +13,16 @@ export default function RecordingBar() {
   const isRecording = useRecordingStore((s) => s.isRecording);
   const isPaused = useRecordingStore((s) => s.isPaused);
   const elapsed = useRecordingStore((s) => s.elapsed);
-  const timerRef = useRef<ReturnType<typeof setInterval>>();
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Tick the elapsed timer
   useEffect(() => {
     if (isRecording) {
       timerRef.current = setInterval(() => {
         useRecordingStore.getState().tick();
       }, 1000);
-      return () => clearInterval(timerRef.current);
+      return () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+      };
     }
   }, [isRecording]);
 

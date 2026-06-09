@@ -90,27 +90,34 @@ async function fetchWithRetry(
   externalSignal?: AbortSignal,
 ): Promise<Response> {
   let lastError: Error | undefined;
+
+  // Track the current attempt's controller via a stable reference so the
+  // external-abort listener can be registered once per call (not once per
+  // retry, which would accumulate listeners across attempts).
+  let currentController: AbortController | undefined;
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      throw new DOMException('Request aborted by user', 'AbortError');
+    }
+    externalSignal.addEventListener('abort', () => currentController?.abort(), { once: true });
+  }
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
+    currentController = controller;
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    const onExternalAbort = () => controller.abort();
-    if (externalSignal) {
-      if (externalSignal.aborted) {
-        clearTimeout(timeoutId);
-        throw new DOMException('Request aborted by user', 'AbortError');
-      }
-      externalSignal.addEventListener('abort', onExternalAbort);
+    if (externalSignal?.aborted) {
+      clearTimeout(timeoutId);
+      throw new DOMException('Request aborted by user', 'AbortError');
     }
 
     try {
       const response = await fetch(url, { ...options, signal: controller.signal });
       clearTimeout(timeoutId);
-      externalSignal?.removeEventListener('abort', onExternalAbort);
       return response;
     } catch (e) {
       clearTimeout(timeoutId);
-      externalSignal?.removeEventListener('abort', onExternalAbort);
       lastError = e as Error;
 
       if (externalSignal?.aborted) {
@@ -188,6 +195,21 @@ function del<T = unknown>(endpoint: string, config?: Parameters<typeof apiCall>[
   return apiCall<T>(endpoint, { method: 'DELETE' }, config);
 }
 
+/**
+ * Hit a non-`/v1`-prefixed endpoint (`/health`, `/warmup`, etc.). Bypasses the
+ * automatic `/v1` prefix that `apiCall` adds.
+ */
+function fullUrlCall<T>(path: string, method: string = 'GET', body?: unknown) {
+  const baseUrl = getBaseUrl();
+  const url = `${baseUrl}${path}`;
+  const options: RequestInit = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  };
+  if (body != null) options.body = JSON.stringify(body);
+  return apiCall<T>(url, options);
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -199,11 +221,9 @@ export const api = {
   // ======================== Health ========================
 
   health: {
-    check: () => get<HealthResponse>('/health'.replace('/v1', ''), { retry: false }),
-    detailed: () => get<{ status: string; services: Record<string, unknown> }>('/health/detailed'.replace('/v1', '')),
+    check: () => fullUrlCall<HealthResponse>('/health', 'GET'),
+    detailed: () => fullUrlCall<{ status: string; services: Record<string, unknown> }>('/health/detailed', 'GET'),
   },
-
-  // Note: health endpoints are at /health, not /v1/health. Override URL manually.
 
   // ======================== Sessions ========================
 
@@ -336,7 +356,7 @@ export const api = {
       set: (dir: string) => post<WorkingDirConfig>('/config/working-dir', { working_dir: dir }),
     },
     checkPaths: (paths: string[]) => post<Record<string, boolean>>('/config/check-paths', { paths }),
-    warmup: () => post<{ ok: boolean }>('/warmup'.replace('/v1', '')),
+    warmup: () => post<{ ok: boolean }>('/warmup'),
     aws: {
       get: () => get<AWSConfig>('/config/aws'),
       set: (config: AWSConfig) => post<{ ok: boolean }>('/config/aws', config),
@@ -371,8 +391,8 @@ export const api = {
   // ======================== S3 Sync ========================
 
   s3: {
-    status: () => get<{ enabled: boolean; bucket?: string }>('/s3/status'.replace('/v1', '')),
-    sync: (sessionId: string) => post<{ ok: boolean }>(`/s3/sync/${sessionId}`.replace('/v1', '')),
+    status: () => get<{ enabled: boolean; bucket?: string }>('/s3/status'),
+    sync: (sessionId: string) => post<{ ok: boolean }>(`/s3/sync/${sessionId}`),
   },
 
   // ======================== Models ========================
@@ -416,7 +436,13 @@ export const api = {
     /** SSE event stream for a team (returns raw Response). */
     eventsRaw: async (teamId: string, signal?: AbortSignal): Promise<Response> => {
       const baseUrl = getBaseUrl();
-      const response = await fetch(`${baseUrl}/v1/teams/${teamId}/events`, { signal });
+      const response = await fetchWithRetry(
+        `${baseUrl}/v1/teams/${teamId}/events`,
+        { signal },
+        1,
+        CONFIG.TIMEOUTS.STREAMING,
+        signal,
+      );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return response;
     },
@@ -528,6 +554,58 @@ export const api = {
       post<Blob>('/design/export/pptx', { html }, { parseJson: false, timeout: 60_000 }),
   },
 
+  // ======================== Canvas Bridge ========================
+
+  canvas: {
+    pending: () => get<{ requests: Array<{ id: string; payload: Record<string, unknown> }> }>('/canvas/pending'),
+    postResult: (reqId: string, result: { success: boolean; error?: string; data?: Record<string, unknown> }) =>
+      post<{ ok: boolean }>(`/canvas/result/${reqId}`, result),
+  },
+
+  // ======================== Meetings ========================
+
+  meetings: {
+    save: (body: { session_id: string; transcript: string; language: string }) =>
+      post<{ ok: boolean }>('/meetings/save', body),
+  },
+
+  // ======================== ACP (external agents) ========================
+
+  acp: {
+    listAgents: () => get<{ agents: Array<{
+      name: string; transport: string; description: string;
+      enabled: boolean; status: string; running: boolean; initialized: boolean;
+      agent_info: { name?: string; title?: string; version?: string };
+      error: string | null;
+    }>; total: number; running: number }>('/acp/agents'),
+    listTasks: () => get<{ tasks: Array<{
+      name: string; agent_name: string; description: string; cwd: string;
+      created: number; last_active: number;
+      agent_session_id: string | null; springo_session_id: string | null;
+    }>; total: number }>('/acp/tasks'),
+    deleteTask: (name: string) => del<{ success: boolean; name: string }>(
+      `/acp/tasks/${encodeURIComponent(name)}`,
+    ),
+    dispatch: (body: {
+      task?: string;
+      agent?: string;
+      prompt: string;
+      cwd?: string;
+      timeout?: number;
+      springo_session_id?: string;
+      context_messages?: Array<{ role: string; content: string }>;
+      new_task_name?: string;
+    }) => post<{
+      success: boolean;
+      task: string | null;
+      agent: string;
+      agent_session_id: string | null;
+      text: string;
+      stop_reason: string | null;
+      updates: Array<Record<string, unknown>>;
+    }>('/acp/dispatch', body, { timeout: (body.timeout || 600) * 1000 }),
+  },
+
   // ======================== Tool Results ========================
 
   toolResults: {
@@ -539,33 +617,5 @@ export const api = {
     cleanup: () => post<{ ok: boolean }>('/tool-results/cleanup'),
   },
 };
-
-// ---------------------------------------------------------------------------
-// Path helpers for endpoints that live outside /v1
-// ---------------------------------------------------------------------------
-
-function fullUrlCall<T>(path: string, method: string = 'GET', body?: unknown) {
-  const baseUrl = getBaseUrl();
-  const url = `${baseUrl}${path}`;
-  const options: RequestInit = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-  };
-  if (body != null) options.body = JSON.stringify(body);
-  return apiCall<T>(url, options);
-}
-
-// Re-assign health / s3 / warmup to use correct base paths (no /v1 prefix)
-api.health = {
-  check: () => fullUrlCall<HealthResponse>('/health', 'GET'),
-  detailed: () => fullUrlCall<{ status: string; services: Record<string, unknown> }>('/health/detailed', 'GET'),
-};
-
-api.s3 = {
-  status: () => fullUrlCall<{ enabled: boolean; bucket?: string }>('/v1/s3/status'),
-  sync: (sessionId: string) => fullUrlCall<{ ok: boolean }>(`/v1/s3/sync/${sessionId}`, 'POST'),
-};
-
-api.config.warmup = () => fullUrlCall<{ ok: boolean }>('/v1/warmup', 'POST');
 
 export default api;

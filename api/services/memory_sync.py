@@ -282,11 +282,11 @@ class MemorySyncManager:
             except Exception as e:
                 logger.error(f"File sync error: {e}")
 
-            # Sleep in 1s increments so we can respond to stop quickly
-            for _ in range(interval):
-                if self._stop_event.is_set():
-                    return
-                time.sleep(1)
+            # Single wait — wakes immediately on stop, otherwise sleeps the
+            # full interval. Was a 1Hz polling loop that woke 86400 times/day
+            # for the default 24h interval.
+            if self._stop_event.wait(timeout=interval):
+                return
 
     def _sync_changed_files(self):
         """Scan memory files, sync new/modified ones to AgentCore."""

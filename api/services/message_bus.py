@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 import asyncio
 import logging
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, List, Literal, TYPE_CHECKING
@@ -47,16 +48,11 @@ class AgentMailbox:
         self.is_idle: bool = True
         self.shutdown_approved: bool = False
         self.last_peer_dm_summary: Optional[str] = None
-        self._message_history: List[AgentMessage] = []
-        self._history_max = settings.team_message_log_max
-        # Event that fires when *any* queue gets a message (for efficient waiting)
+        # Bounded history: deque(maxlen=...) auto-evicts oldest in O(1).
+        # Replaces a List + manual slice-trim that allocated a new list each
+        # overflow.
+        self._message_history: deque[AgentMessage] = deque(maxlen=settings.team_message_log_max)
         self._has_message = asyncio.Event()
-
-    def _trim_history(self):
-        """Keep per-agent message history within bounds."""
-        if len(self._message_history) > self._history_max:
-            trim_count = self._history_max // 5
-            self._message_history = self._message_history[trim_count:]
 
     async def receive(self, timeout: float = 30.0) -> Optional[AgentMessage]:
         """Wait for the next message, returning None on timeout.
@@ -67,7 +63,6 @@ class AgentMailbox:
         try:
             msg = self.priority_inbox.get_nowait()
             self._message_history.append(msg)
-            self._trim_history()
             return msg
         except asyncio.QueueEmpty:
             pass
@@ -76,7 +71,6 @@ class AgentMailbox:
         try:
             msg = self.inbox.get_nowait()
             self._message_history.append(msg)
-            self._trim_history()
             return msg
         except asyncio.QueueEmpty:
             pass
@@ -98,7 +92,6 @@ class AgentMailbox:
                 return None
 
         self._message_history.append(msg)
-        self._trim_history()
         return msg
 
     async def deliver(self, msg: AgentMessage):

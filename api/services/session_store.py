@@ -190,6 +190,10 @@ class SessionStore:
         - Only queues new messages to memory sync (not the full history)
         - Optionally updates metadata (first-line) without touching messages
 
+        Note: Per-message AgentCore sync was intentionally removed (it triggered
+        an upload flood that crashed the backend). Archives now handle AgentCore
+        sync; the save_* methods only persist to the local JSONL.
+
         Args:
             session_id: Session ID
             new_messages: Only the new messages to append
@@ -216,7 +220,6 @@ class SessionStore:
             if metadata_updates:
                 self.update_metadata(session_id, metadata_updates)
 
-            # Plan B: per-message sync removed — archives handle AgentCore sync
             return {
                 "success": True,
                 "session_id": session_id,
@@ -333,7 +336,10 @@ class SessionStore:
 
     def save_message(self, session_id: str, message: Dict[str, Any]) -> Dict[str, Any]:
         """
-        追加单条消息到 JSONL，触发 memory sync queue
+        追加单条消息到 JSONL（仅写本地，不做 per-message AgentCore sync）。
+
+        见 append_session_messages 的说明：per-message sync 已移除（会引发上传洪峰
+        导致后端崩溃），AgentCore 同步现由 archives 负责。
 
         Args:
             session_id: 会话 ID
@@ -356,7 +362,6 @@ class SessionStore:
             with open(session_file, 'a', encoding='utf-8') as f:
                 f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-            # Plan B: per-message sync removed — archives handle AgentCore sync
             return {"success": True, "session_id": session_id}
 
         except Exception as e:
@@ -365,7 +370,10 @@ class SessionStore:
 
     def save_messages(self, session_id: str, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        批量追加消息，调用 sync_mgr.queue_conversation()
+        批量追加消息到 JSONL（仅写本地，不做 per-message AgentCore sync）。
+
+        见 append_session_messages 的说明：per-message sync 已移除，AgentCore
+        同步现由 archives 负责。
 
         Args:
             session_id: 会话 ID
@@ -388,7 +396,6 @@ class SessionStore:
                     }
                     f.write(json.dumps(entry, ensure_ascii=False) + "\n")
 
-            # Plan B: per-message sync removed — archives handle AgentCore sync
             return {
                 "success": True,
                 "session_id": session_id,
@@ -440,7 +447,6 @@ class SessionStore:
                 for msg in messages:
                     f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
-            # Plan B: per-message sync removed — archives handle AgentCore sync
 
             # Reset archive watermark — compaction rewrites the JSONL with fewer
             # messages, which invalidates the old message index watermark.

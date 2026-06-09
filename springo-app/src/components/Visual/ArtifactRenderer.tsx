@@ -1,4 +1,5 @@
 import { useRef, useEffect, useState, useMemo } from 'react'
+import { escapeHtml } from '@/utils/escapeHtml'
 
 interface Artifact {
   id: string
@@ -20,10 +21,6 @@ let artifactCounter = 0
 function isFullHtmlDocument(code: string): boolean {
   const lower = code.trim().toLowerCase()
   return (lower.includes('<!doctype html') || lower.includes('<html')) && lower.includes('</html>')
-}
-
-function escapeHtml(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 }
 
 /**
@@ -88,26 +85,28 @@ function ArtifactIframe({ artifact }: { artifact: Artifact }) {
     if (!iframe) return
     iframe.srcdoc = artifact.html
 
+    let observer: ResizeObserver | null = null
     const onLoad = () => {
       try {
         const doc = iframe.contentDocument || iframe.contentWindow?.document
-        if (doc) {
-          const h = doc.documentElement.scrollHeight
-          if (h > 0) setHeight(Math.min(h + 20, 800))
-          const observer = new ResizeObserver(() => {
-            const nh = doc.documentElement.scrollHeight
-            if (nh > 0) setHeight(Math.min(nh + 20, 800))
-          })
-          observer.observe(doc.documentElement)
-          return () => observer.disconnect()
-        }
+        if (!doc) return
+        const h = doc.documentElement.scrollHeight
+        if (h > 0) setHeight(Math.min(h + 20, 800))
+        observer = new ResizeObserver(() => {
+          const nh = doc.documentElement.scrollHeight
+          if (nh > 0) setHeight(Math.min(nh + 20, 800))
+        })
+        observer.observe(doc.documentElement)
       } catch {
         setHeight(500)
       }
     }
 
     iframe.addEventListener('load', onLoad)
-    return () => iframe.removeEventListener('load', onLoad)
+    return () => {
+      iframe.removeEventListener('load', onLoad)
+      observer?.disconnect()
+    }
   }, [artifact.html])
 
   function openInNewWindow() {

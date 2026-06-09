@@ -55,7 +55,11 @@ Every wiki page MUST start with this frontmatter:
 ---
 title: <Human-friendly title>
 slug: <kebab-case, matches filename>
+node_type: <one of the 19 categories below — pick the best fit>
 tags: [tag1, tag2]
+relations:                       # optional typed edges; omit if none
+  - { to: other-page-slug, kind: works_at }
+  - { to: another-slug,    kind: created }
 sources:
   - type: pdf | webpage | transcript | code | conversation | other
     storage: full | digest-only | external
@@ -67,6 +71,40 @@ created_at: YYYY-MM-DD
 last_updated: YYYY-MM-DD
 ---
 ```
+
+### node_type vocabulary (pick exactly one)
+
+Pick the best fit. When in doubt, `creative_work` is the safe default.
+
+| node_type        | Use for                                                              |
+|------------------|----------------------------------------------------------------------|
+| `person`         | Individual humans (employees, authors, contacts)                     |
+| `organization`   | Companies, teams, institutions, departments                          |
+| `place`          | Geographic locations, offices, regions                               |
+| `event`          | Meetings, launches, incidents, releases                              |
+| `product`        | Shippable goods or apps (Claude, AWS Console, an iPhone)             |
+| `service`        | Backed offerings (S3, Lark Mail, an internal API)                    |
+| `project`        | Initiatives with a goal + lifecycle (Springo refactor, Q4 migration) |
+| `dataset`        | Structured data collections (corpus, lookup tables)                  |
+| `creative_work`  | Documents, articles, books, code repos, blog posts                   |
+| `defined_term`   | Glossary entries, jargon, abbreviations                              |
+| `instruction`    | How-to guides, runbooks, SOPs                                        |
+| `action`         | A specific task or operation taken                                   |
+| `channel`        | Communication channels (Slack channel, mailing list)                 |
+| `observation`    | Field notes, measurements, findings                                  |
+| `decision`       | Architectural / business decisions with rationale                    |
+| `occupation`     | Job roles, titles                                                    |
+| `dashboard`      | Live metric views (Grafana board, Looker dashboard)                  |
+| `message`        | A single chat / email / DM thread of note                            |
+| `visual`         | Diagrams, screenshots, charts                                        |
+
+### relation kinds (use sparingly — only when a specific verb is meaningful)
+
+`works_at` · `created` · `part_of` · `instance_of` · `depends_on` · `mentions`
+· `derived_from` · `attended` · `owns` · `observed_in` · `member_of`
+
+If you can't pick a verb, leave the link in `## See also` (which becomes
+`see-also` edge automatically).
 
 And these body sections:
 ```

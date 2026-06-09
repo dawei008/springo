@@ -408,15 +408,20 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   updateSessionStatus: (id: string, status: ConversationStatus) => {
-    set((state) => ({
-      sessions: state.sessions.map((s) =>
-        s.id === id ? { ...s, status, updatedAt: Date.now() } : s,
-      ),
-    }));
+    set((state) => {
+      const cur = state.sessions.find((s) => s.id === id);
+      if (!cur || cur.status === status) return state;
+      return {
+        sessions: state.sessions.map((s) =>
+          s.id === id ? { ...s, status, updatedAt: Date.now() } : s,
+        ),
+      };
+    });
   },
 
   markUnseenCompletion: (id: string) => {
     set((state) => {
+      if (state.unseenCompletedSessions.has(id)) return state;
       const next = new Set(state.unseenCompletedSessions);
       next.add(id);
       return { unseenCompletedSessions: next };
@@ -472,4 +477,4 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 }));
 
-if (typeof window !== 'undefined') (window as any).__sessionStore = useSessionStore;
+if (typeof window !== 'undefined' && import.meta.env.DEV) (window as any).__sessionStore = useSessionStore;

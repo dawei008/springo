@@ -337,7 +337,7 @@ async def root():
 # Import and include routers
 from .routers import messages, tools, sessions, context, images, health
 from .routers import config, memory, skills, skill_proposals, tool_results, canvas as canvas_router
-from .routers import models, mcp, terminal, teams, schedules, plugins, acp, transcribe, plans, artifacts, folders, kb
+from .routers import models, mcp, terminal, teams, schedules, plugins, acp, transcribe, plans, artifacts, folders, kb, meetings
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
 app.include_router(tools.router, prefix="/v1", tags=["tools"])
@@ -365,6 +365,7 @@ app.include_router(plans.router, prefix="/v1", tags=["plans"])
 app.include_router(artifacts.router, prefix="/v1", tags=["artifacts"])
 app.include_router(folders.router, prefix="/v1", tags=["folders"])
 app.include_router(kb.router, prefix="/v1", tags=["kb"])
+app.include_router(meetings.router, prefix="/v1", tags=["meetings"])
 
 
 from fastapi.responses import JSONResponse, FileResponse

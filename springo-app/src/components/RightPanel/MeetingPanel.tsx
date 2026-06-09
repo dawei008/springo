@@ -5,9 +5,16 @@ import { useSessionStore } from '@/stores/sessionStore';
 export default function MeetingPanel() {
   const currentSessionId = useSessionStore((s) => s.currentSessionId);
   const isTranscribing = useVoiceStore((s) => s.isTranscribing);
+  const activeSessionId = useVoiceStore((s) => s.activeSessionId);
   const partialText = useVoiceStore((s) => s.partialText);
+  // While a transcription is running, always read from the session the voice
+  // store is actually writing to (activeSessionId). This prevents the
+  // transcript from "disappearing" if currentSessionId drifts after start
+  // (e.g. an internal-artifact open or background session switch). When idle,
+  // fall back to the current session so the user sees prior transcripts.
+  const readSessionId = (isTranscribing && activeSessionId) || currentSessionId;
   const transcript = useVoiceStore((s) =>
-    currentSessionId ? s.transcripts[currentSessionId] || '' : '',
+    readSessionId ? s.transcripts[readSessionId] || '' : '',
   );
   const language = useVoiceStore((s) => s.language);
 
@@ -41,10 +48,10 @@ export default function MeetingPanel() {
   }, [transcript]);
 
   const handleClear = useCallback(() => {
-    if (currentSessionId) {
-      useVoiceStore.getState().clearTranscript(currentSessionId);
+    if (readSessionId) {
+      useVoiceStore.getState().clearTranscript(readSessionId);
     }
-  }, [currentSessionId]);
+  }, [readSessionId]);
 
   const handleLangToggle = useCallback(() => {
     const current = useVoiceStore.getState().language;
