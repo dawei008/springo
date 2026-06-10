@@ -133,6 +133,21 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "supports_tools": True,
         "api_format": "anthropic",
     },
+    # Fable 5 is INFERENCE_PROFILE-only on Bedrock and has no `us.` profile —
+    # it must be invoked via the `global.` profile ID (probed 2026-06-09).
+    # Limits verified against the Bedrock Converse API: 1M context, 128K output.
+    "claude-fable-5": {
+        "vendor": "bedrock",
+        "bedrock_id": "global.anthropic.claude-fable-5",
+        "provider": "anthropic",
+        "display_name": "Claude Fable 5",
+        "context_window": 1000000,
+        "max_output": 128000,
+        "supports_vision": True,
+        "supports_thinking": False,
+        "supports_tools": True,
+        "api_format": "anthropic",
+    },
 
     # -----------------------------------------------------------------------
     # DeepSeek  (api_format = "converse")
