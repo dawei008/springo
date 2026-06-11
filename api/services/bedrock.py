@@ -755,8 +755,11 @@ class BedrockService:
             # Beta features
             bedrock_body["anthropic_beta"] = ["fine-grained-tool-streaming-2025-05-14"]
 
-            # Adaptive thinking for Opus 4.7+ (only supported mode; Bedrock accepts
-            # the same shape as Anthropic API).  Default: xhigh effort, summarized display.
+            # Adaptive thinking for Opus 4.7+ / Fable 5 (only supported mode;
+            # Bedrock accepts the same shape as Anthropic API).
+            # Default: xhigh effort, summarized display.
+            # Note: Fable 5 thinking is always-on and cannot be disabled, so it
+            # does not gate on thinking_enabled — it just tunes effort/display.
             if model in ("claude-opus-4-7", "claude-opus-4-8"):
                 if request.get("thinking_enabled"):
                     effort = request.get("thinking_effort") or "xhigh"
@@ -769,8 +772,9 @@ class BedrockService:
                     logger.info(f"[Thinking] {model} thinking DISABLED (thinking_enabled={request.get('thinking_enabled')!r})")
 
         # Copy optional parameters
-        # Opus 4.7+ does not accept temperature/top_p/top_k
-        _no_sampling = model in ("claude-opus-4-7", "claude-opus-4-8")
+        # Opus 4.7+ and Fable 5 do not accept temperature/top_p/top_k
+        # (they use adaptive thinking; sampling params are deprecated/rejected).
+        _no_sampling = model in ("claude-opus-4-7", "claude-opus-4-8", "claude-fable-5")
         for key in ["temperature", "top_p", "top_k", "stop_sequences", "tool_choice"]:
             if _no_sampling and key in ("temperature", "top_p", "top_k"):
                 continue

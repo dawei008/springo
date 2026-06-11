@@ -136,6 +136,8 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # Fable 5 is INFERENCE_PROFILE-only on Bedrock and has no `us.` profile —
     # it must be invoked via the `global.` profile ID (probed 2026-06-09).
     # Limits verified against the Bedrock Converse API: 1M context, 128K output.
+    # Fable 5 uses ADAPTIVE thinking by default (cannot be disabled). Returns
+    # reasoningContent for complex prompts, plain text for simple ones.
     "claude-fable-5": {
         "vendor": "bedrock",
         "bedrock_id": "global.anthropic.claude-fable-5",
@@ -144,7 +146,7 @@ MODEL_REGISTRY: Dict[str, ModelInfo] = {
         "context_window": 1000000,
         "max_output": 128000,
         "supports_vision": True,
-        "supports_thinking": False,
+        "supports_thinking": True,  # Adaptive thinking (always on, auto-triggered)
         "supports_tools": True,
         "api_format": "anthropic",
     },
