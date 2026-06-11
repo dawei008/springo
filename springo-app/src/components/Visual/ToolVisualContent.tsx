@@ -103,7 +103,10 @@ export default function ToolVisualContent({ toolUse, defaultCollapsed = false }:
     const mcpImages = extractMcpImages(toolUse.result)
     const base64Match = resultStr.match(/data:(image\/[a-z+]+);base64,([A-Za-z0-9+/=]{50,})/)
     const imageUrls = resultStr.match(/(https?:\/\/[^\s"'`]+\.(?:png|jpg|jpeg|gif|svg|webp)(?:\?[^\s"'`]*)?)/gi)
-    const imagePaths = resultStr.match(/(?<!\w)(\/(?!\.\.)[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi)
+    let imagePaths = resultStr.match(/(?<!\w)(\/(?!\.\.)[^\s"'`,]+\.(?:png|jpg|jpeg|gif|svg|webp|bmp))/gi)
+    // 4+ distinct image paths in one result is almost always a directory
+    // listing (ls/glob output), not generated artifacts — don't render those.
+    if (imagePaths && new Set(imagePaths).size >= 4) imagePaths = null
     const svgMatch = resultStr.includes('<svg') && resultStr.includes('</svg>')
       ? resultStr.match(/<svg[\s\S]*?<\/svg>/i)
       : null

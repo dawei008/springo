@@ -1004,8 +1004,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const epochStale = epochNow !== epochAtStart;
       const hasToolUse = !epochStale && finalRuntime.messages.some((m) => m.hasToolUse);
       if (hasToolUse) {
-        // Save the accumulated toolUses from streaming before backend sync overwrites them
+        // Save the accumulated toolUses from streaming before backend sync overwrites
+        // them. Only collect from the CURRENT turn (after the last real user text
+        // message) — earlier assistant messages carry toolUses attached by previous
+        // turns' syncs, and re-collecting those would pile every past turn's tool
+        // results (screenshots, images) onto the newest reply.
+        let currentTurnStart = 0;
+        for (let mi = finalRuntime.messages.length - 1; mi >= 0; mi--) {
+          const msg = finalRuntime.messages[mi];
+          if (msg.role === 'user') {
+            const c = msg.content;
+            const isToolResult = Array.isArray(c) &&
+              (c as ContentBlock[]).some((b) => b.type === 'tool_result');
+            if (!isToolResult) { currentTurnStart = mi + 1; break; }
+          }
+        }
         const streamingToolUses = finalRuntime.messages
+          .slice(currentTurnStart)
           .filter((m) => m.role === 'assistant' && m.toolUses && m.toolUses.length > 0)
           .flatMap((m) => m.toolUses!);
 
