@@ -199,8 +199,8 @@ export default function KBGraphPanel() {
         <div className="kb-empty">
           <h3>Your knowledge base is empty</h3>
           <p style={{ color: 'var(--text-secondary)', maxWidth: 480, lineHeight: 1.6 }}>
-            Ingest a document via the sidebar's <strong>Knowledge → +</strong>{' '}
-            button, or ask the AI in chat to <em>"add this to KB"</em>.
+            Ingest a document via the header's <strong>Knowledge → +</strong>{' '}
+            button (top right), or ask the AI in chat to <em>"add this to KB"</em>.
             New pages will appear as nodes here, with see-also links rendered as edges.
           </p>
           <p style={{ color: 'var(--text-tertiary)', fontSize: 12, maxWidth: 480 }}>

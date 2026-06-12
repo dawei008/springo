@@ -142,8 +142,12 @@ function SessionTabs() {
     .filter((a): a is Artifact => !!a);
 
   // Hide the strip entirely if there's at most one tab — keeps a clean header
-  // for the single-artifact case (which is most of the time).
-  if (tabs.length <= 1) return null;
+  // for the single-artifact case (which is most of the time). Exception: when
+  // an internal panel (not in the strip) is active, show even a single tab so
+  // the user can switch back to their artifact.
+  const activeIsExternal = !activeId || tabs.some((t) => t.id === activeId);
+  if (tabs.length <= 1 && activeIsExternal) return null;
+  if (tabs.length === 0) return null;
 
   return (
     <div className="canvas-tabs" role="tablist">
@@ -663,10 +667,17 @@ function SyncIndicator() {
 }
 
 function InternalActionBar() {
-  const closeArtifact = useUnifiedArtifactStore((s) => s.closeArtifact);
+  const handleClose = useCallback(() => {
+    // Internal panels aren't tabs — closing returns to the last session
+    // artifact if one exists, otherwise the empty canvas.
+    const s = useUnifiedArtifactStore.getState();
+    const fallback = s.sessionArtifactIds[s.sessionArtifactIds.length - 1];
+    if (fallback) s.openArtifact(fallback);
+    else s.closeArtifact();
+  }, []);
   return (
     <div className="canvas-action-bar">
-      <button className="canvas-action-btn" onClick={closeArtifact} title="Close">
+      <button className="canvas-action-btn" onClick={handleClose} title="Close">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
           <line x1="18" y1="6" x2="6" y2="18" />
           <line x1="6" y1="6" x2="18" y2="18" />

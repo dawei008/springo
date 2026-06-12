@@ -536,11 +536,13 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
         pinned: false,
         internalComponent: component,
       };
-      const inSession = s.sessionArtifactIds.includes(id);
+      // Internal panels are NOT added to sessionArtifactIds — they don't
+      // appear in the canvas tab strip. The header tool buttons are the only
+      // way to open/switch them, so accumulating tabs is just clutter.
       return {
         artifacts: { ...s.artifacts, [id]: artifact },
         activeArtifactId: id,
-        sessionArtifactIds: inSession ? s.sessionArtifactIds : [...s.sessionArtifactIds, id],
+        sessionArtifactIds: s.sessionArtifactIds.filter((i) => i !== id),
       };
     });
   },
@@ -823,7 +825,9 @@ export const useUnifiedArtifactStore = create<UnifiedArtifactState>((set, get) =
       sessionMap: updatedMap,
       currentSessionId: sessionId,
       activeArtifactId: restored?.activeArtifactId ?? null,
-      sessionArtifactIds: restored?.sessionArtifactIds ?? [],
+      // Strip internal panel ids persisted by older sessions — internal
+      // panels no longer live in the tab strip (header buttons own them).
+      sessionArtifactIds: (restored?.sessionArtifactIds ?? []).filter((id) => !id.startsWith('internal-')),
     });
   },
 
