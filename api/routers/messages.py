@@ -3,6 +3,7 @@ Springo Messages Router
 消息 API 路由 - /v1/messages 和 /v1/messages-auto
 """
 import json
+import os
 import re
 import uuid
 import logging
@@ -304,6 +305,19 @@ async def messages_auto_api(
         # Get working directory: request override > session state
         from ..services.session_state import get_working_dir
         working_dir = msg_request.working_directory or get_working_dir() or None
+        if working_dir:
+            working_dir = os.path.abspath(os.path.expanduser(working_dir))
+        # Sync to the tool layer: its module-level working dir is wiped on every
+        # uvicorn hot reload, so relative tool paths would silently resolve
+        # against the fallback dir even when the request names the right one.
+        if working_dir:
+            try:
+                from mcp_tools.config import set_working_dir as _set_mcp_wd
+                from ..services.session_state import set_working_dir as _set_sess_wd
+                _set_mcp_wd(working_dir)
+                _set_sess_wd(working_dir)
+            except Exception as e:
+                logger.debug(f"Failed to sync working_dir to tool layer: {e}")
 
         # Get tools: use request tools if provided, otherwise load from Tool Manager
         tools = msg_request.tools or []

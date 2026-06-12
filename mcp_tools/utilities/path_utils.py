@@ -29,7 +29,10 @@ def resolve_path(path: str = None, default_to_working_dir: bool = True) -> str:
     elif default_to_working_dir and working_dir:
         return working_dir
     else:
-        return os.getcwd()
+        # NOT os.getcwd(): the backend's cwd is the Springo repo root, and
+        # defaulting there makes tools write into the source tree whenever
+        # working_dir is unset (e.g. right after a uvicorn hot reload).
+        return os.path.expanduser("~")
 
 
 def _is_path_blocked(path: str) -> bool:

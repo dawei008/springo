@@ -17,7 +17,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # 全局工作目录存储
-_working_dir: str = os.getcwd()
+# Persisted across uvicorn reloads: module-level state is wiped on every hot
+# reload, and falling back to os.getcwd() (the repo root) made tools write
+# into the source tree until the frontend re-synced.
+_WD_STATE_FILE = os.path.expanduser("~/.springo/last_working_dir")
+
+
+def _load_persisted_working_dir() -> str:
+    try:
+        with open(_WD_STATE_FILE) as f:
+            p = f.read().strip()
+        if p and os.path.isdir(p):
+            return p
+    except OSError:
+        pass
+    return ""
+
+
+def _persist_working_dir(path: str) -> None:
+    try:
+        os.makedirs(os.path.dirname(_WD_STATE_FILE), exist_ok=True)
+        with open(_WD_STATE_FILE, "w") as f:
+            f.write(path)
+    except OSError as e:
+        logger.debug(f"Failed to persist working_dir: {e}")
+
+
+_working_dir: str = _load_persisted_working_dir() or os.path.expanduser("~")
 
 def _vendor_default_bases() -> Dict[str, str]:
     """Default base URL per vendor, sourced from the vendor modules so the
@@ -129,11 +155,18 @@ async def set_working_dir(request: WorkingDirRequest):
     so the frontend can fall back to a default folder.
     """
     global _working_dir
+    # Expand ~ and relativize BEFORE the isdir check. Without this, a literal
+    # "~/Downloads" is checked as $CWD/~/Downloads — and once a stray "~" dir
+    # exists in the repo root, the check passes and tools silently run inside
+    # the source tree.
     requested = request.working_dir
+    if requested:
+        requested = os.path.abspath(os.path.expanduser(requested))
     path_exists = bool(requested and os.path.isdir(requested))
 
     if path_exists:
         _working_dir = requested
+        _persist_working_dir(requested)
     # Don't auto-create missing directories — let the frontend decide
 
     # Sync to session_state and mcp_tools so tools use the correct working dir
@@ -144,7 +177,7 @@ async def set_working_dir(request: WorkingDirRequest):
 @router.post("/config/check-paths")
 async def check_paths(paths: List[str]) -> Dict[str, bool]:
     """Check which paths exist on disk. Used to prune stale workspace folders."""
-    return {p: os.path.isdir(p) for p in paths}
+    return {p: os.path.isdir(os.path.expanduser(p)) for p in paths}
 
 
 # ============ Warmup ============

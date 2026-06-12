@@ -396,9 +396,12 @@ async def catch_all(request: Request, path: str):
 
 if __name__ == "__main__":
     import uvicorn
+    # reload_dirs: only watch backend source — see run.py for rationale
+    _root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     uvicorn.run(
         "api.main:app",
         host=settings.host,
         port=settings.port,
-        reload=settings.debug
+        reload=settings.debug,
+        reload_dirs=[os.path.join(_root, d) for d in ("api", "mcp_tools")] if settings.debug else None,
     )

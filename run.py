@@ -35,12 +35,23 @@ def main():
 
     enable_reload = args.reload or not getattr(sys, 'frozen', False)
 
+    # Only watch backend source dirs. Without this, WatchFiles watches the whole
+    # repo — AI tools writing .py files into the working tree (e.g. creating a
+    # venv or test project) trigger a reload that kills in-flight SSE streams.
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    reload_dirs = [
+        os.path.join(repo_root, d)
+        for d in ("api", "mcp_tools")
+        if os.path.isdir(os.path.join(repo_root, d))
+    ]
+
     uvicorn.run(
         "api.main:app",
         host=args.host,
         port=args.port,
         workers=args.workers if not enable_reload else 1,
         reload=enable_reload,
+        reload_dirs=reload_dirs if enable_reload else None,
         log_level="debug" if args.debug else "info"
     )
 
