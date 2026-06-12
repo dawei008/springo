@@ -558,6 +558,9 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
     return parseSkillMessage(rawText);
   }, [message.role, rawText]);
 
+  // Detect ultracode user messages (derived from text so it survives session reload)
+  const isUltracode = message.role === 'user' && !!rawText && /\bultracode\b/i.test(rawText);
+
   // For skill messages, show only the user's request; for assistant, use artifact-cleaned text
   const textContent = skillInfo ? skillInfo.userText : (message.role === 'assistant' ? textAfterArtifacts : rawText);
 
@@ -624,6 +627,12 @@ export default function Message({ message, showToolPanel = false, isStreaming = 
               </svg>
             </span>
             /{skillInfo.skillName}
+          </span>
+        )}
+        {isUltracode && (
+          <span className="ultracode-badge-inline">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+            ultracode
           </span>
         )}
         {imageBlocks.map((block, idx) => {

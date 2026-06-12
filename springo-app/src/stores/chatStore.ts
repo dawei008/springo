@@ -363,6 +363,7 @@ interface ChatState {
       sessionId?: string;
       designMode?: boolean;
       designContext?: string;
+      ultracodeMode?: boolean;
       onTextUpdate?: (text: string, tools: ToolUse[]) => void;
       onComplete?: () => void;
       onError?: (error: Error) => void;
@@ -761,6 +762,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           design_mode: true,
           ...(options.designContext ? { design_context: options.designContext } : {}),
         } : {}),
+        ...(options.ultracodeMode ? { ultracode: true } : {}),
       };
 
       // Use api.messages.sendAutoRaw for fetchWithRetry + proper error handling

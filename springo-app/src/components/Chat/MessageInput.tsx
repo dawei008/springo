@@ -512,6 +512,8 @@ export default function MessageInput() {
       return;
     }
 
+    const ultracodeMode = /\bultracode\b/i.test(content);
+
     const atts = attachments.map((a) => ({
       type: a.type,
       data: a.data,
@@ -539,6 +541,7 @@ export default function MessageInput() {
       thinkingEffort: (currentSettings.thinkingEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max') || 'xhigh',
       sessionId: convId,
       ...(artifactCtx ? { designContext: artifactCtx } : {}),
+      ...(ultracodeMode ? { ultracodeMode: true } : {}),
     });
 
     if (useUIStore.getState().activeSkill) {
@@ -920,6 +923,9 @@ export default function MessageInput() {
   // (start fresh). Filter on the user's @-prefix query.
   const canSend = (text.trim() || attachments.length > 0) && !isStreaming;
 
+  // Live indicator: draft opts into ultracode mode (word-boundary, case-insensitive)
+  const ultracodeDraft = /\bultracode\b/i.test(text);
+
 
   return (
     <div className="input-area">
@@ -991,6 +997,14 @@ export default function MessageInput() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {/* Ultracode live indicator */}
+        {ultracodeDraft && (
+          <div className="ultracode-indicator" title="Ultracode mode — this message opts into maximum-effort multi-agent orchestration">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
+            ULTRACODE
+          </div>
+        )}
+
         {/* Attachments container */}
         <div className="attachments" id="attachments">
           {attachments.map((a, i) => {

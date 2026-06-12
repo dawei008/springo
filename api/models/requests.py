@@ -106,6 +106,8 @@ class MessageAutoRequest(MessageRequest):
     design_mode: bool = Field(default=False, description="Enable design mode — loads artifacts-design skill guidelines")
     design_context: Optional[str] = Field(default=None, description="Current artifact context (files + pinned element) for iteration")
 
+    ultracode: bool = Field(default=False, description="Ultracode mode — user opted into maximum-effort multi-agent orchestration for this turn")
+
 
 class ToolExecuteRequest(BaseModel):
     """工具执行请求"""

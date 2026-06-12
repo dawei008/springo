@@ -39,6 +39,24 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# Injected into the system prompt when the user opts into ultracode mode
+# (frontend sets ultracode=true when the message contains the keyword).
+ULTRACODE_DIRECTIVE = (
+    "\n\n## Ultracode Mode (user opt-in)\n"
+    "The user included the 'ultracode' keyword — they explicitly opted into "
+    "maximum-effort multi-agent orchestration for this request. Token cost is "
+    "not a constraint; thoroughness and correctness are the goals.\n"
+    "- Decompose the request and use the task tool to fan out parallel "
+    "background agents (explore / research / implement / general) for "
+    "independent subtasks instead of doing everything serially.\n"
+    "- Adversarially verify important findings or risky changes: spawn a "
+    "separate agent to check or refute conclusions before presenting them.\n"
+    "- Keep iterating until the request is fully resolved end-to-end; do not "
+    "stop at a partial answer.\n"
+    "- Keep your own narration concise — the extra effort goes into agents "
+    "and verification, not longer prose.\n"
+)
+
 
 def _validate_model(model: str, *, field: str = "model") -> None:
     """Raise 400 if *model* is not registered. Shared by all message endpoints."""
@@ -457,6 +475,12 @@ async def messages_auto_api(
                         if mcp_instructions:
                             system_extra = (system_extra or "") + mcp_instructions
                             logger.info(f"Injected MCP server instructions into system prompt ({len(mcp_instructions)} chars)")
+
+                    # === Ultracode Directive Injection (first iteration only) ===
+                    if iteration == 1 and msg_request.ultracode:
+                        system_extra = (system_extra or "") + ULTRACODE_DIRECTIVE
+                        logger.info("[Ultracode] Directive injected into system prompt")
+                        yield SSEEventBuilder.skill_injected("ultracode")
 
                     # === 5-Step Context Protection ===
                     messages_modified = False
