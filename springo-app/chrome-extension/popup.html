@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    body { width: 260px; margin: 0; font-family: system-ui, -apple-system, sans-serif; background: #1a1a2e; color: #e0e0e0; }
+    .wrap { padding: 16px; }
+    h1 { font-size: 15px; margin: 0 0 12px; color: #00d4ff; display: flex; align-items: center; gap: 8px; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: #666; flex: none; }
+    .dot.on { background: #2ecc71; box-shadow: 0 0 6px #2ecc71; }
+    .row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin: 10px 0; }
+    .muted { color: #888; font-size: 12px; line-height: 1.5; margin-top: 10px; }
+    button { width: 100%; padding: 8px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; margin-top: 8px; }
+    .connect { background: #00d4ff; color: #0a0a1a; font-weight: 600; }
+    .disconnect { background: #2a2a44; color: #e0e0e0; }
+    code { background: #2a2a44; padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1><span id="dot" class="dot"></span> Springo for Chrome</h1>
+    <div class="row">
+      <span>Backend link</span>
+      <span id="state">…</span>
+    </div>
+    <div class="row">
+      <span>Controlled tab</span>
+      <span id="tab">—</span>
+    </div>
+    <button id="toggle" class="connect">Connect</button>
+    <div class="muted">
+      Springo drives a dedicated <b>Springo</b> tab group in this browser.
+      The first action shows Chrome's "started debugging" banner — that's expected.
+      Backend must be running at <code>localhost:8081</code>.
+    </div>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>

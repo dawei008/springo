@@ -19,6 +19,9 @@ from .handlers import (
     git, git_status, git_log, git_diff, git_add, git_commit,
     git_branch, git_checkout, git_pull, git_push, git_clone,
     # Browser tools removed - use MCP playwright instead
+    # Browser extension tools (drive the user's real Chrome)
+    web_browser_status, web_navigate, web_click, web_type,
+    web_read_page, web_screenshot, web_evaluate, web_tabs,
     # Search tools
     web_search, web_fetch,
     # Task tools
@@ -82,6 +85,15 @@ TOOL_HANDLERS = {
     "git_push": git_push,
     "git_clone": git_clone,
     # Browser tools removed - use MCP playwright instead
+    # Browser extension tools (drive the user's real signed-in Chrome)
+    "web_browser_status": web_browser_status,
+    "web_navigate": web_navigate,
+    "web_click": web_click,
+    "web_type": web_type,
+    "web_read_page": web_read_page,
+    "web_screenshot": web_screenshot,
+    "web_evaluate": web_evaluate,
+    "web_tabs": web_tabs,
     # Skill tools
     "use_skill": use_skill,
     "skill_view": skill_view,

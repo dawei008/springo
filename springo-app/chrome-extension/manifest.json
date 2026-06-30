@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Springo for Chrome",
+  "version": "1.0.0",
+  "description": "Let Springo drive your real, signed-in Chrome — navigate, click, read, and screenshot pages in a dedicated Springo tab group.",
+  "permissions": [
+    "debugger",
+    "tabs",
+    "tabGroups",
+    "activeTab",
+    "scripting",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://localhost:8081/*",
+    "http://127.0.0.1:8081/*",
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Springo for Chrome"
+  },
+  "icons": {
+    "128": "icon128.png"
+  }
+}

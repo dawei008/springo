@@ -200,6 +200,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Failed to register canvas main loop: {e}")
 
+    # Browser extension bridge also runs commands from the tool ThreadPoolExecutor
+    # and must schedule WS sends on the main loop.
+    try:
+        import asyncio
+        from .services.browser_bridge import get_browser_bridge
+        get_browser_bridge().set_main_loop(asyncio.get_running_loop())
+        logger.info("Browser extension bridge main-loop captured")
+    except Exception as e:
+        logger.warning(f"Failed to register browser bridge main loop: {e}")
+
     # Start the daily skill-distill background loop. It wakes every 6h and
     # only runs a full pass once 24h have elapsed since the previous one, so
     # the import cost is negligible and bedrock is only hit once per day.
@@ -337,7 +347,7 @@ async def root():
 # Import and include routers
 from .routers import messages, tools, sessions, context, images, health
 from .routers import config, memory, skills, skill_proposals, tool_results, canvas as canvas_router
-from .routers import models, mcp, terminal, teams, schedules, plugins, acp, transcribe, plans, artifacts, folders, kb, meetings
+from .routers import models, mcp, terminal, teams, schedules, plugins, acp, transcribe, plans, artifacts, folders, kb, meetings, browser_ext
 
 app.include_router(messages.router, prefix="/v1", tags=["messages"])
 app.include_router(tools.router, prefix="/v1", tags=["tools"])
@@ -366,6 +376,7 @@ app.include_router(artifacts.router, prefix="/v1", tags=["artifacts"])
 app.include_router(folders.router, prefix="/v1", tags=["folders"])
 app.include_router(kb.router, prefix="/v1", tags=["kb"])
 app.include_router(meetings.router, prefix="/v1", tags=["meetings"])
+app.include_router(browser_ext.router, prefix="/v1", tags=["browser-ext"])
 
 
 from fastapi.responses import JSONResponse, FileResponse

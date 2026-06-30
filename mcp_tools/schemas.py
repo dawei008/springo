@@ -959,4 +959,92 @@ Returns { ok, committed, raw_path, page_count, text_excerpt, text_truncated, tex
         "description": """Top-level KB metrics: page_count, edge_count, orphan_count, stale_count, raw_count, raw_total_bytes. Cheap.""",
         "input_schema": {"type": "object", "properties": {}},
     },
+    # ── Browser extension tools (drive the user's REAL Chrome) ──────────────
+    # These run inside the user's signed-in Chrome via the Springo extension,
+    # so authenticated pages work. Requires the extension to be installed and
+    # connected — check web_browser_status first if a call reports "not connected".
+    {
+        "name": "web_browser_status",
+        "description": "Check whether the Springo Chrome extension is connected. Call this first if browser tools report the extension is not connected. Returns { connected, client, pending }.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "web_navigate",
+        "description": "Navigate the controlled Chrome tab to a URL. Runs in the user's real, signed-in Chrome inside a dedicated 'Springo' tab group — so logged-in sites work without re-auth.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Absolute URL to open (include https://)"},
+            },
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "web_click",
+        "description": "Click an element in the controlled tab. Provide a CSS `selector`, or both `x` and `y` viewport coordinates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "selector": {"type": "string", "description": "CSS selector of the element to click"},
+                "x": {"type": "number", "description": "Viewport X coordinate (alternative to selector)"},
+                "y": {"type": "number", "description": "Viewport Y coordinate (alternative to selector)"},
+            },
+        },
+    },
+    {
+        "name": "web_type",
+        "description": "Type text into the focused field, or into the element matched by `selector`. Set submit=true to press Enter after typing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to type"},
+                "selector": {"type": "string", "description": "Optional CSS selector to focus first"},
+                "submit": {"type": "boolean", "description": "Press Enter after typing", "default": False},
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "web_read_page",
+        "description": "Read the current page content from the controlled tab. format: 'text' (visible text, default) or 'html' (full HTML).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "format": {"type": "string", "enum": ["text", "html"], "default": "text"},
+            },
+        },
+    },
+    {
+        "name": "web_screenshot",
+        "description": "Capture a PNG screenshot of the controlled Chrome tab. Returns base64 image data. Set full_page=true for the entire scrollable page.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "full_page": {"type": "boolean", "description": "Capture the full scrollable page", "default": False},
+            },
+        },
+    },
+    {
+        "name": "web_evaluate",
+        "description": "Evaluate a JavaScript expression in the controlled page and return its result. Use for extracting structured data or checking page state.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "expression": {"type": "string", "description": "JavaScript expression to evaluate in the page"},
+            },
+            "required": ["expression"],
+        },
+    },
+    {
+        "name": "web_tabs",
+        "description": "Manage tabs within Springo's tab group. action: 'list' (default), 'open' (needs url), 'close' (needs index), 'select' (needs index).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["list", "open", "close", "select"], "default": "list"},
+                "url": {"type": "string", "description": "URL to open (action=open)"},
+                "index": {"type": "integer", "description": "Tab index within the group (action=close/select)"},
+            },
+        },
+    },
 ]

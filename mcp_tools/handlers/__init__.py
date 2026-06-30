@@ -37,6 +37,17 @@ from .git_tools import (
 )
 
 # Browser tools removed - use MCP playwright instead
+# Browser extension tools — drive the user's real Chrome via the Springo extension
+from .browser_ext_tools import (
+    web_browser_status,
+    web_navigate,
+    web_click,
+    web_type,
+    web_read_page,
+    web_screenshot,
+    web_evaluate,
+    web_tabs,
+)
 
 from .search_tools import (
     web_search,
