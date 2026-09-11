@@ -196,4 +196,4 @@ This project is a FastAPI rewrite of the original Flask-based Springo. Key impro
 
 ## License
 
-MIT
+Licensed under the [Apache License 2.0](LICENSE).

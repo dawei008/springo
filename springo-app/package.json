@@ -19,7 +19,7 @@
     "build:zip": "vite build && electron-builder --mac zip"
   },
   "author": "Springo",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@types/react": "^19.2.14",
